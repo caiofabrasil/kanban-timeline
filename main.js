@@ -382,7 +382,7 @@ class KanbanParser {
                 continue;
             }
 
-            // Standalone indented tag line under a card (e.g. #Obscurium, #Lojinha, #DECA, #Mid)
+            // Standalone indented tag line under a card (e.g. #Projeto, #Dev, #Mid)
             if (/^#[\w-]+(?:\s+#[\w-]+)*$/.test(trimmed) && lastCard) {
                 const subTags = trimmed.match(/#[\w-]+/g) || [];
                 subTags.forEach(t => {
@@ -1271,9 +1271,9 @@ class CardTextareaSuggester {
 
     getAllTags() {
         const tagSet = new Set([
-            'Obscurium', 'DECA', 'AirBrawl', 'Lojinha',
+            'Dev', 'Design', 'Frontend', 'Backend',
             'Mid', 'Urgent', 'High', 'Low',
-            'Polish', 'Grimorio', 'Urgent', 'Bug', 'Life', 'Study'
+            'Polish', 'Bug', 'Feature', 'Life', 'Study'
         ]);
 
         try {
@@ -1616,25 +1616,27 @@ class ProjectModal extends obsidian.Modal {
 
         new obsidian.Setting(contentEl)
             .setName('Nome do Projeto')
-            .setDesc('Nome legível do projeto (ex: AirBrawl, Obscurium, DECA)')
+            .setDesc('Nome legível do projeto (ex: Meu Projeto, Website, App)')
             .addText(t => {
-                t.setPlaceholder('ex: AirBrawl').setValue(name).onChange(v => name = v.trim());
+                t.setPlaceholder('ex: Website').setValue(name).onChange(v => name = v.trim());
             });
 
         new obsidian.Setting(contentEl)
             .setName('Hashtag Associada')
-            .setDesc('Hashtag usada nos cards (ex: #AirBrawl ou #Obscurium)')
+            .setDesc('Hashtag usada nos cards (ex: #projeto ou #dev)')
             .addText(t => {
-                let clean = v.trim();
-                if (clean && !clean.startsWith('#')) clean = '#' + clean;
-                tag = clean;
+                t.setPlaceholder('ex: #projeto').setValue(tag).onChange(v => {
+                    let clean = v.trim();
+                    if (clean && !clean.startsWith('#')) clean = '#' + clean;
+                    tag = clean;
+                });
             });
 
         new obsidian.Setting(contentEl)
             .setName('Filtro no ActivityWatch (Opcional)')
-            .setDesc('Palavras-chave ou termos para identificar janelas deste projeto no ActivityWatch (ex: Obscurium, MapBuilder, Unity). Separar por vírgula. Deixe vazio para usar o nome/hashtag.')
+            .setDesc('Palavras-chave ou termos para identificar janelas deste projeto no ActivityWatch (ex: Unity, Figma, Code, Chrome). Separar por vírgula. Deixe vazio para usar o nome/hashtag.')
             .addText(t => {
-                t.setPlaceholder('ex: Obscurium, MapBuilder').setValue(awPattern).onChange(v => awPattern = v.trim());
+                t.setPlaceholder('ex: Unity, Figma, Code').setValue(awPattern).onChange(v => awPattern = v.trim());
             });
 
         new obsidian.Setting(contentEl)
@@ -3840,7 +3842,7 @@ kanban-plugin: basic
                 obsidian.requestUrl({ url: `${host}/api/0/settings` }).catch(e => ({ json: null }))
             ]);
 
-            const hostname = infoRes.json?.hostname || 'Orion';
+            const hostname = infoRes.json?.hostname || 'localhost';
             const awClasses = settingsRes.json?.classes || [];
 
             const now = new Date();
@@ -3961,7 +3963,7 @@ kanban-plugin: basic
             for (const pr of projectRules) {
                 let isProjectMatch = false;
 
-                // Match by AW class name (e.g. "Work > Obscurium" matches project "Obscurium")
+                // Match by AW class name (e.g. "Work > Project" matches project "Project")
                 if (matchedAW) {
                     const awLastName = matchedAW.shortName.toLowerCase();
                     const awFullName = matchedAW.fullName.toLowerCase();
