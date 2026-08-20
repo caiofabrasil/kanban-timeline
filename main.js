@@ -3474,8 +3474,8 @@ kanban-plugin: basic
             return;
         }
 
-        projStatsList.forEach(({ project, stats }) => {
-            this.renderProjectCard(grid, project, stats);
+        projStatsList.forEach(({ project, stats }, index) => {
+            this.renderProjectCard(grid, project, stats, index);
         });
 
         // 4. ActivityWatch Section (Scrollable bottom area)
@@ -3631,11 +3631,79 @@ kanban-plugin: basic
         };
     }
 
-    renderProjectCard(parent, project, stats) {
+    renderProjectCard(parent, project, stats, index) {
         const card = parent.createDiv('kt-proj-card');
         card.style.setProperty('--proj-card-color', project.color || '#6366f1');
+        card.setAttribute('draggable', 'true');
+        card.dataset.projId = project.id;
+        card.dataset.projIndex = String(index);
 
-        // Header
+        // Drag & Drop Reordering Handlers
+        card.addEventListener('dragstart', (e) => {
+            if (e.target.closest('button, input, .kt-proj-task-check, .kt-proj-task-title, .kt-proj-task-toggle-btn')) {
+                e.preventDefault();
+                return;
+            }
+            e.dataTransfer.setData('text/plain', project.id);
+            e.dataTransfer.effectAllowed = 'move';
+            card.classList.add('kt-is-dragging');
+            this._draggedProjId = project.id;
+        });
+
+        card.addEventListener('dragend', () => {
+            card.classList.remove('kt-is-dragging');
+            document.querySelectorAll('.kt-proj-card').forEach(el => {
+                el.classList.remove('kt-drag-over-left', 'kt-drag-over-right');
+            });
+            this._draggedProjId = null;
+        });
+
+        card.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (!this._draggedProjId || this._draggedProjId === project.id) return;
+
+            const rect = card.getBoundingClientRect();
+            const midX = rect.left + rect.width / 2;
+            const isLeft = e.clientX < midX;
+
+            card.classList.toggle('kt-drag-over-left', isLeft);
+            card.classList.toggle('kt-drag-over-right', !isLeft);
+        });
+
+        card.addEventListener('dragleave', () => {
+            card.classList.remove('kt-drag-over-left', 'kt-drag-over-right');
+        });
+
+        card.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            card.classList.remove('kt-drag-over-left', 'kt-drag-over-right');
+            const draggedId = e.dataTransfer.getData('text/plain') || this._draggedProjId;
+            if (!draggedId || draggedId === project.id) return;
+
+            const projects = this.plugin.settings.projects || [];
+            const srcIdx = projects.findIndex(p => p.id === draggedId);
+            const targetIdx = projects.findIndex(p => p.id === project.id);
+
+            if (srcIdx === -1 || targetIdx === -1) return;
+
+            const rect = card.getBoundingClientRect();
+            const midX = rect.left + rect.width / 2;
+            const insertBefore = e.clientX < midX;
+
+            const [movedProj] = projects.splice(srcIdx, 1);
+            let newTargetIdx = projects.findIndex(p => p.id === project.id);
+            if (!insertBefore) {
+                newTargetIdx += 1;
+            }
+            projects.splice(newTargetIdx, 0, movedProj);
+
+            this.plugin.settings.projects = projects;
+            await this.plugin.saveSettings();
+            this.render();
+        });
+
+        // 1. Header
         const hdr = card.createDiv('kt-proj-card-header');
         
         const leftHdr = hdr.createDiv('kt-proj-card-title-group');
@@ -3677,15 +3745,18 @@ kanban-plugin: basic
             ).open();
         };
 
-        // Big Main Hours Metric (Horas Realizadas até Hoje)
+        // 2. Big Main Hours Metric (Horas Realizadas até Hoje)
         const hoursBox = card.createDiv('kt-proj-main-hours');
         const formattedPast = formatMinutesToHours(stats.pastMinutes) || '0h';
         hoursBox.createSpan({ cls: 'kt-proj-hours-val', text: formattedPast });
         hoursBox.createSpan({ cls: 'kt-proj-hours-lbl', text: 'realizadas (até hoje)' });
 
+        // 3. Meta Badges Container (Futuro, Ganhos, Meta)
+        const metaBadges = card.createDiv('kt-proj-meta-badges');
+
         // Future scheduled badge if present
         if (stats.futureMinutes > 0) {
-            const futureBadge = card.createDiv('kt-proj-future-badge');
+            const futureBadge = metaBadges.createDiv('kt-proj-future-badge');
             futureBadge.setText(`📅 +${formatMinutesToHours(stats.futureMinutes)} agendadas no futuro`);
             futureBadge.title = 'Horas planejadas para os próximos dias';
         }
@@ -3696,7 +3767,7 @@ kanban-plugin: basic
             const earnedAmount = (stats.pastMinutes / 60) * project.hourlyRate;
             const futureAmount = (stats.futureMinutes / 60) * project.hourlyRate;
 
-            const earningsRow = card.createDiv('kt-proj-earnings-row');
+            const earningsRow = metaBadges.createDiv('kt-proj-earnings-row');
             
             const mainEarnings = earningsRow.createDiv('kt-proj-earnings-main');
             mainEarnings.createSpan({ cls: 'kt-earnings-icon', text: '💵' });
@@ -3710,70 +3781,21 @@ kanban-plugin: basic
             }
         }
 
-        // ActivityWatch Comparison Block (Planejado vs Trackeado Real)
-        if (this.plugin.settings.awConnected) {
-            const awSec = this.awData?.processed?.projectTrackedSeconds?.[project.id] || 0;
-            const awTrackedFormatted = this.formatSecondsDuration(awSec) || '0h';
-            
-            const awBox = card.createDiv('kt-proj-aw-compare-box');
-            const awHdr = awBox.createDiv('kt-proj-aw-compare-hdr');
-            awHdr.createSpan({ cls: 'kt-aw-chdr-icon', text: '⚡' });
-            awHdr.createSpan({ cls: 'kt-aw-chdr-title', text: 'Planejado vs Trackeado (ActivityWatch)' });
-
-            const awRow = awBox.createDiv('kt-proj-aw-compare-grid');
-            
-            const colPlan = awRow.createDiv('kt-proj-aw-mcol');
-            colPlan.createSpan({ cls: 'kt-aw-mcol-lbl', text: '📋 Planejado' });
-            colPlan.createSpan({ cls: 'kt-aw-mcol-val', text: formattedPast });
-
-            const colTrack = awRow.createDiv('kt-proj-aw-mcol');
-            colTrack.createSpan({ cls: 'kt-aw-mcol-lbl', text: '⏱ Trackeado Real' });
-            const trackVal = colTrack.createSpan({ cls: 'kt-aw-mcol-val kt-aw-mcol-val-track', text: awTrackedFormatted });
-            trackVal.style.color = project.color || '#3b82f6';
-
-            // Dual progress comparison bar
-            const totalRefSec = Math.max(stats.pastMinutes * 60, awSec, 1);
-            const planWidth = Math.min(100, Math.round(((stats.pastMinutes * 60) / totalRefSec) * 100));
-            const trackWidth = Math.min(100, Math.round((awSec / totalRefSec) * 100));
-
-            const barWrap = awBox.createDiv('kt-proj-aw-dual-bars');
-            
-            const planBarRow = barWrap.createDiv('kt-aw-dbar-row');
-            planBarRow.createSpan({ cls: 'kt-aw-dbar-lbl', text: 'Kanban' });
-            const planBarTrack = planBarRow.createDiv('kt-aw-dbar-track');
-            const planBarFill = planBarTrack.createDiv('kt-aw-dbar-fill kt-aw-fill-plan');
-            planBarFill.style.width = `${planWidth}%`;
-
-            const realBarRow = barWrap.createDiv('kt-aw-dbar-row');
-            realBarRow.createSpan({ cls: 'kt-aw-dbar-lbl', text: 'ActivityWatch' });
-            const realBarTrack = realBarRow.createDiv('kt-aw-dbar-track');
-            const realBarFill = realBarTrack.createDiv('kt-aw-dbar-fill');
-            realBarFill.style.width = `${trackWidth}%`;
-            realBarFill.style.backgroundColor = project.color || '#3b82f6';
-
-            if (project.hourlyRate > 0 && awSec > 0) {
-                const awEarn = (awSec / 3600) * project.hourlyRate;
-                const curr = project.currency || 'R$';
-                const awEarnEl = awBox.createDiv('kt-proj-aw-earn-tag');
-                awEarnEl.setText(`💵 Ganho Real (Tempo Trackeado): ${formatCurrency(awEarn, curr)}`);
-            }
-        }
-
         // Target hours indicator if set
         if (project.targetHours > 0) {
             const targetMin = project.targetHours * 60;
             const targetPct = Math.min(100, Math.round((stats.pastMinutes / targetMin) * 100));
-            const targetEl = card.createDiv('kt-proj-target-row');
+            const targetEl = metaBadges.createDiv('kt-proj-target-row');
             targetEl.setText(`Meta: ${project.targetHours}h (${targetPct}% alcançado)`);
         }
 
-        // Progress Bar
+        // 4. Progress Bar
         const progressWrap = card.createDiv('kt-proj-progress-wrap');
         const progressBar = progressWrap.createDiv('kt-proj-progress-bar');
         progressBar.style.width = `${stats.completionRate}%`;
         progressBar.style.backgroundColor = project.color || '#6366f1';
 
-        // Stats Matrix (Done, Futuro, Backlog)
+        // 5. Stats Matrix (Done, Futuro, Backlog)
         const statsRow = card.createDiv('kt-proj-stats-row');
 
         const stat1 = statsRow.createDiv('kt-proj-stat');
@@ -3788,25 +3810,15 @@ kanban-plugin: basic
         stat3.createSpan({ cls: 'kt-stat-n', text: `${stats.backlogTasks}` });
         stat3.createSpan({ cls: 'kt-stat-l', text: 'No Backlog' });
 
-        // Expandable Task Breakdown Drawer
-        const detailsToggle = card.createDiv('kt-proj-details-toggle');
-        const toggleIcon = detailsToggle.createSpan({ text: '▶ ' });
-        const toggleLabel = detailsToggle.createSpan({ text: `Ver todas as ${stats.totalTasks} tarefas e sessões` });
+        // 6. Tasks Section (Always Visible & Scrollable)
+        const tasksSection = card.createDiv('kt-proj-tasks-section');
+        const tasksHeader = tasksSection.createDiv('kt-proj-tasks-header');
+        tasksHeader.createSpan({ cls: 'kt-proj-th-title', text: `Tarefas (${stats.totalTasks})` });
 
-        const detailsDrawer = card.createDiv('kt-proj-details-drawer');
-        detailsDrawer.style.display = 'none';
-
-        detailsToggle.onclick = () => {
-            const isOpen = detailsDrawer.style.display !== 'none';
-            detailsDrawer.style.display = isOpen ? 'none' : 'flex';
-            toggleIcon.setText(isOpen ? '▶ ' : '▼ ');
-            detailsToggle.classList.toggle('is-open', !isOpen);
-        };
-
+        const tasksList = tasksSection.createDiv('kt-proj-tasks-list');
         if (stats.matchingCards.length === 0) {
-            detailsDrawer.createDiv('kt-proj-drawer-empty').setText('Nenhuma tarefa encontrada com esta hashtag ou coluna.');
+            tasksList.createDiv('kt-proj-drawer-empty').setText('Nenhuma tarefa encontrada com esta hashtag ou coluna.');
         } else {
-            const tasksList = detailsDrawer.createDiv('kt-proj-tasks-list');
             stats.matchingCards.forEach(c => {
                 const isDone = c.isCompleted || c.column === 'Done' || isIgnoredColumn(c.column);
                 const isExcluded = (project.excludedTaskTitles || []).includes(c.title.trim());
