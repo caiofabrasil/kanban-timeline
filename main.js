@@ -3107,13 +3107,157 @@ kanban-plugin: basic
                     this.attachGanttResize(rightHandle, 'end', card, ws, cellDates, cellElements, row);
                 }
 
-                // Quick-edit date on click no corpo do span (se não clicou no handle)
-                cell.onclick = (e) => {
-                    if (e.target.classList.contains('kt-resize-edge')) return;
-                    this.openDateRangeModal(card);
-                };
+                // Drag do bloco inteiro horizontalmente ou clique para editar datas
+                this.attachGanttSpanMove(cell, card, ws, cellDates, cellElements, row, i);
             }
         }
+    }
+
+    updateGanttRowVisual(cellElements, cellDates, card, pStart, pEnd, dayShift = 0) {
+        cellElements.forEach((cell, i) => {
+            const d = startOfDay(cellDates[i]);
+            const inSpan = d.getTime() >= pStart.getTime() && d.getTime() <= pEnd.getTime();
+            const isFirst = inSpan && sameDay(d, pStart);
+            const isLast  = inSpan && sameDay(d, pEnd);
+
+            cell.classList.toggle('kt-span', inSpan);
+            cell.classList.toggle('kt-span-first', isFirst);
+            cell.classList.toggle('kt-span-last', isLast);
+
+            // Clean up any old preview child elements
+            const oldBadge = cell.querySelector('.kt-span-tb-indicator');
+            if (oldBadge) oldBadge.remove();
+            const oldStartHandle = cell.querySelector('.kt-resize-edge-start');
+            if (oldStartHandle) oldStartHandle.remove();
+            const oldEndHandle = cell.querySelector('.kt-resize-edge-end');
+            if (oldEndHandle) oldEndHandle.remove();
+
+            if (inSpan) {
+                cell.style.setProperty('--span-color', card.projectColor);
+
+                // Check timeblock for this shifted date
+                const origDate = new Date(d);
+                if (dayShift !== 0) {
+                    origDate.setDate(origDate.getDate() - dayShift);
+                }
+                const dayTime = getTimeForDay(card, origDate);
+
+                if (dayTime && dayTime.timeStart && dayTime.timeEnd) {
+                    cell.classList.add('kt-span-timeblocked');
+                    cell.classList.remove('kt-span-not-timeblocked');
+                    const ind = cell.createSpan('kt-span-tb-indicator');
+                    ind.setText(`${dayTime.timeStart}–${dayTime.timeEnd}`);
+                } else {
+                    cell.classList.remove('kt-span-timeblocked');
+                    cell.classList.add('kt-span-not-timeblocked');
+                }
+
+                if (isFirst) {
+                    cell.createDiv('kt-resize-edge kt-resize-edge-start');
+                }
+                if (isLast) {
+                    cell.createDiv('kt-resize-edge kt-resize-edge-end');
+                }
+            } else {
+                cell.classList.remove('kt-span-timeblocked');
+                cell.classList.remove('kt-span-not-timeblocked');
+                cell.style.removeProperty('--span-color');
+            }
+        });
+    }
+
+    attachGanttSpanMove(cellEl, card, ws, cellDates, cellElements, row, originIndex) {
+        cellEl.addEventListener('pointerdown', (e) => {
+            if (e.target.classList.contains('kt-resize-edge')) return;
+            if (e.button !== 0) return;
+
+            const currentStart = startOfDay(card.startDate);
+            const currentEnd   = startOfDay(card.endDate || card.startDate);
+            const durationDays = Math.round((currentEnd.getTime() - currentStart.getTime()) / 86400000);
+
+            const startX = e.clientX;
+            const originDate = startOfDay(cellDates[originIndex]);
+            let previewStart = new Date(currentStart);
+            let previewEnd   = new Date(currentEnd);
+            let dayShift     = 0;
+            let hasMoved     = false;
+
+            const onPointerMove = (moveEvt) => {
+                const deltaX = moveEvt.clientX - startX;
+                if (Math.abs(deltaX) > 4) {
+                    hasMoved = true;
+                    document.body.classList.add('kt-is-resizing');
+
+                    const target = document.elementFromPoint(moveEvt.clientX, moveEvt.clientY);
+                    const cell = target ? target.closest('.kt-gantt-cell') : null;
+
+                    if (cell && cell.dataset.dateIndex !== undefined) {
+                        const idx = parseInt(cell.dataset.dateIndex, 10);
+                        const hoveredDate = startOfDay(cellDates[idx]);
+                        
+                        dayShift = Math.round((hoveredDate.getTime() - originDate.getTime()) / 86400000);
+                        
+                        const newStart = new Date(currentStart);
+                        newStart.setDate(newStart.getDate() + dayShift);
+                        
+                        const newEnd = new Date(newStart);
+                        newEnd.setDate(newEnd.getDate() + durationDays);
+
+                        previewStart = newStart;
+                        previewEnd   = newEnd;
+
+                        this.updateGanttRowVisual(cellElements, cellDates, card, previewStart, previewEnd, dayShift);
+                    }
+                }
+            };
+
+            const onPointerUp = async (upEvt) => {
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', onPointerUp);
+                document.body.classList.remove('kt-is-resizing');
+
+                if (hasMoved) {
+                    if (!sameDay(previewStart, card.startDate) || !sameDay(previewEnd, card.endDate || card.startDate)) {
+                        await this.persistShiftedDateRange(card, previewStart, previewEnd, dayShift);
+                        await this.refresh();
+                    } else {
+                        await this.refresh();
+                    }
+                } else {
+                    this.openDateRangeModal(card);
+                }
+            };
+
+            document.addEventListener('pointermove', onPointerMove);
+            document.addEventListener('pointerup', onPointerUp);
+        });
+    }
+
+    async persistShiftedDateRange(card, newStart, newEnd, dayShift) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+        
+        // 1. Atualiza intervalo @{DD-MM-YYYY..DD-MM-YYYY}
+        content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd);
+        
+        // 2. Se houver dailyTimes, move os blocos de horário junto com o deslocamento de dias
+        if (dayShift !== 0 && card.dailyTimes && Object.keys(card.dailyTimes).length > 0) {
+            const oldKeys = Object.keys(card.dailyTimes);
+            for (const oldKey of oldKeys) {
+                const oldDt = card.dailyTimes[oldKey];
+                const oldDate = parseDate(oldKey);
+                if (oldDate) {
+                    const shiftedDate = new Date(oldDate);
+                    shiftedDate.setDate(shiftedDate.getDate() + dayShift);
+                    content = this.parser.updateTimeBlock(content, card.lineIndex, oldDate, null, null);
+                    content = this.parser.updateTimeBlock(content, card.lineIndex, shiftedDate, oldDt.timeStart, oldDt.timeEnd);
+                }
+            }
+        }
+        
+        await this.app.vault.modify(file, content);
+        new obsidian.Notice(`${card.title} → ${formatDate(newStart)}${sameDay(newStart, newEnd) ? '' : ' – ' + formatDate(newEnd)}`);
     }
 
     attachGanttResize(handleEl, edgeType, card, ws, cellDates, cellElements, row) {
@@ -3156,18 +3300,7 @@ kanban-plugin: basic
                         }
                     }
 
-                    // Atualização visual em tempo real das células do span
-                    cellElements.forEach((c, i) => {
-                        const d = startOfDay(cellDates[i]);
-                        const inSpan = d.getTime() >= previewStart.getTime() && d.getTime() <= previewEnd.getTime();
-
-                        c.classList.toggle('kt-span', inSpan);
-                        c.classList.toggle('kt-span-first', inSpan && sameDay(d, previewStart));
-                        c.classList.toggle('kt-span-last', inSpan && sameDay(d, previewEnd));
-                        if (inSpan) {
-                            c.style.setProperty('--span-color', card.projectColor);
-                        }
-                    });
+                    this.updateGanttRowVisual(cellElements, cellDates, card, previewStart, previewEnd, 0);
                 }
             };
 
@@ -3413,11 +3546,11 @@ kanban-plugin: basic
                         const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
                         if (dur > 0) {
                             const isFutureSlot = slotDate ? startOfDay(slotDate).getTime() > today.getTime() : false;
-                            if (isFutureSlot) {
-                                futureMinutes += dur;
-                            } else if (isDone) {
+                            if (isDone) {
                                 pastMinutes += dur;
                                 doneMinutes += dur;
+                            } else if (isFutureSlot) {
+                                futureMinutes += dur;
                             } else {
                                 if (isInDev) inDevMinutes += dur;
                                 else backlogMinutes += dur;
@@ -3429,7 +3562,7 @@ kanban-plugin: basic
                                 timeStart: dt.timeStart,
                                 timeEnd: dt.timeEnd,
                                 durationMinutes: dur,
-                                isFuture: isFutureSlot,
+                                isFuture: isFutureSlot && !isDone,
                                 isDone
                             });
                         }
@@ -3441,11 +3574,11 @@ kanban-plugin: basic
                     const cardDate = c.startDate ? startOfDay(c.startDate) : null;
                     const isFutureSlot = cardDate ? cardDate.getTime() > today.getTime() : false;
                     
-                    if (isFutureSlot) {
-                        futureMinutes += dur;
-                    } else if (isDone) {
+                    if (isDone) {
                         pastMinutes += dur;
                         doneMinutes += dur;
+                    } else if (isFutureSlot) {
+                        futureMinutes += dur;
                     } else {
                         if (isInDev) inDevMinutes += dur;
                         else backlogMinutes += dur;
@@ -3457,7 +3590,7 @@ kanban-plugin: basic
                         timeStart: c.timeStart,
                         timeEnd: c.timeEnd,
                         durationMinutes: dur,
-                        isFuture: isFutureSlot,
+                        isFuture: isFutureSlot && !isDone,
                         isDone
                     });
                 }
@@ -3465,11 +3598,11 @@ kanban-plugin: basic
                 if (periodFilter === 'all') {
                     const cardDate = c.startDate ? startOfDay(c.startDate) : null;
                     const isFutureSlot = cardDate ? cardDate.getTime() > today.getTime() : false;
-                    if (isFutureSlot) {
-                        futureMinutes += c.estimateMinutes;
-                    } else if (isDone) {
+                    if (isDone) {
                         pastMinutes += c.estimateMinutes;
                         doneMinutes += c.estimateMinutes;
+                    } else if (isFutureSlot) {
+                        futureMinutes += c.estimateMinutes;
                     } else {
                         if (isInDev) inDevMinutes += c.estimateMinutes;
                         else backlogMinutes += c.estimateMinutes;

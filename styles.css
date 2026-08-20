@@ -319,11 +319,16 @@
     background: color-mix(in srgb, var(--span-color, #6b7280) 22%, transparent);
     border-top:    2px solid var(--span-color, #6b7280);
     border-bottom: 2px solid var(--span-color, #6b7280);
-    cursor: pointer;
+    cursor: grab;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
+    touch-action: none;
+    user-select: none;
+}
+.kt-gantt-cell.kt-span:active {
+    cursor: grabbing;
 }
 .kt-gantt-cell.kt-span:hover {
     background: color-mix(in srgb, var(--span-color, #6b7280) 32%, transparent);
