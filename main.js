@@ -311,6 +311,12 @@ function minutesToTime(mins) {
 
 function getTimeForDay(card, date) {
     if (!card || !date) return null;
+    if (card.isRemoteCalendarEvent) {
+        if (sameDay(card.startDate, date)) {
+            return { timeStart: card.timeStart, timeEnd: card.timeEnd };
+        }
+        return null;
+    }
     const dStr = formatDate(date);
     if (card.dailyTimes && card.dailyTimes[dStr]) {
         return card.dailyTimes[dStr];
@@ -2253,6 +2259,490 @@ class TimeBlockModal extends obsidian.Modal {
     onClose() { this.contentEl.empty(); }
 }
 
+function colorMixHex(hex, alpha = 0.2) {
+    if (!hex || typeof hex !== 'string') return `rgba(99, 102, 241, ${alpha})`;
+    if (hex.startsWith('#') && hex.length === 7) {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return hex;
+}
+
+// ================================================================
+// ICAL / GOOGLE CALENDAR PARSER (RFC 5545)
+// ================================================================
+
+class ICalParser {
+    static parse(icsData, calendarConfig = {}) {
+        if (!icsData || typeof icsData !== 'string') return [];
+
+        // 1. Unfold lines (RFC 5545 3.1)
+        const unfolded = icsData.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
+        const lines = unfolded.split(/\r\n|\r|\n/);
+
+        const events = [];
+        let inEvent = false;
+        let cur = null;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            if (line === 'BEGIN:VEVENT') {
+                inEvent = true;
+                cur = {};
+                continue;
+            }
+
+            if (line === 'END:VEVENT') {
+                if (cur) {
+                    const parsedEvents = ICalParser.processEvent(cur, calendarConfig);
+                    events.push(...parsedEvents);
+                }
+                inEvent = false;
+                cur = null;
+                continue;
+            }
+
+            if (!inEvent || !cur) continue;
+
+            const colonIdx = line.indexOf(':');
+            if (colonIdx === -1) continue;
+
+            const propPart = line.substring(0, colonIdx);
+            const valPart = line.substring(colonIdx + 1);
+
+            const semicolonIdx = propPart.indexOf(';');
+            const propName = (semicolonIdx !== -1 ? propPart.substring(0, semicolonIdx) : propPart).toUpperCase();
+            const propParams = semicolonIdx !== -1 ? propPart.substring(semicolonIdx + 1) : '';
+
+            if (propName === 'SUMMARY') cur.summary = ICalParser.unescapeText(valPart);
+            else if (propName === 'DESCRIPTION') cur.description = ICalParser.unescapeText(valPart);
+            else if (propName === 'LOCATION') cur.location = ICalParser.unescapeText(valPart);
+            else if (propName === 'STATUS') cur.status = valPart.toUpperCase();
+            else if (propName === 'UID') cur.uid = valPart;
+            else if (propName === 'DTSTART') cur.dtstart = { val: valPart, params: propParams };
+            else if (propName === 'DTEND') cur.dtend = { val: valPart, params: propParams };
+            else if (propName === 'DURATION') cur.duration = valPart;
+            else if (propName === 'RRULE') cur.rrule = valPart;
+            else if (propName === 'EXDATE') {
+                if (!cur.exdates) cur.exdates = [];
+                cur.exdates.push(valPart);
+            }
+            else if (propName === 'URL') cur.url = valPart;
+            else if (propName === 'X-GOOGLE-CONFERENCE') cur.conference = valPart;
+        }
+
+        return events;
+    }
+
+    static unescapeText(str) {
+        if (!str) return '';
+        return str.replace(/\\n/g, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+    }
+
+    static parseDate(dtObj) {
+        if (!dtObj || !dtObj.val) return null;
+        const raw = dtObj.val.trim();
+        
+        // Formato YYYYMMDD (All day)
+        if (/^\d{8}$/.test(raw)) {
+            const y = parseInt(raw.substring(0, 4), 10);
+            const m = parseInt(raw.substring(4, 6), 10) - 1;
+            const d = parseInt(raw.substring(6, 8), 10);
+            const dt = new Date(y, m, d, 0, 0, 0);
+            return { date: dt, isAllDay: true };
+        }
+
+        // Formato YYYYMMDDTHHMMSSZ (UTC)
+        const matchUtc = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+        if (matchUtc) {
+            const dt = new Date(Date.UTC(
+                parseInt(matchUtc[1], 10),
+                parseInt(matchUtc[2], 10) - 1,
+                parseInt(matchUtc[3], 10),
+                parseInt(matchUtc[4], 10),
+                parseInt(matchUtc[5], 10),
+                parseInt(matchUtc[6], 10)
+            ));
+            return { date: dt, isAllDay: false };
+        }
+
+        // Formato YYYYMMDDTHHMMSS (Local / TZID)
+        const matchLocal = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
+        if (matchLocal) {
+            const dt = new Date(
+                parseInt(matchLocal[1], 10),
+                parseInt(matchLocal[2], 10) - 1,
+                parseInt(matchLocal[3], 10),
+                parseInt(matchLocal[4], 10),
+                parseInt(matchLocal[5], 10),
+                parseInt(matchLocal[6], 10)
+            );
+            return { date: dt, isAllDay: false };
+        }
+
+        return null;
+    }
+
+    static processEvent(raw, cal) {
+        if (raw.status === 'CANCELLED') return [];
+        const parsedStart = ICalParser.parseDate(raw.dtstart);
+        if (!parsedStart || !parsedStart.date || isNaN(parsedStart.date.getTime())) return [];
+
+        let parsedEnd = ICalParser.parseDate(raw.dtend);
+        if (!parsedEnd || !parsedEnd.date) {
+            const endDate = new Date(parsedStart.date);
+            if (parsedStart.isAllDay) {
+                endDate.setDate(endDate.getDate() + 1);
+            } else {
+                endDate.setHours(endDate.getHours() + 1);
+            }
+            parsedEnd = { date: endDate, isAllDay: parsedStart.isAllDay };
+        }
+
+        const durationMinutes = Math.max(15, Math.round((parsedEnd.date.getTime() - parsedStart.date.getTime()) / 60000));
+        const summary = raw.summary || '(Sem Título)';
+        const description = raw.description || '';
+        const location = raw.location || '';
+        const uid = raw.uid || ('evt-' + Math.random().toString(36).substr(2, 9));
+
+        // Find meeting URL
+        const fullText = `${location} ${description} ${raw.conference || ''} ${raw.url || ''}`;
+        const meetMatch = fullText.match(/https:\/\/(?:meet\.google\.com\/[a-z0-9-]+|[a-zA-Z0-9.-]*zoom\.us\/[^\s]+|teams\.microsoft\.com\/[^\s]+)/i);
+        const meetUrl = meetMatch ? meetMatch[0] : null;
+
+        const baseEvent = {
+            uid,
+            calendarId: cal.id,
+            calendarName: cal.name || '',
+            calendarColor: cal.color || '#3b82f6',
+            cleanTitle: summary,
+            title: summary,
+            description,
+            location,
+            meetUrl,
+            status: raw.status || 'CONFIRMED',
+            isAllDay: parsedStart.isAllDay,
+            isEvent: true,
+            isRemoteCalendarEvent: true,
+            eventType: 'meeting',
+            column: 'Rotina',
+            tags: []
+        };
+
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - 30 * 86400000);
+        const windowEnd = new Date(now.getTime() + 90 * 86400000);
+
+        // Check for Recurrence RRULE
+        if (raw.rrule) {
+            return ICalParser.expandRecurrence(baseEvent, parsedStart.date, durationMinutes, raw.rrule, raw.exdates, windowStart, windowEnd);
+        }
+
+        // Single Event
+        if (parsedEnd.date >= windowStart && parsedStart.date <= windowEnd) {
+            const d = parsedStart.date;
+            const pad = n => String(n).padStart(2, '0');
+            const timeStart = parsedStart.isAllDay ? '08:00' : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            const endD = parsedEnd.date;
+            const timeEnd = parsedStart.isAllDay ? '09:00' : `${pad(endD.getHours())}:${pad(endD.getMinutes())}`;
+
+            return [{
+                ...baseEvent,
+                id: `remote-${cal.id}-${uid}-${formatDate(d)}`,
+                startDate: d,
+                endDate: d,
+                timeStart,
+                timeEnd,
+                durationMinutes
+            }];
+        }
+
+        return [];
+    }
+
+    static expandRecurrence(baseEvent, origStart, durationMinutes, rruleStr, exdates, windowStart, windowEnd) {
+        const events = [];
+        const parts = {};
+        rruleStr.split(';').forEach(p => {
+            const [k, v] = p.split('=');
+            if (k && v) parts[k.toUpperCase()] = v.toUpperCase();
+        });
+
+        const freq = parts.FREQ;
+        const interval = parseInt(parts.INTERVAL || '1', 10);
+        const count = parts.COUNT ? parseInt(parts.COUNT, 10) : 9999;
+        
+        let untilDate = null;
+        if (parts.UNTIL) {
+            const parsedUntil = ICalParser.parseDate({ val: parts.UNTIL });
+            if (parsedUntil) untilDate = parsedUntil.date;
+        }
+
+        const byDays = parts.BYDAY ? parts.BYDAY.split(',') : null;
+        const dayMap = { 'SU': 0, 'MO': 1, 'TU': 2, 'WE': 3, 'TH': 4, 'FR': 5, 'SA': 6 };
+
+        const exdateSet = new Set();
+        if (exdates && Array.isArray(exdates)) {
+            exdates.forEach(ex => {
+                const p = ICalParser.parseDate({ val: ex });
+                if (p && p.date) exdateSet.add(formatDate(p.date));
+            });
+        }
+
+        const pad = n => String(n).padStart(2, '0');
+        const startHours = origStart.getHours();
+        const startMins = origStart.getMinutes();
+        const timeStart = baseEvent.isAllDay ? '08:00' : `${pad(startHours)}:${pad(startMins)}`;
+        const endTotalMin = startHours * 60 + startMins + durationMinutes;
+        const endHours = Math.floor((endTotalMin % (24 * 60)) / 60);
+        const endMins = endTotalMin % 60;
+        const timeEnd = baseEvent.isAllDay ? '09:00' : `${pad(endHours)}:${pad(endMins)}`;
+
+        let cur = new Date(origStart);
+        let occurrences = 0;
+
+        for (let iter = 0; iter < 500 && occurrences < count; iter++) {
+            if (untilDate && cur > untilDate) break;
+            if (cur > windowEnd) break;
+
+            if (cur >= windowStart) {
+                const dateKey = formatDate(cur);
+                const dayMatch = !byDays || byDays.some(bd => {
+                    const clean = bd.replace(/[^A-Z]/g, '');
+                    return dayMap[clean] === cur.getDay();
+                });
+
+                if (dayMatch && !exdateSet.has(dateKey)) {
+                    events.push({
+                        ...baseEvent,
+                        id: `remote-${baseEvent.calendarId}-${baseEvent.uid}-${dateKey}`,
+                        startDate: new Date(cur),
+                        endDate: new Date(cur),
+                        timeStart,
+                        timeEnd,
+                        durationMinutes
+                    });
+                }
+            }
+
+            occurrences++;
+
+            if (freq === 'DAILY') {
+                cur.setDate(cur.getDate() + interval);
+            } else if (freq === 'WEEKLY') {
+                if (byDays && byDays.length > 1) {
+                    cur.setDate(cur.getDate() + 1);
+                } else {
+                    cur.setDate(cur.getDate() + 7 * interval);
+                }
+            } else if (freq === 'MONTHLY') {
+                cur.setMonth(cur.getMonth() + interval);
+            } else {
+                break;
+            }
+        }
+
+        return events;
+    }
+}
+
+// ================================================================
+// REMOTE EVENT DETAILS MODAL
+// ================================================================
+
+class RemoteEventModal extends obsidian.Modal {
+    constructor(app, event) {
+        super(app);
+        this.event = event;
+    }
+
+    onOpen() {
+        const { contentEl, event } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper');
+        this.modalEl.style.width = '480px';
+        this.modalEl.style.maxWidth = '92vw';
+        contentEl.addClass('kt-card-edit-modal');
+        contentEl.addClass('kt-remote-event-modal');
+
+        // Header with calendar badge
+        const topHdr = contentEl.createDiv('kt-re-header');
+        const calBadge = topHdr.createSpan('kt-re-cal-badge');
+        calBadge.style.backgroundColor = colorMixHex(event.calendarColor || '#3b82f6', 0.15);
+        calBadge.style.color = event.calendarColor || '#3b82f6';
+        calBadge.style.borderColor = colorMixHex(event.calendarColor || '#3b82f6', 0.35);
+        calBadge.setText(`🗓️ ${event.calendarName || 'Google Agenda'}`);
+
+        contentEl.createEl('h2', { cls: 'kt-re-title', text: event.cleanTitle || event.title });
+        
+        // Time & Date box
+        const dateStr = event.startDate ? formatDate(event.startDate) : '';
+        const timeBox = contentEl.createDiv('kt-re-time-box');
+        timeBox.createSpan({ cls: 'kt-re-time-icon', text: '⏰' });
+        timeBox.createSpan({ cls: 'kt-re-time-text', text: `${dateStr} • ${event.timeStart} – ${event.timeEnd}` });
+
+        // Join Video Meeting Button if link exists
+        if (event.meetUrl) {
+            const joinBtn = contentEl.createEl('a', {
+                cls: 'kt-re-join-btn mod-cta',
+                text: '🎥 Entrar na Videochamada (Meet / Zoom)',
+                href: event.meetUrl
+            });
+            joinBtn.setAttribute('target', '_blank');
+        }
+
+        // Location
+        if (event.location) {
+            const locBox = contentEl.createDiv('kt-re-info-row');
+            locBox.createSpan({ cls: 'kt-re-info-lbl', text: '📍 Local:' });
+            locBox.createSpan({ cls: 'kt-re-info-val', text: event.location });
+        }
+
+        // Description
+        if (event.description) {
+            const descBox = contentEl.createDiv('kt-re-desc-box');
+            descBox.createEl('h4', { text: 'Descrição / Pauta' });
+            const descText = descBox.createDiv('kt-re-desc-content');
+            descText.setText(event.description);
+        }
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        const rightGroup = footer.createDiv('kt-modal-footer-right');
+        const closeBtn = rightGroup.createEl('button', { text: 'Fechar' });
+        closeBtn.onclick = () => this.close();
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
+// REMOTE CALENDAR CONFIG MODAL (Editar / Adicionar Calendário)
+// ================================================================
+
+class RemoteCalendarEditModal extends obsidian.Modal {
+    constructor(app, calendar, onSave, onDelete) {
+        super(app);
+        this.calendar = calendar;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl, calendar } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '92vw';
+        contentEl.addClass('kt-card-edit-modal');
+        contentEl.createEl('h2', { text: calendar ? `Editar Calendário: ${calendar.name}` : 'Novo Calendário Remoto' });
+
+        let name = calendar ? calendar.name : '';
+        let color = calendar ? calendar.color : '#3b82f6';
+        let url = calendar ? calendar.url : '';
+        let email = calendar ? calendar.email : '';
+        let enabled = calendar ? calendar.enabled !== false : true;
+
+        new obsidian.Setting(contentEl)
+            .setName('Nome / Prefixo do Calendário')
+            .setDesc('Identificação do calendário nos blocos de horário (ex: Trabalho, Pessoal, Reuniões)')
+            .addText(t => {
+                t.setPlaceholder('ex: Trabalho').setValue(name).onChange(v => name = v.trim());
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Cor de Destaque')
+            .setDesc('Cor dos blocos de reunião no Timeblocking')
+            .addColorPicker(cp => {
+                cp.setValue(color).onChange(v => color = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('URL do Calendário Remoto (.ics)')
+            .setDesc('Cole o link iCal do Google Agenda, Outlook ou Apple Calendar (URL terminando em .ics ou webcal://)')
+            .addText(t => {
+                t.setPlaceholder('https://calendar.google.com/calendar/ical/.../basic.ics')
+                    .setValue(url)
+                    .onChange(v => url = v.trim());
+                t.inputEl.style.width = '360px';
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Seu E-mail (Opcional)')
+            .setDesc('Usado para identificar seu status de presença nas reuniões (Aceito / Recusado)')
+            .addText(t => {
+                t.setPlaceholder('ex: usuario@email.com').setValue(email).onChange(v => email = v.trim());
+            });
+
+        // Test connection button
+        new obsidian.Setting(contentEl)
+            .setName('Testar Conexão')
+            .setDesc('Verifique se a URL fornecida é acessível e contém eventos válidos.')
+            .addButton(b => {
+                b.setButtonText('Testar URL').onClick(async () => {
+                    if (!url) {
+                        new obsidian.Notice('Por favor, informe a URL do calendário primeiro.');
+                        return;
+                    }
+                    b.setButtonText('Baixando...');
+                    b.setDisabled(true);
+                    try {
+                        let cleanUrl = url.trim();
+                        if (cleanUrl.startsWith('webcal://')) cleanUrl = 'https://' + cleanUrl.slice(9);
+                        const res = await obsidian.requestUrl({ url: cleanUrl });
+                        const parsed = ICalParser.parse(res.text, { id: 'test', name, color });
+                        b.setButtonText('Testar URL');
+                        b.setDisabled(false);
+                        new obsidian.Notice(`✓ Conexão bem-sucedida! Encontrados ${parsed.length} eventos no feed.`);
+                    } catch (err) {
+                        b.setButtonText('Testar URL');
+                        b.setDisabled(false);
+                        new obsidian.Notice(`❌ Falha ao conectar: ${err.message || 'Verifique a URL'}`);
+                    }
+                });
+            });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        const leftGroup = footer.createDiv('kt-modal-footer-left');
+        if (calendar && this.onDelete) {
+            const deleteBtn = leftGroup.createEl('button', { cls: 'mod-warning', text: 'Excluir Calendário' });
+            deleteBtn.onclick = () => {
+                this.close();
+                this.onDelete();
+            };
+        }
+
+        const rightGroup = footer.createDiv('kt-modal-footer-right');
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: 'Salvar Calendário' });
+        saveBtn.onclick = async () => {
+            if (!url) {
+                new obsidian.Notice('Por favor, informe a URL (.ics) do calendário.');
+                return;
+            }
+            this.close();
+            const calData = {
+                id: calendar ? calendar.id : 'cal-' + Date.now(),
+                name: name || 'Google Calendar',
+                color,
+                url,
+                email,
+                enabled
+            };
+            if (this.onSave) await this.onSave(calData);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
 // ================================================================
 // SETTINGS TAB
 // ================================================================
@@ -2322,6 +2812,111 @@ class KanbanTimelineSettingsTab extends obsidian.PluginSettingTab {
                     .onChange(async v => {
                         this.plugin.settings.autoMoveTodayToInDev = v;
                         await this.plugin.saveSettings();
+                    });
+            });
+
+        // Section: Remote Calendars (Google Agenda / iCal)
+        containerEl.createEl('h3', { text: '🗓️ Calendários Remotos (Google Agenda / iCal)' });
+        containerEl.createEl('p', {
+            cls: 'setting-item-description',
+            text: 'Sincronize reuniões e eventos do Google Agenda, Outlook ou Apple Calendar (.ics) diretamente nos blocos de horário do Timeblocking.'
+        });
+
+        const calListContainer = containerEl.createDiv('kt-remote-cals-list');
+        const remoteCals = this.plugin.settings.remoteCalendars || [];
+
+        const renderCalList = () => {
+            calListContainer.empty();
+            if (remoteCals.length === 0) {
+                const emptyEl = calListContainer.createDiv('kt-settings-empty-notice');
+                emptyEl.setText('Nenhum calendário remoto cadastrado. Clique no botão abaixo para adicionar.');
+                return;
+            }
+
+            remoteCals.forEach((cal, idx) => {
+                const s = new obsidian.Setting(calListContainer)
+                    .setName(cal.name || `Calendário ${idx + 1}`)
+                    .setDesc(cal.url ? (cal.url.length > 55 ? cal.url.slice(0, 52) + '...' : cal.url) : 'Sem URL configurada');
+
+                const nameEl = s.nameEl;
+                const dot = createSpan({ cls: 'kt-proj-color-dot' });
+                dot.style.backgroundColor = cal.color || '#3b82f6';
+                dot.style.display = 'inline-block';
+                dot.style.marginRight = '8px';
+                nameEl.prepend(dot);
+
+                s.addToggle(t => {
+                    t.setValue(cal.enabled !== false)
+                        .setTooltip(cal.enabled !== false ? 'Desativar este calendário' : 'Ativar este calendário')
+                        .onChange(async v => {
+                            cal.enabled = v;
+                            await this.plugin.saveSettings();
+                            await this.plugin.syncAllRemoteCalendars();
+                        });
+                });
+
+                s.addButton(b => {
+                    b.setIcon('pencil')
+                        .setTooltip('Editar Calendário')
+                        .onClick(() => {
+                            new RemoteCalendarEditModal(this.app, cal, async (updated) => {
+                                remoteCals[idx] = updated;
+                                this.plugin.settings.remoteCalendars = remoteCals;
+                                await this.plugin.saveSettings();
+                                renderCalList();
+                                await this.plugin.syncAllRemoteCalendars();
+                            }, async () => {
+                                remoteCals.splice(idx, 1);
+                                this.plugin.settings.remoteCalendars = remoteCals;
+                                await this.plugin.saveSettings();
+                                renderCalList();
+                                await this.plugin.syncAllRemoteCalendars();
+                            }).open();
+                        });
+                });
+
+                s.addButton(b => {
+                    b.setIcon('trash')
+                        .setWarning()
+                        .setTooltip('Excluir Calendário')
+                        .onClick(async () => {
+                            remoteCals.splice(idx, 1);
+                            this.plugin.settings.remoteCalendars = remoteCals;
+                            await this.plugin.saveSettings();
+                            renderCalList();
+                            await this.plugin.syncAllRemoteCalendars();
+                            new obsidian.Notice(`Calendário removido.`);
+                        });
+                });
+            });
+        };
+
+        renderCalList();
+
+        new obsidian.Setting(containerEl)
+            .addButton(b => {
+                b.setButtonText('＋ Adicionar Calendário Remoto')
+                    .setCta()
+                    .onClick(() => {
+                        new RemoteCalendarEditModal(this.app, null, async (newCal) => {
+                            if (!this.plugin.settings.remoteCalendars) this.plugin.settings.remoteCalendars = [];
+                            this.plugin.settings.remoteCalendars.push(newCal);
+                            await this.plugin.saveSettings();
+                            renderCalList();
+                            await this.plugin.syncAllRemoteCalendars();
+                            new obsidian.Notice(`Calendário "${newCal.name}" adicionado!`);
+                        }).open();
+                    });
+            })
+            .addButton(b => {
+                b.setButtonText('🔄 Sincronizar Agora')
+                    .onClick(async () => {
+                        b.setButtonText('Sincronizando...');
+                        b.setDisabled(true);
+                        const count = await this.plugin.syncAllRemoteCalendars(true);
+                        b.setButtonText('🔄 Sincronizar Agora');
+                        b.setDisabled(false);
+                        new obsidian.Notice(`✓ Sincronização concluída: ${count} eventos encontrados.`);
                     });
             });
 
@@ -6216,7 +6811,9 @@ kanban-plugin: basic
 
         // 3. Renderização dos Cards na Camada de Eventos Absolutos (com layout anti-sobreposição)
         const timedCards = dayCards.filter(c => !!getTimeForDay(c, day));
-        const layoutItems = this.computeTimeblockLayout(timedCards, day);
+        const remoteEvents = this.getRemoteEventsForDay(day);
+        const allDayItems = [...timedCards, ...remoteEvents];
+        const layoutItems = this.computeTimeblockLayout(allDayItems, day);
         layoutItems.forEach(item => {
             this.renderTbCard(eventsLayer, item.card, day, dayStart, dayEnd, PX_PER_MIN, item);
         });
@@ -6243,6 +6840,11 @@ kanban-plugin: basic
                 indicator.createDiv('kt-tb-now-line');
             }
         }
+    }
+
+    getRemoteEventsForDay(day) {
+        if (!this.plugin.remoteEventsCache || this.plugin.remoteEventsCache.length === 0) return [];
+        return this.plugin.remoteEventsCache.filter(evt => sameDay(evt.startDate, day));
     }
 
     computeTimeblockLayout(timedCards, day) {
@@ -6336,7 +6938,12 @@ kanban-plugin: basic
     renderTbCard(parent, card, day, dayStart, dayEnd, pxPerMin, layoutInfo) {
         const el = parent.createDiv('kt-tb-card');
         
-        if (card.isEvent) {
+        if (card.isRemoteCalendarEvent) {
+            el.addClass('kt-tb-card-event');
+            el.addClass('kt-tb-card-remote-event');
+            el.style.setProperty('--proj-color', card.calendarColor || '#3b82f6');
+            el.style.borderLeftColor = card.calendarColor || '#3b82f6';
+        } else if (card.isEvent) {
             el.addClass('kt-tb-card-event');
             el.addClass(`kt-tb-card-${card.eventType || 'break'}`);
         } else {
@@ -6378,19 +6985,23 @@ kanban-plugin: basic
             el.addClass('kt-tb-card-done');
         }
 
-        // 1. Handle de Redimensionamento Superior (Altera Início)
-        const topHandle = el.createDiv('kt-tb-resize-edge kt-tb-resize-top');
-        topHandle.title = 'Arraste para ajustar horário inicial';
-        this.attachTimeblockTopResize(topHandle, card, day, el, dayStart, dayEnd, pxPerMin);
+        // 1. Handle de Redimensionamento Superior (Apenas cards locais)
+        if (!card.isRemoteCalendarEvent) {
+            const topHandle = el.createDiv('kt-tb-resize-edge kt-tb-resize-top');
+            topHandle.title = 'Arraste para ajustar horário inicial';
+            this.attachTimeblockTopResize(topHandle, card, day, el, dayStart, dayEnd, pxPerMin);
+        }
 
         // Conteúdo do Card
         const timeLabel = el.createDiv('kt-tb-card-time');
         timeLabel.setText(`⏰ ${dayTime.timeStart} – ${dayTime.timeEnd}`);
-        timeLabel.title = 'Clique para abrir e editar a tarefa';
+        timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : 'Clique para abrir e editar a tarefa';
         timeLabel.style.cursor = 'pointer';
         timeLabel.onclick = (e) => {
             e.stopPropagation();
-            if (card.isEvent) {
+            if (card.isRemoteCalendarEvent) {
+                new RemoteEventModal(this.app, card).open();
+            } else if (card.isEvent) {
                 new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
                     await this.persistTimeBlock(card, day, ts, te);
                     await this.refresh();
@@ -6401,12 +7012,14 @@ kanban-plugin: basic
         };
 
         const titleEl = el.createDiv('kt-c-title');
-        titleEl.setText(isDone ? `✓ ${card.title}` : card.title);
-        titleEl.title = 'Clique para abrir e editar a tarefa';
+        titleEl.setText(card.isRemoteCalendarEvent ? `🗓️ ${card.title}` : (isDone ? `✓ ${card.title}` : card.title));
+        titleEl.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : 'Clique para abrir e editar a tarefa';
         titleEl.style.cursor = 'pointer';
         titleEl.onclick = (e) => {
             e.stopPropagation();
-            if (card.isEvent) {
+            if (card.isRemoteCalendarEvent) {
+                new RemoteEventModal(this.app, card).open();
+            } else if (card.isEvent) {
                 new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
                     await this.persistTimeBlock(card, day, ts, te);
                     await this.refresh();
@@ -6415,6 +7028,11 @@ kanban-plugin: basic
                 this.openCardOptionsModal(card, day);
             }
         };
+
+        if (card.isRemoteCalendarEvent && card.calendarName) {
+            const calSub = el.createDiv('kt-tb-card-cal-name');
+            calSub.setText(card.calendarName);
+        }
 
         if (!card.isEvent) {
             this.renderTagPills(el, card.tags);
@@ -6446,13 +7064,14 @@ kanban-plugin: basic
             });
         }
 
-        // 2. Handle de Redimensionamento Inferior (Altera Término)
-        const bottomHandle = el.createDiv('kt-tb-resize-edge kt-tb-resize-bottom');
-        bottomHandle.title = 'Arraste para ajustar horário final';
-        this.attachTimeblockBottomResize(bottomHandle, card, day, el, dayStart, dayEnd, pxPerMin);
+        // 2. Handle de Redimensionamento Inferior & 3. Arraste do Bloco (Apenas cards locais)
+        if (!card.isRemoteCalendarEvent) {
+            const bottomHandle = el.createDiv('kt-tb-resize-edge kt-tb-resize-bottom');
+            bottomHandle.title = 'Arraste para ajustar horário final';
+            this.attachTimeblockBottomResize(bottomHandle, card, day, el, dayStart, dayEnd, pxPerMin);
 
-        // 3. Arraste do Bloco Inteiro (Move Horário)
-        this.attachTimeblockCardMove(el, card, day, dayStart, dayEnd, pxPerMin);
+            this.attachTimeblockCardMove(el, card, day, dayStart, dayEnd, pxPerMin);
+        }
 
         // 4. Menu de Contexto (Botão Direito no Card)
         el.addEventListener('contextmenu', (e) => {
@@ -6723,6 +7342,8 @@ const DEFAULT_SETTINGS = {
         'Archive':          '#64748b',
         'Rotina':           '#8b5cf6',
     },
+    remoteCalendars: [],
+    remoteCalendarAutoSyncMinutes: 15,
     awConnected: false,
     awHost: 'http://127.0.0.1:5600',
 };
@@ -6734,6 +7355,9 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         this.settings = Object.assign({}, DEFAULT_SETTINGS);
         await this.loadSettings();
 
+        this.remoteEventsCache = [];
+        this.lastRemoteSync = 0;
+
         this.registerView(VIEW_TYPE, (leaf) => new KanbanTimelineView(leaf, this));
 
         this.addRibbonIcon('calendar-days', 'Abrir Kanban Timeline', () => this.activateView());
@@ -6744,7 +7368,62 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
             callback: () => this.activateView(),
         });
 
+        this.addCommand({
+            id:       'sync-remote-calendars',
+            name:     'Sincronizar Calendários Remotos (Google Agenda / iCal)',
+            callback: async () => {
+                const count = await this.syncAllRemoteCalendars(true);
+                new obsidian.Notice(`✓ Sincronização concluída: ${count} eventos encontrados.`);
+            },
+        });
+
         this.addSettingTab(new KanbanTimelineSettingsTab(this.app, this));
+
+        // Initial background sync
+        this.syncAllRemoteCalendars(false);
+
+        // Periodic sync every 15 minutes
+        this.registerInterval(
+            window.setInterval(() => {
+                this.syncAllRemoteCalendars(false);
+            }, 15 * 60 * 1000)
+        );
+    }
+
+    async syncAllRemoteCalendars(force = false) {
+        if (!this.settings.remoteCalendars || this.settings.remoteCalendars.length === 0) {
+            this.remoteEventsCache = [];
+            return 0;
+        }
+
+        const allEvents = [];
+        for (const cal of this.settings.remoteCalendars) {
+            if (cal.enabled === false || !cal.url) continue;
+            try {
+                let cleanUrl = cal.url.trim();
+                if (cleanUrl.startsWith('webcal://')) cleanUrl = 'https://' + cleanUrl.slice(9);
+                const res = await obsidian.requestUrl({ url: cleanUrl });
+                if (res && res.text) {
+                    const parsed = ICalParser.parse(res.text, cal);
+                    allEvents.push(...parsed);
+                }
+            } catch (err) {
+                console.warn(`[Kanban Timeline] Erro ao sincronizar calendário "${cal.name}":`, err);
+            }
+        }
+
+        this.remoteEventsCache = allEvents;
+        this.lastRemoteSync = Date.now();
+
+        // Refresh any active timeline views
+        const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+        leaves.forEach(leaf => {
+            if (leaf.view && typeof leaf.view.render === 'function') {
+                leaf.view.render();
+            }
+        });
+
+        return allEvents.length;
     }
 
     async loadSettings() {
@@ -6761,6 +7440,9 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (!this.settings.postIts || this.settings.postIts.length === 0) {
             this.settings.postIts = DEFAULT_SETTINGS.postIts.slice();
+        }
+        if (!this.settings.remoteCalendars) {
+            this.settings.remoteCalendars = [];
         }
     }
 

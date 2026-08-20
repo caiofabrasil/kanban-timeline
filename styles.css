@@ -4156,5 +4156,164 @@ body.kt-is-tb-resizing * {
     text-align: center;
 }
 
+/* ================================================================
+   REMOTE CALENDARS (Google Calendar / iCal) STYLES
+   ================================================================ */
+
+.kt-remote-cals-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.kt-settings-empty-notice {
+    font-size: 12px;
+    color: var(--text-faint);
+    padding: 12px 14px;
+    background: var(--background-secondary-alt, rgba(0,0,0,0.1));
+    border-radius: 6px;
+    border: 1px dashed var(--background-modifier-border);
+}
+
+/* Remote Event Cards in Timeblocking */
+.kt-tb-card-remote-event {
+    background: color-mix(in srgb, var(--proj-color, #3b82f6) 12%, var(--background-secondary)) !important;
+    border-left: 4px solid var(--proj-color, #3b82f6) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+    cursor: pointer !important;
+}
+
+.kt-tb-card-remote-event:hover {
+    background: color-mix(in srgb, var(--proj-color, #3b82f6) 18%, var(--background-secondary)) !important;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+}
+
+.kt-tb-card-cal-name {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    opacity: 0.85;
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Remote Event Modal */
+.kt-remote-event-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.kt-re-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-re-cal-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 12px;
+    border: 1px solid;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-re-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-re-time-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    background: var(--background-secondary-alt, rgba(0,0,0,0.15));
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-re-time-icon {
+    font-size: 15px;
+}
+
+.kt-re-join-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none !important;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    transition: transform 0.1s, opacity 0.1s;
+}
+
+.kt-re-join-btn:hover {
+    transform: translateY(-1px);
+    opacity: 0.95;
+}
+
+.kt-re-info-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12.5px;
+}
+
+.kt-re-info-lbl {
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.kt-re-info-val {
+    color: var(--text-normal);
+    word-break: break-all;
+}
+
+.kt-re-desc-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--background-secondary-alt, rgba(0,0,0,0.12));
+    border-radius: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--background-modifier-border);
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.kt-re-desc-box h4 {
+    margin: 0;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kt-re-desc-content {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-normal);
+    white-space: pre-wrap;
+}
+
+
 
 
