@@ -1763,6 +1763,7 @@ class HabitModal extends obsidian.Modal {
         let target = habit ? habit.target || 1 : 1;
         let unit = habit ? habit.unit || '' : '';
         let color = habit ? habit.color : '#6366f1';
+        let awFilter = habit ? (habit.awFilter || '') : '';
 
         new obsidian.Setting(contentEl)
             .setName('Nome do Hábito')
@@ -1800,15 +1801,88 @@ class HabitModal extends obsidian.Modal {
             t.setPlaceholder('vezes, copos, min').setValue(unit).onChange(v => unit = v.trim());
         });
 
+        const awSetting = new obsidian.Setting(contentEl)
+            .setName('🎯 Categoria / Projeto no ActivityWatch')
+            .setDesc('Selecione a categoria ou projeto do ActivityWatch para contabilizar as horas automaticamente.');
+        
+        let awDropdown;
+        awSetting.addDropdown(d => {
+            awDropdown = d;
+            d.addOption('', '— Nenhum (Desativado / Manual) —');
+            if (awFilter) {
+                d.addOption(awFilter, awFilter);
+            }
+            d.setValue(awFilter || '');
+            d.onChange(v => {
+                awFilter = v;
+            });
+        });
+
+        // Asynchronously populate options from ActivityWatch & Projects
+        const loadAwCategoriesIntoModal = async () => {
+            if (!this.plugin.settings.awConnected) return;
+            const host = this.plugin.settings.awHost || 'http://127.0.0.1:5600';
+            const categoriesMap = new Map();
+            categoriesMap.set('', '— Nenhum (Desativado / Manual) —');
+
+            try {
+                const res = await obsidian.requestUrl({ url: `${host}/api/0/settings` });
+                const classes = res.json?.classes || [];
+                classes.forEach(c => {
+                    if (c.name && Array.isArray(c.name) && c.name.length > 0) {
+                        const fullName = c.name.join(' > ');
+                        categoriesMap.set(fullName, `🏷️ ${fullName}`);
+                    }
+                });
+            } catch (e) {
+                console.warn('[Kanban Timeline] Não foi possível buscar categorias do AW para o modal:', e);
+            }
+
+            // Add projects from Kanban Timeline
+            const projects = this.plugin.settings.projects || [];
+            projects.forEach(p => {
+                if (p.name && !categoriesMap.has(p.name)) {
+                    categoriesMap.set(p.name, `📁 Projeto: ${p.name}`);
+                }
+            });
+
+            // Add common built-in categories if not present
+            ['Work > Dev', 'Media > Video', 'Media > Social Media', 'Obsidian', 'Web Browser'].forEach(cat => {
+                if (!categoriesMap.has(cat)) {
+                    categoriesMap.set(cat, `⚡ ${cat}`);
+                }
+            });
+
+            // Ensure current awFilter is retained as an option
+            if (awFilter && !categoriesMap.has(awFilter)) {
+                categoriesMap.set(awFilter, `🔍 ${awFilter}`);
+            }
+
+            // Update dropdown element options
+            if (awDropdown && awDropdown.selectEl) {
+                const curVal = awFilter || '';
+                awDropdown.selectEl.empty();
+                for (const [val, label] of categoriesMap.entries()) {
+                    const opt = awDropdown.selectEl.createEl('option', { value: val, text: label });
+                    if (val === curVal) opt.selected = true;
+                }
+                awDropdown.setValue(curVal);
+            }
+        };
+
+        loadAwCategoriesIntoModal();
+
         const updateTypeVisibility = () => {
             if (type === 'boolean') {
                 targetSetting.settingEl.style.display = 'none';
                 unitSetting.settingEl.style.display = 'none';
+                awSetting.settingEl.style.display = 'none';
             } else if (type === 'count') {
                 targetSetting.settingEl.style.display = 'flex';
                 targetSetting.setDesc('Quantidade que deseja atingir por dia (ex: 8)');
                 unitSetting.settingEl.style.display = 'flex';
                 unitSetting.setDesc('Nome da unidade (ex: copos, páginas, repetições)');
+                awSetting.settingEl.style.display = 'none';
             } else if (type === 'time') {
                 targetSetting.settingEl.style.display = 'flex';
                 targetSetting.setDesc('Meta diária em minutos (ex: 30, 60, 120)');
@@ -1816,6 +1890,7 @@ class HabitModal extends obsidian.Modal {
                 unitSetting.setDesc('Unidade de tempo (padrão: min)');
                 if (!unit) unit = 'min';
                 if (unitInputEl) unitInputEl.setValue(unit);
+                awSetting.settingEl.style.display = this.plugin.settings.awConnected ? 'flex' : 'none';
             }
         };
 
@@ -1907,6 +1982,8 @@ class HabitModal extends obsidian.Modal {
                 cp.setValue(color).onChange(v => color = v);
             });
 
+        updateTypeVisibility(); // Set initial state
+
         const footer = contentEl.createDiv('kt-modal-footer');
         const leftGroup = footer.createDiv('kt-modal-footer-left');
         if (habit && this.onDelete) {
@@ -1936,7 +2013,8 @@ class HabitModal extends obsidian.Modal {
                 target: type === 'boolean' ? 1 : target,
                 unit: type === 'boolean' ? 'vez' : (unit || (type === 'time' ? 'min' : 'vezes')),
                 color,
-                activeDays
+                activeDays,
+                awFilter: type === 'time' ? awFilter : ''
             };
             if (this.onSave) await this.onSave(habitData);
         };
@@ -3433,7 +3511,6 @@ kanban-plugin: basic
             const nav = tb.createDiv('kt-nav');
 
             const prevBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '‹' });
-            prevBtn.onclick = () => { this.weekOffset--; this.render(); };
 
             const ws            = this.getWeekStart();
             const daysDisplayed = this.viewMode === 'gantt' ? this.getGanttDays() : 7;
@@ -3442,10 +3519,11 @@ kanban-plugin: basic
             lbl.setText(`${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}`);
 
             const nextBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '›' });
-            nextBtn.onclick = () => { this.weekOffset++; this.render(); };
 
             const todayBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-today-btn', text: 'Hoje' });
-            todayBtn.onclick = () => { this.weekOffset = 0; this.selectedDay = new Date(); this.render(); };
+            todayBtn.onclick = () => { this.weekOffset = 0; this.selectedDay = new Date(); this.awHabitCache = {}; this.render(); };
+            prevBtn.onclick  = () => { this.weekOffset--; this.awHabitCache = {}; this.render(); };
+            nextBtn.onclick  = () => { this.weekOffset++; this.awHabitCache = {}; this.render(); };
         }
 
         // Period Range Selector (Only in Gantt mode)
@@ -4631,6 +4709,7 @@ kanban-plugin: basic
                 processed,
                 lastUpdated: new Date()
             };
+            await this.syncActivityWatchHabits();
         } catch (e) {
             console.error('[Kanban Timeline] Erro ao carregar dados do ActivityWatch:', e);
             this.awData = { error: e.message };
@@ -4977,12 +5056,13 @@ kanban-plugin: basic
             cls: 'kt-aw-action-btn',
             text: '🔄 Atualizar'
         });
-        refreshBtn.title = 'Buscar dados mais recentes do ActivityWatch';
+        refreshBtn.title = 'Buscar dados mais recentes do ActivityWatch e atualizar hábitos';
         refreshBtn.onclick = async () => {
             refreshBtn.setText('⏳ Atualizando...');
             await this.loadActivityWatchData();
+            await this.syncActivityWatchHabits();
             this.render();
-            new obsidian.Notice('Dados do ActivityWatch atualizados!');
+            new obsidian.Notice('Dados do ActivityWatch e Hábitos atualizados!');
         };
 
         const disconnectBtn = rightGroup.createEl('button', {
@@ -5284,6 +5364,18 @@ kanban-plugin: basic
         const now = new Date();
         const todayStr = getHabitDateKey(now);
 
+        // Pre-fetch / sync AW data for habits with awFilter (async, re-renders when ready)
+        if (this.plugin.settings.awConnected) {
+            const hasAwHabits = (this.plugin.settings.habits || []).some(h => h.type === 'time' && h.awFilter);
+            if (hasAwHabits && !this._isSyncingAwHabits) {
+                this._isSyncingAwHabits = true;
+                this.syncActivityWatchHabits().finally(() => {
+                    this._isSyncingAwHabits = false;
+                    this.render();
+                });
+            }
+        }
+
         const habits = this.plugin.settings.habits || [];
         const logs = this.plugin.settings.habitLogs || {};
 
@@ -5320,6 +5412,9 @@ kanban-plugin: basic
                 if (!this.plugin.settings.habits) this.plugin.settings.habits = [];
                 this.plugin.settings.habits.push(newH);
                 await this.plugin.saveSettings();
+                if (newH.type === 'time' && newH.awFilter) {
+                    await this.syncActivityWatchHabits();
+                }
                 this.render();
                 new obsidian.Notice(`Hábito "${newH.name}" criado!`);
             }).open();
@@ -5460,7 +5555,16 @@ kanban-plugin: basic
                     cls: `kt-td-day ${isToday ? 'is-today' : ''} ${!isScheduled ? 'is-off-day' : ''}`
                 });
                 const val = logs[h.id]?.[dKey];
-                const isDone = this.isHabitDone(h, val);
+                let isDone = this.isHabitDone(h, val);
+                // For time habits with AW integration, count AW minutes towards done
+                if (h.type === 'time' && !isDone && h.awFilter && this.plugin.settings.awConnected && this.awHabitCache) {
+                    const cKey = `${h.id}::${dKey}`;
+                    const awM = this.awHabitCache[cKey];
+                    if (awM > 0) {
+                        const combined = Math.max(Number(val) || 0, awM);
+                        if (combined >= (h.target || 1)) isDone = true;
+                    }
+                }
                 if (isDone) weekDoneDays++;
 
                 if (h.type === 'boolean') {
@@ -5495,18 +5599,42 @@ kanban-plugin: basic
                     };
                 } else if (h.type === 'time') {
                     const timeMin = Number(val) || 0;
+                    const cacheKey = `${h.id}::${dKey}`;
+                    const awMins = (h.awFilter && this.plugin.settings.awConnected && this.awHabitCache)
+                        ? (this.awHabitCache[cacheKey] ?? null)
+                        : null;
+                    const totalMin = Math.max(timeMin, (awMins || 0));
+                    const isDoneTotal = totalMin >= (h.target || 1);
+                    const isPartial = totalMin > 0 && !isDoneTotal;
+
                     const timeBtn = tdDay.createEl('button', {
-                        cls: `kt-habit-time-btn ${isDone ? 'is-done' : (timeMin > 0 ? 'is-partial' : '')} ${!isScheduled ? 'is-off-check' : ''}`,
-                        text: timeMin > 0 ? (formatMinutesToHours(timeMin) || `${timeMin}m`) : (!isScheduled ? '·' : '—')
+                        cls: `kt-habit-time-btn ${isDoneTotal ? 'is-done' : (isPartial ? 'is-partial' : '')} ${!isScheduled ? 'is-off-check' : ''}`
                     });
-                    if (isDone) {
+                    if (isDoneTotal) {
                         timeBtn.style.backgroundColor = h.color || '#6366f1';
                     }
-                    timeBtn.title = isScheduled
-                        ? `${formatMinutesToHours(timeMin)} / ${formatMinutesToHours(h.target)} (Clique para registrar)`
-                        : `${formatMinutesToHours(timeMin)} / ${formatMinutesToHours(h.target)} • Dia de descanso (Clique para registrar extra)`;
+
+                    if (totalMin > 0) {
+                        timeBtn.createSpan({ text: formatMinutesToHours(totalMin) || `${totalMin}m` });
+                        if (awMins !== null && awMins > 0) {
+                            const awBadge = timeBtn.createSpan({ cls: 'kt-habit-aw-badge', text: '⌚' });
+                            awBadge.title = `ActivityWatch: ${formatMinutesToHours(awMins)} detectados automaticamente`;
+                        }
+                    } else if (awMins === null && h.awFilter && this.plugin.settings.awConnected && this._isSyncingAwHabits) {
+                        timeBtn.setText('⏳');
+                        timeBtn.title = 'Buscando dados do ActivityWatch...';
+                    } else {
+                        timeBtn.setText(!isScheduled ? '·' : '—');
+                    }
+
+                    let titleParts = [`Meta: ${formatMinutesToHours(h.target)}`];
+                    if (totalMin > 0) titleParts.push(`Total: ${formatMinutesToHours(totalMin)}`);
+                    if (awMins !== null && awMins > 0) titleParts.push(`ActivityWatch: ${formatMinutesToHours(awMins)}`);
+                    if (!isScheduled) titleParts.push('Dia de descanso (clique para registrar extra)');
+                    timeBtn.title = titleParts.join(' • ');
+
                     timeBtn.onclick = () => {
-                        new HabitQuickValueModal(this.app, h, d, timeMin, async (newV) => {
+                        new HabitQuickValueModal(this.app, h, d, totalMin, async (newV) => {
                             await this.setHabitValue(h.id, dKey, newV);
                         }).open();
                     };
@@ -5546,6 +5674,9 @@ kanban-plugin: basic
                         if (idx !== -1) {
                             this.plugin.settings.habits[idx] = updatedH;
                             await this.plugin.saveSettings();
+                            if (updatedH.type === 'time' && updatedH.awFilter) {
+                                await this.syncActivityWatchHabits();
+                            }
                             this.render();
                             new obsidian.Notice(`Hábito "${updatedH.name}" atualizado!`);
                         }
@@ -5650,6 +5781,229 @@ kanban-plugin: basic
             return formatMinutesToHours(sumMin) || '0m';
         }
         return '—';
+    }
+
+    /**
+     * Helper to match a habit's ActivityWatch filter against a categorized event or raw app/title.
+     */
+    isAwCategoryMatch(filterStr, cat, app, title) {
+        if (!filterStr || !filterStr.trim()) return false;
+        const f = filterStr.trim().toLowerCase();
+
+        // Check against categorized metadata
+        if (cat) {
+            const catFullName = (cat.name || '').toLowerCase();
+            const catShortName = (cat.shortName || '').toLowerCase();
+            const catParent = (cat.parent || '').toLowerCase();
+
+            if (catFullName === f || catShortName === f || catParent === f) return true;
+            if (catFullName.includes(f) || f.includes(catFullName)) return true;
+            if (catShortName.includes(f) || f.includes(catShortName)) return true;
+            if (cat.projectId && (cat.projectId.toLowerCase() === f || (cat.shortName && cat.shortName.toLowerCase() === f))) return true;
+        }
+
+        // Direct app / window title match
+        const appL = (app || '').toLowerCase();
+        const titleL = (title || '').toLowerCase();
+        if (appL.includes(f) || titleL.includes(f)) return true;
+
+        // Comma-separated list support
+        if (filterStr.includes(',')) {
+            const parts = filterStr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+            for (const p of parts) {
+                if (this.isAwCategoryMatch(p, cat, app, title)) return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Synchronize ActivityWatch tracked time into all linked time habits for the current period.
+     * Updates both awHabitCache and plugin.settings.habitLogs for permanent persistence.
+     */
+    async syncActivityWatchHabits(startDate, endDate) {
+        if (!this.plugin.settings.awConnected) return;
+        const habits = (this.plugin.settings.habits || []).filter(h => h.type === 'time' && h.awFilter && h.awFilter.trim());
+        if (habits.length === 0) return;
+
+        const host = this.plugin.settings.awHost || 'http://127.0.0.1:5600';
+        try {
+            // 1. Fetch info and classes from ActivityWatch
+            const [infoRes, settingsRes] = await Promise.all([
+                obsidian.requestUrl({ url: `${host}/api/0/info` }),
+                obsidian.requestUrl({ url: `${host}/api/0/settings` }).catch(() => ({ json: null }))
+            ]);
+            const hostname = infoRes.json?.hostname || 'localhost';
+            const awClasses = settingsRes.json?.classes || [];
+
+            // 2. Determine date range (covers the entire active week: Monday 00:00:00 to Sunday 23:59:59)
+            const ws = this.getWeekStart ? this.getWeekStart() : startOfDay(new Date());
+            const we = new Date(ws);
+            we.setDate(we.getDate() + 7);
+            const rangeStart = startDate || ws;
+            const rangeEnd = endDate || we;
+
+            const startIso = rangeStart.toISOString();
+            const endIso = rangeEnd.toISOString();
+            const winBucket = `aw-watcher-window_${hostname}`;
+            const eventsUrl = `${host}/api/0/buckets/${winBucket}/events?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&limit=-1`;
+
+            const eventsRes = await obsidian.requestUrl({ url: eventsUrl });
+            const windowEvents = eventsRes.json || [];
+
+            // 3. Compile regex rules from AW classes & plugin projects
+            const compiledAWClasses = (awClasses || [])
+                .filter(c => c.rule && c.rule.type === 'regex' && c.rule.regex && c.rule.regex !== 'FILL ME')
+                .map(c => {
+                    let reg = null;
+                    try { reg = new RegExp(c.rule.regex, c.rule.ignore_case !== false ? 'i' : ''); } catch (e) {}
+                    return {
+                        id: c.id,
+                        fullName: (c.name || []).join(' > '),
+                        shortName: (c.name || [])[(c.name || []).length - 1] || 'Uncategorized',
+                        parent: (c.name || [])[0] || 'Uncategorized',
+                        regex: reg
+                    };
+                })
+                .filter(c => c.regex !== null);
+
+            const projectRules = (this.plugin.settings.projects || []).map(p => ({
+                id: p.id,
+                name: p.name,
+                tag: (p.tag || '').replace(/^#/, '').toLowerCase(),
+                nameLower: p.name.toLowerCase(),
+                customPatterns: (p.awPattern || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+            }));
+
+            const categorize = (app, title) => {
+                const appL = (app || '').toLowerCase();
+                const titleL = (title || '').toLowerCase();
+                const fullTarget = `${app} ${title}`;
+
+                let matchedAW = null;
+                for (const cls of compiledAWClasses) {
+                    if (cls.regex.test(fullTarget) || cls.regex.test(title) || cls.regex.test(app)) {
+                        matchedAW = cls;
+                        break;
+                    }
+                }
+
+                for (const pr of projectRules) {
+                    let isProjectMatch = false;
+                    if (matchedAW) {
+                        const awLastName = matchedAW.shortName.toLowerCase();
+                        const awFullName = matchedAW.fullName.toLowerCase();
+                        if (awLastName === pr.nameLower || awFullName.includes(pr.nameLower) || (pr.tag && awFullName.includes(pr.tag))) {
+                            isProjectMatch = true;
+                        }
+                    }
+                    if (!isProjectMatch) {
+                        for (const pat of pr.customPatterns) {
+                            try {
+                                if (new RegExp(pat, 'i').test(titleL) || new RegExp(pat, 'i').test(appL)) { isProjectMatch = true; break; }
+                            } catch {
+                                if (titleL.includes(pat) || appL.includes(pat)) { isProjectMatch = true; break; }
+                            }
+                        }
+                        if (!isProjectMatch && ((pr.tag && titleL.includes(pr.tag)) || (pr.nameLower && titleL.includes(pr.nameLower)) || (pr.tag && appL.includes(pr.tag)))) {
+                            isProjectMatch = true;
+                        }
+                    }
+                    if (isProjectMatch) {
+                        return {
+                            projectId: pr.id,
+                            parent: matchedAW ? matchedAW.parent : 'Work',
+                            name: matchedAW ? matchedAW.fullName : `Work > ${pr.name}`,
+                            shortName: pr.name
+                        };
+                    }
+                }
+
+                if (matchedAW) {
+                    return {
+                        projectId: null,
+                        parent: matchedAW.parent,
+                        name: matchedAW.fullName,
+                        shortName: matchedAW.shortName
+                    };
+                }
+
+                if (appL.includes('obsidian')) return { parent: 'Obsidian', name: 'Obsidian', shortName: 'Obsidian' };
+                if (appL.includes('whatsapp') || appL.includes('telegram') || appL.includes('discord') || titleL.includes('youtube') || titleL.includes('reddit') || titleL.includes('twitter') || titleL.includes('instagram') || titleL.includes('twitch')) {
+                    return { parent: 'Media', name: 'Media > Social Media', shortName: 'Social Media' };
+                }
+                if (appL.includes('spotify') || appL.includes('vlc') || appL.includes('netflix')) return { parent: 'Media', name: 'Media > Video & Audio', shortName: 'Video & Audio' };
+                if (appL.includes('unity') || appL.includes('rider') || appL.includes('code') || appL.includes('visual studio') || appL.includes('blender') || appL.includes('godot') || appL.includes('unreal') || appL.includes('git')) {
+                    return { parent: 'Work', name: 'Work > Dev', shortName: 'Dev' };
+                }
+                if (appL.includes('chrome') || appL.includes('opera') || appL.includes('firefox') || appL.includes('edge') || appL.includes('brave')) {
+                    return { parent: 'Uncategorized', name: 'Web Browser', shortName: 'Navegador' };
+                }
+                return { parent: 'Uncategorized', name: 'Uncategorized', shortName: 'Outros' };
+            };
+
+            // 4. Pre-populate all 7 days of the active week with 0
+            const habitDaySeconds = {};
+            const weekDateKeys = [];
+            for (let i = 0; i < 7; i++) {
+                const dayDate = new Date(ws);
+                dayDate.setDate(dayDate.getDate() + i);
+                weekDateKeys.push(getHabitDateKey(dayDate));
+            }
+
+            habits.forEach(h => {
+                habitDaySeconds[h.id] = {};
+                weekDateKeys.forEach(k => {
+                    habitDaySeconds[h.id][k] = 0;
+                });
+            });
+
+            // Group event durations by day
+            for (const ev of windowEvents) {
+                const dur = ev.duration || 0;
+                if (dur <= 0.5) continue;
+                const evDate = new Date(ev.timestamp);
+                const dKey = getHabitDateKey(evDate);
+                const app = ev.data?.app || 'Desconhecido';
+                const title = ev.data?.title || app;
+
+                const cat = categorize(app, title);
+
+                for (const h of habits) {
+                    if (this.isAwCategoryMatch(h.awFilter, cat, app, title)) {
+                        habitDaySeconds[h.id][dKey] = (habitDaySeconds[h.id][dKey] || 0) + dur;
+                    }
+                }
+            }
+
+            // 5. Update cache and save into habitLogs
+            if (!this.plugin.settings.habitLogs) this.plugin.settings.habitLogs = {};
+            if (!this.awHabitCache) this.awHabitCache = {};
+
+            let hasChanges = false;
+            for (const h of habits) {
+                if (!this.plugin.settings.habitLogs[h.id]) this.plugin.settings.habitLogs[h.id] = {};
+                const dayMap = habitDaySeconds[h.id] || {};
+                for (const [dKey, secs] of Object.entries(dayMap)) {
+                    const mins = Math.round(secs / 60);
+                    this.awHabitCache[`${h.id}::${dKey}`] = mins;
+                    if (mins > 0) {
+                        const currentVal = Number(this.plugin.settings.habitLogs[h.id][dKey]) || 0;
+                        if (currentVal !== mins) {
+                            this.plugin.settings.habitLogs[h.id][dKey] = mins;
+                            hasChanges = true;
+                        }
+                    }
+                }
+            }
+
+            if (hasChanges) {
+                await this.plugin.saveSettings();
+            }
+        } catch (e) {
+            console.error('[Kanban Timeline] Erro ao sincronizar ActivityWatch com Hábitos:', e);
+        }
     }
 
     // ----------------------------------------------------------

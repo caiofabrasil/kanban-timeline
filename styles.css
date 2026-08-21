@@ -2062,6 +2062,11 @@ body.kt-is-tb-resizing * {
     justify-content: flex-end;
 }
 
+.kt-card-edit-modal select.dropdown {
+    max-width: 250px;
+    text-overflow: ellipsis;
+}
+
 .kt-card-edit-modal .kt-modal-footer {
     display: flex;
     justify-content: space-between;
@@ -2861,6 +2866,7 @@ body.kt-is-tb-resizing * {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 2px;
     transition: all 0.12s;
 }
 
@@ -2883,6 +2889,22 @@ body.kt-is-tb-resizing * {
     font-weight: bold;
     border-color: transparent;
     box-shadow: 0 0 10px color-mix(in srgb, var(--habit-color, var(--interactive-accent)) 50%, transparent);
+}
+
+/* AW auto-detected time badge inside time-habit button */
+.kt-habit-aw-badge {
+    display: inline-block;
+    margin-left: 3px;
+    font-size: 8.5px;
+    font-weight: 700;
+    opacity: 0.75;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.kt-habit-time-btn.is-done .kt-habit-aw-badge {
+    opacity: 0.9;
+    color: rgba(255,255,255,0.85);
 }
 
 /* Stat columns */
