@@ -2360,9 +2360,10 @@ class ICalParser {
         const unfolded = icsData.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
         const lines = unfolded.split(/\r\n|\r|\n/);
 
-        const events = [];
+        const rawEvents = [];
         let inEvent = false;
         let cur = null;
+        let defaultTz = null;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
@@ -2376,15 +2377,12 @@ class ICalParser {
 
             if (line === 'END:VEVENT') {
                 if (cur) {
-                    const parsedEvents = ICalParser.processEvent(cur, calendarConfig);
-                    events.push(...parsedEvents);
+                    rawEvents.push(cur);
                 }
                 inEvent = false;
                 cur = null;
                 continue;
             }
-
-            if (!inEvent || !cur) continue;
 
             const colonIdx = line.indexOf(':');
             if (colonIdx === -1) continue;
@@ -2396,24 +2394,96 @@ class ICalParser {
             const propName = (semicolonIdx !== -1 ? propPart.substring(0, semicolonIdx) : propPart).toUpperCase();
             const propParams = semicolonIdx !== -1 ? propPart.substring(semicolonIdx + 1) : '';
 
+            if (!inEvent) {
+                if (propName === 'X-WR-TIMEZONE') {
+                    defaultTz = valPart.trim();
+                }
+                continue;
+            }
+
+            if (!cur) continue;
+
             if (propName === 'SUMMARY') cur.summary = ICalParser.unescapeText(valPart);
             else if (propName === 'DESCRIPTION') cur.description = ICalParser.unescapeText(valPart);
             else if (propName === 'LOCATION') cur.location = ICalParser.unescapeText(valPart);
             else if (propName === 'STATUS') cur.status = valPart.toUpperCase();
             else if (propName === 'UID') cur.uid = valPart;
+            else if (propName === 'RECURRENCE-ID') cur.recurrenceId = { val: valPart, params: propParams };
             else if (propName === 'DTSTART') cur.dtstart = { val: valPart, params: propParams };
             else if (propName === 'DTEND') cur.dtend = { val: valPart, params: propParams };
             else if (propName === 'DURATION') cur.duration = valPart;
             else if (propName === 'RRULE') cur.rrule = valPart;
             else if (propName === 'EXDATE') {
                 if (!cur.exdates) cur.exdates = [];
-                cur.exdates.push(valPart);
+                cur.exdates.push({ val: valPart, params: propParams });
             }
             else if (propName === 'URL') cur.url = valPart;
             else if (propName === 'X-GOOGLE-CONFERENCE') cur.conference = valPart;
         }
 
-        return events;
+        // 2. Group events by UID to correlate recurring series with exception/override VEVENTs
+        const eventsByUid = new Map();
+        for (const raw of rawEvents) {
+            const uid = raw.uid || ('evt-' + Math.random().toString(36).substr(2, 9));
+            raw.uid = uid;
+            if (!eventsByUid.has(uid)) {
+                eventsByUid.set(uid, []);
+            }
+            eventsByUid.get(uid).push(raw);
+        }
+
+        const events = [];
+
+        for (const [uid, group] of eventsByUid.entries()) {
+            // Identify master recurring event (has RRULE and no RECURRENCE-ID)
+            const masterEvent = group.find(e => e.rrule && !e.recurrenceId);
+            // All override/exception instances (have RECURRENCE-ID)
+            const overrideEvents = group.filter(e => e.recurrenceId);
+            // Standalone non-recurring events in this group
+            const standaloneEvents = group.filter(e => e !== masterEvent && !e.recurrenceId);
+
+            // Collect all dates that were overridden or cancelled
+            const overriddenDateKeys = new Set();
+            for (const ov of overrideEvents) {
+                if (ov.recurrenceId) {
+                    const parsedRec = ICalParser.parseDate(ov.recurrenceId, defaultTz);
+                    if (parsedRec && parsedRec.date) {
+                        overriddenDateKeys.add(formatDate(parsedRec.date));
+                    }
+                }
+            }
+
+            // 1. Process master recurring event (if active)
+            if (masterEvent && masterEvent.status !== 'CANCELLED') {
+                const parsedMaster = ICalParser.processEvent(masterEvent, calendarConfig, overriddenDateKeys, defaultTz);
+                events.push(...parsedMaster);
+            }
+
+            // 2. Process override/exception events (the updated/rescheduled instances)
+            for (const ov of overrideEvents) {
+                if (ov.status !== 'CANCELLED') {
+                    const parsedOv = ICalParser.processEvent(ov, calendarConfig, null, defaultTz);
+                    events.push(...parsedOv);
+                }
+            }
+
+            // 3. Process standalone non-recurring events
+            for (const st of standaloneEvents) {
+                if (st.status !== 'CANCELLED') {
+                    const parsedSt = ICalParser.processEvent(st, calendarConfig, null, defaultTz);
+                    events.push(...parsedSt);
+                }
+            }
+        }
+
+        // 3. Deduplication: prevent multiple events with same UID on the same day
+        const seen = new Map();
+        for (const evt of events) {
+            const key = `${evt.calendarId}::${evt.uid}::${formatDate(evt.startDate)}`;
+            seen.set(key, evt);
+        }
+
+        return Array.from(seen.values());
     }
 
     static unescapeText(str) {
@@ -2421,56 +2491,83 @@ class ICalParser {
         return str.replace(/\\n/g, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
     }
 
-    static parseDate(dtObj) {
-        if (!dtObj || !dtObj.val) return null;
-        const raw = dtObj.val.trim();
+    static parseDate(dtObj, defaultTz = null) {
+        if (!dtObj) return null;
+        const rawVal = typeof dtObj === 'string' ? dtObj : (dtObj.val || '');
+        const raw = rawVal.trim();
+        if (!raw) return null;
         
         // Formato YYYYMMDD (All day)
         if (/^\d{8}$/.test(raw)) {
             const y = parseInt(raw.substring(0, 4), 10);
             const m = parseInt(raw.substring(4, 6), 10) - 1;
             const d = parseInt(raw.substring(6, 8), 10);
-            const dt = new Date(y, m, d, 0, 0, 0);
-            return { date: dt, isAllDay: true };
+            return { date: new Date(y, m, d, 0, 0, 0), isAllDay: true };
         }
 
-        // Formato YYYYMMDDTHHMMSSZ (UTC)
-        const matchUtc = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
-        if (matchUtc) {
-            const dt = new Date(Date.UTC(
-                parseInt(matchUtc[1], 10),
-                parseInt(matchUtc[2], 10) - 1,
-                parseInt(matchUtc[3], 10),
-                parseInt(matchUtc[4], 10),
-                parseInt(matchUtc[5], 10),
-                parseInt(matchUtc[6], 10)
-            ));
+        const match = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
+        if (!match) return null;
+
+        const y = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const d = parseInt(match[3], 10);
+        const h = parseInt(match[4], 10);
+        const min = parseInt(match[5], 10);
+        const s = parseInt(match[6], 10);
+        const isUtc = !!match[7];
+
+        if (isUtc) {
+            const dt = new Date(Date.UTC(y, m - 1, d, h, min, s));
             return { date: dt, isAllDay: false };
         }
 
-        // Formato YYYYMMDDTHHMMSS (Local / TZID)
-        const matchLocal = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
-        if (matchLocal) {
-            const dt = new Date(
-                parseInt(matchLocal[1], 10),
-                parseInt(matchLocal[2], 10) - 1,
-                parseInt(matchLocal[3], 10),
-                parseInt(matchLocal[4], 10),
-                parseInt(matchLocal[5], 10),
-                parseInt(matchLocal[6], 10)
-            );
-            return { date: dt, isAllDay: false };
+        // Extract TZID from params (e.g. "TZID=Europe/London" or "TZID=America/Sao_Paulo")
+        let tz = null;
+        if (typeof dtObj === 'object' && dtObj.params) {
+            const tzMatch = dtObj.params.match(/TZID=([^;:]+)/i);
+            if (tzMatch) tz = tzMatch[1].replace(/^["']|["']$/g, '').trim();
+        }
+        if (!tz) tz = defaultTz;
+
+        if (tz) {
+            try {
+                const utcGuess = Date.UTC(y, m - 1, d, h, min, s);
+                const formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz,
+                    year: 'numeric', month: 'numeric', day: 'numeric',
+                    hour: 'numeric', minute: 'numeric', second: 'numeric',
+                    hour12: false
+                });
+                const parts = formatter.formatToParts(new Date(utcGuess));
+                const pMap = {};
+                parts.forEach(p => pMap[p.type] = p.value);
+                let fH = parseInt(pMap.hour, 10);
+                if (fH === 24) fH = 0;
+                const formattedUtc = Date.UTC(
+                    parseInt(pMap.year, 10),
+                    parseInt(pMap.month, 10) - 1,
+                    parseInt(pMap.day, 10),
+                    fH,
+                    parseInt(pMap.minute, 10),
+                    parseInt(pMap.second, 10)
+                );
+                const offset = formattedUtc - utcGuess;
+                const dt = new Date(utcGuess - offset);
+                return { date: dt, isAllDay: false };
+            } catch (e) {
+                console.warn(`[Kanban Timeline] Timezone "${tz}" não suportado, usando horário local:`, e);
+            }
         }
 
-        return null;
+        return { date: new Date(y, m - 1, d, h, min, s), isAllDay: false };
     }
 
-    static processEvent(raw, cal) {
+    static processEvent(raw, cal, extraExdates = null, defaultTz = null) {
         if (raw.status === 'CANCELLED') return [];
-        const parsedStart = ICalParser.parseDate(raw.dtstart);
+        const parsedStart = ICalParser.parseDate(raw.dtstart, defaultTz);
         if (!parsedStart || !parsedStart.date || isNaN(parsedStart.date.getTime())) return [];
 
-        let parsedEnd = ICalParser.parseDate(raw.dtend);
+        let parsedEnd = ICalParser.parseDate(raw.dtend, defaultTz);
         if (!parsedEnd || !parsedEnd.date) {
             const endDate = new Date(parsedStart.date);
             if (parsedStart.isAllDay) {
@@ -2517,7 +2614,7 @@ class ICalParser {
 
         // Check for Recurrence RRULE
         if (raw.rrule) {
-            return ICalParser.expandRecurrence(baseEvent, parsedStart.date, durationMinutes, raw.rrule, raw.exdates, windowStart, windowEnd);
+            return ICalParser.expandRecurrence(baseEvent, parsedStart.date, durationMinutes, raw.rrule, raw.exdates, extraExdates, windowStart, windowEnd, defaultTz);
         }
 
         // Single Event
@@ -2542,7 +2639,7 @@ class ICalParser {
         return [];
     }
 
-    static expandRecurrence(baseEvent, origStart, durationMinutes, rruleStr, exdates, windowStart, windowEnd) {
+    static expandRecurrence(baseEvent, origStart, durationMinutes, rruleStr, exdates, extraExdates, windowStart, windowEnd, defaultTz = null) {
         const events = [];
         const parts = {};
         rruleStr.split(';').forEach(p => {
@@ -2556,7 +2653,7 @@ class ICalParser {
         
         let untilDate = null;
         if (parts.UNTIL) {
-            const parsedUntil = ICalParser.parseDate({ val: parts.UNTIL });
+            const parsedUntil = ICalParser.parseDate({ val: parts.UNTIL }, defaultTz);
             if (parsedUntil) untilDate = parsedUntil.date;
         }
 
@@ -2564,10 +2661,19 @@ class ICalParser {
         const dayMap = { 'SU': 0, 'MO': 1, 'TU': 2, 'WE': 3, 'TH': 4, 'FR': 5, 'SA': 6 };
 
         const exdateSet = new Set();
+        if (extraExdates) {
+            extraExdates.forEach(dKey => exdateSet.add(dKey));
+        }
+
         if (exdates && Array.isArray(exdates)) {
-            exdates.forEach(ex => {
-                const p = ICalParser.parseDate({ val: ex });
-                if (p && p.date) exdateSet.add(formatDate(p.date));
+            exdates.forEach(exEntry => {
+                const rawVal = typeof exEntry === 'string' ? exEntry : (exEntry.val || '');
+                const params = typeof exEntry === 'object' ? exEntry.params : '';
+                const items = rawVal.split(',');
+                items.forEach(item => {
+                    const p = ICalParser.parseDate({ val: item.trim(), params }, defaultTz);
+                    if (p && p.date) exdateSet.add(formatDate(p.date));
+                });
             });
         }
 
@@ -3499,8 +3605,20 @@ kanban-plugin: basic
         if (this.viewMode === 'habits')    habitsTab.addClass('active');
         if (this.viewMode === 'postits')   postItsTab.addClass('active');
 
-        ganttTab.onclick    = () => { this.viewMode = 'gantt';     this.render(); };
-        timeTab.onclick     = () => { this.viewMode = 'timeblock'; this.render(); };
+        ganttTab.onclick    = () => {
+            this.viewMode = 'gantt';
+            if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
+                this.plugin.syncAllRemoteCalendars(false);
+            }
+            this.render();
+        };
+        timeTab.onclick     = () => {
+            this.viewMode = 'timeblock';
+            if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
+                this.plugin.syncAllRemoteCalendars(false);
+            }
+            this.render();
+        };
         kanbanTab.onclick   = () => { this.viewMode = 'kanban';    this.render(); };
         projectsTab.onclick = () => { this.viewMode = 'projects';  this.render(); };
         habitsTab.onclick   = () => { this.viewMode = 'habits';    this.render(); };
@@ -3524,6 +3642,17 @@ kanban-plugin: basic
             todayBtn.onclick = () => { this.weekOffset = 0; this.selectedDay = new Date(); this.awHabitCache = {}; this.render(); };
             prevBtn.onclick  = () => { this.weekOffset--; this.awHabitCache = {}; this.render(); };
             nextBtn.onclick  = () => { this.weekOffset++; this.awHabitCache = {}; this.render(); };
+
+            if (this.plugin.settings.remoteCalendars && this.plugin.settings.remoteCalendars.length > 0) {
+                const syncCalBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-sync-cal-btn', text: '🔄 Agenda' });
+                syncCalBtn.title = 'Sincronizar eventos do Google Agenda / Calendários Remotos';
+                syncCalBtn.onclick = async () => {
+                    syncCalBtn.setText('⏳ Sincronizando...');
+                    const count = await this.plugin.syncAllRemoteCalendars(true);
+                    syncCalBtn.setText('🔄 Agenda');
+                    new obsidian.Notice(`✓ Google Agenda sincronizado: ${count} eventos.`);
+                };
+            }
         }
 
         // Period Range Selector (Only in Gantt mode)
