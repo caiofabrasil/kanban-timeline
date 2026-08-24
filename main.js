@@ -159,6 +159,51 @@ function getProjectColor(tags, column, customColors = {}, customProjects = []) {
     return getColumnColor(column, customColors, customProjects);
 }
 
+function getProjectForCard(card, customProjects = []) {
+    if (!card || !Array.isArray(customProjects) || customProjects.length === 0) return null;
+    const tags = card.tags || [];
+    const col = (card.column || '').toLowerCase().trim();
+
+    // 1. Check custom user-configured projects by tag or name
+    for (const tag of tags) {
+        const key = tag.replace(/^#/, '').toLowerCase().trim();
+        if (PRIORITY_TAGS.has(key)) continue;
+        for (const proj of customProjects) {
+            const pTag = (proj.tag || '').replace(/^#/, '').toLowerCase().trim();
+            const pName = (proj.name || '').toLowerCase().trim();
+            if (pTag && (key === pTag || key.includes(pTag) || pTag.includes(key))) {
+                return proj;
+            }
+            if (pName && (key === pName || key.includes(pName) || pName.includes(key))) {
+                return proj;
+            }
+        }
+    }
+
+    // 2. Check if column belongs to or matches any configured project
+    if (col) {
+        for (const proj of customProjects) {
+            if (Array.isArray(proj.columns)) {
+                for (const c of proj.columns) {
+                    if ((c || '').toLowerCase().trim() === col) {
+                        return proj;
+                    }
+                }
+            }
+            const pName = (proj.name || '').toLowerCase().trim();
+            const pTag = (proj.tag || '').replace(/^#/, '').toLowerCase().trim();
+            if (pName && (col.includes(pName) || pName.includes(col))) {
+                return proj;
+            }
+            if (pTag && (col.includes(pTag) || pTag.includes(col))) {
+                return proj;
+            }
+        }
+    }
+
+    return null;
+}
+
 function getPriorityColor(tags) {
     if (!tags) return null;
     for (const tag of tags) {
@@ -3571,6 +3616,34 @@ kanban-plugin: basic
         }
     }
 
+    openDayInTimeblocking(date) {
+        if (!date) return;
+        const target = new Date(date);
+        target.setHours(0, 0, 0, 0);
+
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        const dow = now.getDay();
+        const diff = dow === 0 ? -6 : 1 - dow;
+        const currentWeekMonday = new Date(now);
+        currentWeekMonday.setDate(currentWeekMonday.getDate() + diff);
+
+        const targetDow = target.getDay();
+        const targetDiff = targetDow === 0 ? -6 : 1 - targetDow;
+        const targetMonday = new Date(target);
+        targetMonday.setDate(targetMonday.getDate() + targetDiff);
+
+        const msPerWeek = 7 * 86400000;
+        this.weekOffset = Math.round((targetMonday.getTime() - currentWeekMonday.getTime()) / msPerWeek);
+        this.selectedDay = target;
+        this.viewMode = 'timeblock';
+        this.savedTbScrollTop = null;
+        if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
+            this.plugin.syncAllRemoteCalendars(false);
+        }
+        this.render();
+    }
+
     // ----------------------------------------------------------
     // TOOLBAR
     // ----------------------------------------------------------
@@ -3720,8 +3793,13 @@ kanban-plugin: basic
             const d   = new Date(ws); d.setDate(d.getDate() + i);
             const cell = hdCells.createDiv('kt-gantt-hd-cell');
             cell.setText(this.dayLabel(d));
+            cell.title = `Clique para abrir ${this.dayLabel(d)} no Timeblocking`;
             if (sameDay(d, new Date())) cell.addClass('kt-is-today');
             if (d.getDay() === 0 || d.getDay() === 6) cell.addClass('kt-is-weekend');
+
+            cell.onclick = () => {
+                this.openDayInTimeblocking(d);
+            };
         }
 
         // Body
@@ -3911,6 +3989,11 @@ kanban-plugin: basic
 
                 // Drag do bloco inteiro horizontalmente ou clique para editar datas
                 this.attachGanttSpanMove(cell, card, ws, cellDates, cellElements, row, i);
+            } else {
+                cell.title = `Clique duas vezes para abrir ${this.dayLabel(d)} no Timeblocking`;
+                cell.ondblclick = () => {
+                    this.openDayInTimeblocking(d);
+                };
             }
         }
     }
@@ -7045,6 +7128,22 @@ kanban-plugin: basic
                     const estBadge = metaRow.createSpan('kt-card-est-badge');
                     estBadge.setText(`⏱ ${card.estimateText}`);
                 }
+                const matchedProj = getProjectForCard(card, this.plugin.settings.projects);
+                if (matchedProj && matchedProj.hourlyRate > 0) {
+                    let minCount = 0;
+                    if (dayTime) {
+                        minCount = Math.max(15, timeToMinutes(dayTime.timeEnd || dayTime.timeStart) - timeToMinutes(dayTime.timeStart));
+                    } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                        minCount = card.estimateMinutes;
+                    }
+                    if (minCount > 0) {
+                        const amount = (minCount / 60) * matchedProj.hourlyRate;
+                        const curr = matchedProj.currency || 'R$';
+                        const earnBadge = metaRow.createSpan('kt-card-earnings-badge');
+                        earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
+                        earnBadge.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
+                    }
+                }
                 
                 c.title = 'Arraste para a grade de horários ou clique para abrir detalhes';
                 c.setAttribute('draggable', 'true');
@@ -7083,6 +7182,14 @@ kanban-plugin: basic
                 if (card.estimateMinutes && card.estimateMinutes > 0) {
                     const estBadge = metaRow.createSpan('kt-card-est-badge');
                     estBadge.setText(`⏱ ${card.estimateText}`);
+                }
+                const matchedProj = getProjectForCard(card, this.plugin.settings.projects);
+                if (matchedProj && matchedProj.hourlyRate > 0 && card.estimateMinutes > 0) {
+                    const amount = (card.estimateMinutes / 60) * matchedProj.hourlyRate;
+                    const curr = matchedProj.currency || 'R$';
+                    const earnBadge = metaRow.createSpan('kt-card-earnings-badge');
+                    earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
+                    earnBadge.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
                 }
                 c.title = 'Arraste para a grade de horários ou clique para abrir detalhes';
                 c.setAttribute('draggable', 'true');
@@ -7517,8 +7624,33 @@ kanban-plugin: basic
             calSub.setText(card.calendarName);
         }
 
-        if (!card.isEvent) {
-            this.renderTagPills(el, card.tags);
+        const matchedProject = !card.isEvent && !card.isRemoteCalendarEvent ? getProjectForCard(card, this.plugin.settings.projects) : null;
+        const hourlyRate = matchedProject ? (matchedProject.hourlyRate || 0) : 0;
+        const currency = matchedProject ? (matchedProject.currency || 'R$') : 'R$';
+
+        if (!card.isEvent && (card.tags?.length > 0 || hourlyRate > 0)) {
+            const tagsRow = el.createDiv('kt-tags-row');
+            if (card.tags && card.tags.length > 0) {
+                card.tags.forEach(tag => {
+                    const pill = tagsRow.createSpan('kt-tag-pill');
+                    pill.setText(tag);
+                    const key = tag.replace(/^#/, '').toLowerCase();
+                    const col = getCardTagColor([tag], this.plugin.settings.projects) || PRIORITY_COLORS[key];
+                    if (col) {
+                        pill.style.color      = col;
+                        pill.style.background = col + '22';
+                    }
+                });
+            }
+
+            if (hourlyRate > 0) {
+                const earningsPill = tagsRow.createSpan('kt-tb-earnings-pill');
+                const earningsAmount = (duration / 60) * hourlyRate;
+                earningsPill.setText(`💵 ${formatCurrency(earningsAmount, currency)}`);
+                earningsPill.title = `Ganho previsto: ${formatCurrency(earningsAmount, currency)} (${currency} ${hourlyRate}/h • ${duration}m)`;
+                el.dataset.hourlyRate = String(hourlyRate);
+                el.dataset.currency = currency;
+            }
         }
 
         // Subtasks (Checklists - [ ] e - [x]) no corpo do Timeblocking
@@ -7620,6 +7752,18 @@ kanban-plugin: basic
                 if (timeLabel) {
                     timeLabel.setText(`⏰ ${minutesToTime(previewStartMin)} – ${minutesToTime(origEndMin)}`);
                 }
+
+                if (cardEl.dataset.hourlyRate) {
+                    const earningsPill = cardEl.querySelector('.kt-tb-earnings-pill');
+                    if (earningsPill) {
+                        const rate = parseFloat(cardEl.dataset.hourlyRate) || 0;
+                        const curr = cardEl.dataset.currency || 'R$';
+                        const previewDur = Math.max(0, origEndMin - previewStartMin);
+                        const amount = (previewDur / 60) * rate;
+                        earningsPill.setText(`💵 ${formatCurrency(amount, curr)}`);
+                        earningsPill.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${rate}/h • ${previewDur}m)`;
+                    }
+                }
             };
 
             const onPointerUp = async () => {
@@ -7667,6 +7811,18 @@ kanban-plugin: basic
 
                 if (timeLabel) {
                     timeLabel.setText(`⏰ ${minutesToTime(origStartMin)} – ${minutesToTime(previewEndMin)}`);
+                }
+
+                if (cardEl.dataset.hourlyRate) {
+                    const earningsPill = cardEl.querySelector('.kt-tb-earnings-pill');
+                    if (earningsPill) {
+                        const rate = parseFloat(cardEl.dataset.hourlyRate) || 0;
+                        const curr = cardEl.dataset.currency || 'R$';
+                        const previewDur = Math.max(0, previewEndMin - origStartMin);
+                        const amount = (previewDur / 60) * rate;
+                        earningsPill.setText(`💵 ${formatCurrency(amount, curr)}`);
+                        earningsPill.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${rate}/h • ${previewDur}m)`;
+                    }
                 }
             };
 
