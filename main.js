@@ -3557,6 +3557,537 @@ kanban-plugin: basic
     }
 
     // ----------------------------------------------------------
+    // DOCKING & SPLIT LAYOUT MANAGER (Unity / Blender Style)
+    // ----------------------------------------------------------
+
+    getDockLayout() {
+        if (this.plugin.settings.dockLayout && typeof this.plugin.settings.dockLayout === 'object') {
+            return this.plugin.settings.dockLayout;
+        }
+        return {
+            id: 'pane-root',
+            type: 'pane',
+            tabs: [this.viewMode || 'gantt'],
+            activeTab: this.viewMode || 'gantt'
+        };
+    }
+
+    async saveDockLayout(layout) {
+        if (layout) {
+            this.plugin.settings.dockLayout = layout;
+        }
+        await this.plugin.saveSettings();
+    }
+
+    findDockNode(node, id) {
+        if (!node || !id) return null;
+        if (node.id === id) return node;
+        if (node.type === 'split') {
+            return this.findDockNode(node.first, id) || this.findDockNode(node.second, id);
+        }
+        return null;
+    }
+
+    findDockParent(node, childId) {
+        if (!node || node.type !== 'split') return null;
+        if (node.first?.id === childId) return { parent: node, which: 'first' };
+        if (node.second?.id === childId) return { parent: node, which: 'second' };
+        return this.findDockParent(node.first, childId) || this.findDockParent(node.second, childId);
+    }
+
+    getAllDockPanes(node) {
+        if (!node) return [];
+        if (node.type === 'pane') return [node];
+        if (node.type === 'split') {
+            return [...this.getAllDockPanes(node.first), ...this.getAllDockPanes(node.second)];
+        }
+        return [];
+    }
+
+    hasActiveDockView(viewKey) {
+        const layout = this.getDockLayout();
+        const allPanes = this.getAllDockPanes(layout);
+        return allPanes.some(p => p.activeTab === viewKey || p.tabs?.includes(viewKey));
+    }
+
+    splitDockPane(targetPaneId, direction, newViewMode = null) {
+        const layout = this.getDockLayout();
+        const target = this.findDockNode(layout, targetPaneId);
+        if (!target || target.type !== 'pane') return;
+
+        const currentActive = target.activeTab || target.tabs?.[0] || 'gantt';
+        const nextView = newViewMode || (currentActive === 'timeblock' ? 'gantt' : 'timeblock');
+
+        const newPane = {
+            id: 'pane-' + Math.random().toString(36).substr(2, 8),
+            type: 'pane',
+            tabs: [nextView],
+            activeTab: nextView
+        };
+
+        const oldTargetCopy = { ...target };
+
+        target.type = 'split';
+        target.direction = direction; // 'row' or 'column'
+        target.splitPercent = 50;
+        target.first = oldTargetCopy;
+        target.second = newPane;
+        delete target.tabs;
+        delete target.activeTab;
+
+        this.maximizedPaneId = null;
+        this.saveDockLayout(layout);
+        this.render();
+    }
+
+    closeDockPane(paneId) {
+        const layout = this.getDockLayout();
+        const parentInfo = this.findDockParent(layout, paneId);
+        if (!parentInfo) {
+            // Root pane cannot be closed, reset to single tab
+            const pane = this.findDockNode(layout, paneId);
+            if (pane) {
+                pane.tabs = ['gantt'];
+                pane.activeTab = 'gantt';
+                this.saveDockLayout(layout);
+                this.render();
+            }
+            return;
+        }
+
+        const { parent, which } = parentInfo;
+        const sibling = which === 'first' ? parent.second : parent.first;
+
+        // Replace parent with sibling
+        Object.keys(parent).forEach(k => delete parent[k]);
+        Object.assign(parent, sibling);
+
+        this.maximizedPaneId = null;
+        this.saveDockLayout(layout);
+        this.render();
+    }
+
+    moveDockTab(fromPaneId, toPaneId, tabId, dropPos = 'center') {
+        const layout = this.getDockLayout();
+        const toPane = this.findDockNode(layout, toPaneId);
+        if (!toPane || toPane.type !== 'pane') return;
+
+        // 1. Remove from source pane if exists
+        if (fromPaneId) {
+            const fromPane = this.findDockNode(layout, fromPaneId);
+            if (fromPane && fromPane.type === 'pane') {
+                fromPane.tabs = (fromPane.tabs || []).filter(t => t !== tabId);
+                if (fromPane.activeTab === tabId) {
+                    fromPane.activeTab = fromPane.tabs[0] || 'gantt';
+                }
+                if (fromPane.tabs.length === 0) {
+                    this.closeDockPane(fromPaneId);
+                }
+            }
+        }
+
+        // 2. Add to destination
+        if (dropPos === 'center') {
+            if (!toPane.tabs) toPane.tabs = [];
+            if (!toPane.tabs.includes(tabId)) {
+                toPane.tabs.push(tabId);
+            }
+            toPane.activeTab = tabId;
+        } else if (dropPos === 'left' || dropPos === 'right') {
+            const newPane = {
+                id: 'pane-' + Math.random().toString(36).substr(2, 8),
+                type: 'pane',
+                tabs: [tabId],
+                activeTab: tabId
+            };
+            const oldToPaneCopy = { ...toPane };
+            toPane.type = 'split';
+            toPane.direction = 'row';
+            toPane.splitPercent = 50;
+            toPane.first = dropPos === 'left' ? newPane : oldToPaneCopy;
+            toPane.second = dropPos === 'left' ? oldToPaneCopy : newPane;
+            delete toPane.tabs;
+            delete toPane.activeTab;
+        } else if (dropPos === 'top' || dropPos === 'bottom') {
+            const newPane = {
+                id: 'pane-' + Math.random().toString(36).substr(2, 8),
+                type: 'pane',
+                tabs: [tabId],
+                activeTab: tabId
+            };
+            const oldToPaneCopy = { ...toPane };
+            toPane.type = 'split';
+            toPane.direction = 'column';
+            toPane.splitPercent = 50;
+            toPane.first = dropPos === 'top' ? newPane : oldToPaneCopy;
+            toPane.second = dropPos === 'top' ? oldToPaneCopy : newPane;
+            delete toPane.tabs;
+            delete toPane.activeTab;
+        }
+
+        this.maximizedPaneId = null;
+        this.saveDockLayout(layout);
+        this.render();
+    }
+
+    applyDockPreset(presetKey) {
+        let layout = null;
+        if (presetKey === 'single') {
+            layout = {
+                id: 'pane-root',
+                type: 'pane',
+                tabs: [this.viewMode || 'gantt'],
+                activeTab: this.viewMode || 'gantt'
+            };
+        } else if (presetKey === 'tb-gantt-h') {
+            layout = {
+                id: 'split-root',
+                type: 'split',
+                direction: 'row',
+                splitPercent: 40,
+                first: { id: 'pane-tb', type: 'pane', tabs: ['timeblock'], activeTab: 'timeblock' },
+                second: { id: 'pane-gantt', type: 'pane', tabs: ['gantt'], activeTab: 'gantt' }
+            };
+        } else if (presetKey === 'gantt-tb-v') {
+            layout = {
+                id: 'split-root',
+                type: 'split',
+                direction: 'column',
+                splitPercent: 55,
+                first: { id: 'pane-gantt', type: 'pane', tabs: ['gantt'], activeTab: 'gantt' },
+                second: { id: 'pane-tb', type: 'pane', tabs: ['timeblock'], activeTab: 'timeblock' }
+            };
+        } else if (presetKey === 'tb-kanban-h') {
+            layout = {
+                id: 'split-root',
+                type: 'split',
+                direction: 'row',
+                splitPercent: 45,
+                first: { id: 'pane-tb', type: 'pane', tabs: ['timeblock'], activeTab: 'timeblock' },
+                second: { id: 'pane-kanban', type: 'pane', tabs: ['kanban'], activeTab: 'kanban' }
+            };
+        } else if (presetKey === 'gantt-kanban-v') {
+            layout = {
+                id: 'split-root',
+                type: 'split',
+                direction: 'column',
+                splitPercent: 50,
+                first: { id: 'pane-gantt', type: 'pane', tabs: ['gantt'], activeTab: 'gantt' },
+                second: { id: 'pane-kanban', type: 'pane', tabs: ['kanban'], activeTab: 'kanban' }
+            };
+        } else if (presetKey === 'triple') {
+            layout = {
+                id: 'split-root',
+                type: 'split',
+                direction: 'row',
+                splitPercent: 38,
+                first: { id: 'pane-tb', type: 'pane', tabs: ['timeblock'], activeTab: 'timeblock' },
+                second: {
+                    id: 'split-right',
+                    type: 'split',
+                    direction: 'column',
+                    splitPercent: 55,
+                    first: { id: 'pane-gantt', type: 'pane', tabs: ['gantt'], activeTab: 'gantt' },
+                    second: { id: 'pane-kanban', type: 'pane', tabs: ['kanban'], activeTab: 'kanban' }
+                }
+            };
+        }
+
+        if (layout) {
+            this.maximizedPaneId = null;
+            this.saveDockLayout(layout);
+            this.render();
+        }
+    }
+
+    renderDockLayout(container) {
+        const layout = this.getDockLayout();
+        const wrap = container.createDiv('kt-dock-container');
+
+        if (this.maximizedPaneId) {
+            const maxPane = this.findDockNode(layout, this.maximizedPaneId);
+            if (maxPane && maxPane.type === 'pane') {
+                this.renderDockPane(wrap, maxPane, true);
+                return;
+            }
+            this.maximizedPaneId = null;
+        }
+
+        this.renderDockNode(wrap, layout);
+    }
+
+    renderDockNode(container, node) {
+        if (!node) return;
+
+        if (node.type === 'split') {
+            const splitEl = container.createDiv(`kt-dock-split kt-dock-${node.direction}`);
+            
+            // First Child
+            const firstWrap = splitEl.createDiv('kt-dock-split-item');
+            const pct = Math.max(10, Math.min(90, node.splitPercent || 50));
+            firstWrap.style.flex = `0 0 ${pct}%`;
+            firstWrap.style.overflow = 'hidden';
+            firstWrap.style.display = 'flex';
+            firstWrap.style.minWidth = '0';
+            firstWrap.style.minHeight = '0';
+            this.renderDockNode(firstWrap, node.first);
+
+            // Resizer Divider
+            const resizer = splitEl.createDiv(`kt-dock-resizer kt-dock-resizer-${node.direction}`);
+            this.attachDockResizer(resizer, node, firstWrap, splitEl);
+
+            // Second Child
+            const secondWrap = splitEl.createDiv('kt-dock-split-item');
+            secondWrap.style.flex = '1 1 0px';
+            secondWrap.style.overflow = 'hidden';
+            secondWrap.style.display = 'flex';
+            secondWrap.style.minWidth = '0';
+            secondWrap.style.minHeight = '0';
+            this.renderDockNode(secondWrap, node.second);
+
+        } else if (node.type === 'pane') {
+            this.renderDockPane(container, node, false);
+        }
+    }
+
+    attachDockResizer(resizerEl, splitNode, firstWrapEl, splitContainerEl) {
+        resizerEl.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const isRow = splitNode.direction === 'row';
+            const rect = splitContainerEl.getBoundingClientRect();
+            const totalSize = isRow ? rect.width : rect.height;
+            const startCoord = isRow ? rect.left : rect.top;
+
+            resizerEl.classList.add('is-dragging');
+            document.body.classList.add('kt-is-tb-resizing');
+
+            const onPointerMove = (moveEvt) => {
+                const currentCoord = isRow ? moveEvt.clientX : moveEvt.clientY;
+                const offset = currentCoord - startCoord;
+                let newPct = (offset / totalSize) * 100;
+                newPct = Math.max(10, Math.min(90, Math.round(newPct)));
+
+                splitNode.splitPercent = newPct;
+                firstWrapEl.style.flex = `0 0 ${newPct}%`;
+            };
+
+            const onPointerUp = async () => {
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', onPointerUp);
+                resizerEl.classList.remove('is-dragging');
+                document.body.classList.remove('kt-is-tb-resizing');
+                await this.saveDockLayout();
+            };
+
+            document.addEventListener('pointermove', onPointerMove);
+            document.addEventListener('pointerup', onPointerUp);
+        });
+    }
+
+    renderDockPane(container, paneNode, isMaximized = false) {
+        const paneEl = container.createDiv('kt-dock-pane');
+        paneEl.dataset.paneId = paneNode.id;
+
+        const allPanes = this.getAllDockPanes(this.getDockLayout());
+        const showMultiControls = allPanes.length > 1;
+
+        // 1. Pane Header
+        const header = paneEl.createDiv('kt-dock-pane-header');
+
+        // Tab bar
+        const tabbar = header.createDiv('kt-dock-tabbar');
+        const tabs = paneNode.tabs && paneNode.tabs.length > 0 ? paneNode.tabs : ['gantt'];
+        const activeTab = paneNode.activeTab || tabs[0];
+
+        const DOCK_VIEWS = [
+            { id: 'gantt',     name: 'Cronograma',   icon: '📊' },
+            { id: 'timeblock', name: 'Timeblocking', icon: '⏰' },
+            { id: 'kanban',    name: 'Kanban',       icon: '📋' },
+            { id: 'projects',  name: 'Projetos',     icon: '💼' },
+            { id: 'habits',    name: 'Hábitos',      icon: '✨' },
+            { id: 'postits',   name: 'Post-its',     icon: '📌' },
+        ];
+
+        tabs.forEach(tabKey => {
+            const info = DOCK_VIEWS.find(v => v.id === tabKey) || { id: tabKey, name: tabKey, icon: '📄' };
+            const tabBtn = tabbar.createDiv(`kt-dock-tab${tabKey === activeTab ? ' active' : ''}`);
+            tabBtn.setText(`${info.icon} ${info.name}`);
+            tabBtn.title = `Clique para ativar • Arraste para mover/dividir painel`;
+            tabBtn.setAttribute('draggable', 'true');
+
+            tabBtn.onclick = async (e) => {
+                e.stopPropagation();
+                if (paneNode.activeTab !== tabKey) {
+                    paneNode.activeTab = tabKey;
+                    this.viewMode = tabKey;
+                    await this.saveDockLayout();
+                    this.render();
+                }
+            };
+
+            // Drag Tab (Docking)
+            tabBtn.addEventListener('dragstart', (e) => {
+                this.draggedDockTab = { fromPaneId: paneNode.id, tabId: tabKey };
+                e.dataTransfer.setData('text/plain', `dock-tab:${tabKey}`);
+                e.dataTransfer.effectAllowed = 'move';
+                document.body.classList.add('kt-is-dock-dragging');
+            });
+
+            tabBtn.addEventListener('dragend', () => {
+                document.body.classList.remove('kt-is-dock-dragging');
+                this.draggedDockTab = null;
+            });
+
+            // Close tab button (if more than 1 tab in this pane)
+            if (tabs.length > 1) {
+                const closeBtn = tabBtn.createSpan('kt-dock-tab-close');
+                closeBtn.setText('×');
+                closeBtn.title = 'Fechar esta aba do painel';
+                closeBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    paneNode.tabs = paneNode.tabs.filter(t => t !== tabKey);
+                    if (paneNode.activeTab === tabKey) {
+                        paneNode.activeTab = paneNode.tabs[0];
+                    }
+                    await this.saveDockLayout();
+                    this.render();
+                };
+            }
+        });
+
+        // Pane Action Buttons
+        const actions = header.createDiv('kt-dock-pane-actions');
+
+        // Add View Button
+        const addBtn = actions.createEl('button', { cls: 'kt-dock-action-btn', text: '＋' });
+        addBtn.title = 'Adicionar visualização a este painel';
+        addBtn.onclick = (e) => {
+            e.stopPropagation();
+            const menu = new obsidian.Menu();
+            DOCK_VIEWS.forEach(dv => {
+                menu.addItem(item => {
+                    item.setTitle(`${dv.icon} ${dv.name}`)
+                        .onClick(async () => {
+                            if (!paneNode.tabs) paneNode.tabs = [];
+                            if (!paneNode.tabs.includes(dv.id)) {
+                                paneNode.tabs.push(dv.id);
+                            }
+                            paneNode.activeTab = dv.id;
+                            await this.saveDockLayout();
+                            this.render();
+                        });
+                });
+            });
+            menu.showAtMouseEvent(e);
+        };
+
+        // Split Horizontal
+        const splitHBtn = actions.createEl('button', { cls: 'kt-dock-action-btn', text: '◫' });
+        splitHBtn.title = 'Dividir painel na Horizontal (Lado a Lado)';
+        splitHBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.splitDockPane(paneNode.id, 'row');
+        };
+
+        // Split Vertical
+        const splitVBtn = actions.createEl('button', { cls: 'kt-dock-action-btn', text: '⬒' });
+        splitVBtn.title = 'Dividir painel na Vertical (Cima e Baixo)';
+        splitVBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.splitDockPane(paneNode.id, 'column');
+        };
+
+        // Maximize / Restore
+        if (showMultiControls || isMaximized) {
+            const maxBtn = actions.createEl('button', { cls: `kt-dock-action-btn${isMaximized ? ' active' : ''}`, text: isMaximized ? '🗗' : '🗖' });
+            maxBtn.title = isMaximized ? 'Restaurar layout dividido' : 'Maximizar este painel';
+            maxBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.maximizedPaneId = isMaximized ? null : paneNode.id;
+                this.render();
+            };
+        }
+
+        // Close Pane
+        if (showMultiControls && !isMaximized) {
+            const closePaneBtn = actions.createEl('button', { cls: 'kt-dock-action-btn', text: '✕' });
+            closePaneBtn.title = 'Fechar este painel';
+            closePaneBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.closeDockPane(paneNode.id);
+            };
+        }
+
+        // 2. Pane Content
+        const contentEl = paneEl.createDiv('kt-dock-pane-content');
+        this.renderDockViewContent(contentEl, activeTab);
+
+        // 3. Drop Overlay for Docking Drag & Drop
+        const dropOverlay = paneEl.createDiv('kt-dock-drop-overlay');
+        const previewBox = dropOverlay.createDiv('kt-dock-drop-preview');
+
+        const calculateDropPosition = (e) => {
+            const rect = paneEl.getBoundingClientRect();
+            const relX = (e.clientX - rect.left) / rect.width;
+            const relY = (e.clientY - rect.top) / rect.height;
+
+            if (relX < 0.25) return 'left';
+            if (relX > 0.75) return 'right';
+            if (relY < 0.25) return 'top';
+            if (relY > 0.75) return 'bottom';
+            return 'center';
+        };
+
+        paneEl.addEventListener('dragover', (e) => {
+            if (!this.draggedDockTab) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const pos = calculateDropPosition(e);
+            previewBox.className = `kt-dock-drop-preview active kt-dock-preview-${pos}`;
+        });
+
+        paneEl.addEventListener('dragleave', (e) => {
+            if (!paneEl.contains(e.relatedTarget)) {
+                previewBox.className = 'kt-dock-drop-preview';
+            }
+        });
+
+        paneEl.addEventListener('drop', (e) => {
+            if (!this.draggedDockTab) return;
+            e.preventDefault();
+            previewBox.className = 'kt-dock-drop-preview';
+
+            const pos = calculateDropPosition(e);
+            const { fromPaneId, tabId } = this.draggedDockTab;
+            this.draggedDockTab = null;
+            document.body.classList.remove('kt-is-dock-dragging');
+
+            this.moveDockTab(fromPaneId, paneNode.id, tabId, pos);
+        });
+    }
+
+    renderDockViewContent(container, viewMode) {
+        if (viewMode === 'gantt') {
+            this.renderGantt(container);
+        } else if (viewMode === 'timeblock') {
+            this.renderTimeblock(container);
+        } else if (viewMode === 'kanban') {
+            this.renderFullKanban(container);
+        } else if (viewMode === 'projects') {
+            this.renderProjectsView(container);
+        } else if (viewMode === 'habits') {
+            this.renderHabitsView(container);
+        } else if (viewMode === 'postits') {
+            this.renderPostItsView(container);
+        } else {
+            this.renderGantt(container);
+        }
+    }
+
+    // ----------------------------------------------------------
     // ROOT RENDER
     // ----------------------------------------------------------
 
@@ -3588,32 +4119,13 @@ kanban-plugin: basic
         this.renderToolbar(wrap);
 
         const main = wrap.createDiv('kt-main');
-        if (this.viewMode === 'gantt') {
-            this.renderGantt(main);
-            if (this.savedGanttScrollLeft !== undefined) {
-                const gScroll = wrap.querySelector('.kt-gantt-scroll');
-                if (gScroll) {
-                    gScroll.scrollLeft = this.savedGanttScrollLeft;
-                    if (this.savedGanttScrollTop !== undefined) gScroll.scrollTop = this.savedGanttScrollTop;
-                }
-            }
-        } else if (this.viewMode === 'timeblock') {
-            this.renderTimeblock(main);
-        } else if (this.viewMode === 'projects') {
-            this.renderProjectsView(main);
-            if (this.savedPageScrollTop !== undefined) {
-                wrap.scrollTop = this.savedPageScrollTop;
-            }
-        } else if (this.viewMode === 'habits') {
-            this.renderHabitsView(main);
-            if (this.savedPageScrollTop !== undefined) {
-                wrap.scrollTop = this.savedPageScrollTop;
-            }
-        } else if (this.viewMode === 'postits') {
-            this.renderPostItsView(main);
-        } else {
-            this.renderFullKanban(main);
-        }
+        main.style.display = 'flex';
+        main.style.flex = '1';
+        main.style.overflow = 'hidden';
+        main.style.minHeight = '0';
+        main.style.minWidth = '0';
+
+        this.renderDockLayout(main);
     }
 
     openDayInTimeblocking(date) {
@@ -3641,6 +4153,21 @@ kanban-plugin: basic
         if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
             this.plugin.syncAllRemoteCalendars(false);
         }
+
+        // Activate Timeblocking in layout
+        const layout = this.getDockLayout();
+        const allPanes = this.getAllDockPanes(layout);
+        const tbPane = allPanes.find(p => p.activeTab === 'timeblock' || p.tabs?.includes('timeblock'));
+        if (tbPane) {
+            tbPane.activeTab = 'timeblock';
+            if (!tbPane.tabs?.includes('timeblock')) tbPane.tabs.push('timeblock');
+            this.saveDockLayout(layout);
+        } else if (allPanes.length > 0) {
+            allPanes[0].activeTab = 'timeblock';
+            if (!allPanes[0].tabs?.includes('timeblock')) allPanes[0].tabs.push('timeblock');
+            this.saveDockLayout(layout);
+        }
+
         this.render();
     }
 
@@ -3678,46 +4205,83 @@ kanban-plugin: basic
         if (this.viewMode === 'habits')    habitsTab.addClass('active');
         if (this.viewMode === 'postits')   postItsTab.addClass('active');
 
+        // Make top tabs draggable into docking layout
+        const makeTopTabDraggable = (btn, viewId) => {
+            btn.setAttribute('draggable', 'true');
+            btn.title = 'Clique para alternar • Arraste para dividir/encaixar na tela';
+            btn.addEventListener('dragstart', (e) => {
+                this.draggedDockTab = { fromPaneId: null, tabId: viewId };
+                e.dataTransfer.setData('text/plain', `dock-tab:${viewId}`);
+                e.dataTransfer.effectAllowed = 'move';
+                document.body.classList.add('kt-is-dock-dragging');
+            });
+            btn.addEventListener('dragend', () => {
+                document.body.classList.remove('kt-is-dock-dragging');
+                this.draggedDockTab = null;
+            });
+        };
+
+        makeTopTabDraggable(ganttTab, 'gantt');
+        makeTopTabDraggable(timeTab, 'timeblock');
+        makeTopTabDraggable(kanbanTab, 'kanban');
+        makeTopTabDraggable(projectsTab, 'projects');
+        makeTopTabDraggable(habitsTab, 'habits');
+        makeTopTabDraggable(postItsTab, 'postits');
+
+        const switchMainView = async (vMode) => {
+            this.viewMode = vMode;
+            const layout = this.getDockLayout();
+            const allPanes = this.getAllDockPanes(layout);
+            if (allPanes.length === 1) {
+                allPanes[0].activeTab = vMode;
+                allPanes[0].tabs = [vMode];
+                await this.saveDockLayout(layout);
+            } else if (allPanes.length > 0) {
+                allPanes[0].activeTab = vMode;
+                if (!allPanes[0].tabs?.includes(vMode)) allPanes[0].tabs.push(vMode);
+                await this.saveDockLayout(layout);
+            }
+            this.render();
+        };
+
         ganttTab.onclick    = () => {
-            this.viewMode = 'gantt';
             if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
                 this.plugin.syncAllRemoteCalendars(false);
             }
-            this.render();
+            switchMainView('gantt');
         };
         timeTab.onclick     = () => {
-            this.viewMode = 'timeblock';
             if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
                 this.plugin.syncAllRemoteCalendars(false);
             }
-            this.render();
+            switchMainView('timeblock');
         };
-        kanbanTab.onclick   = () => { this.viewMode = 'kanban';    this.render(); };
-        projectsTab.onclick = () => { this.viewMode = 'projects';  this.render(); };
+        kanbanTab.onclick   = () => switchMainView('kanban');
+        projectsTab.onclick = () => switchMainView('projects');
         habitsTab.onclick   = async () => {
-            this.viewMode = 'habits';
-            this.render();
+            await switchMainView('habits');
             if (this.plugin.settings.awConnected) {
                 const now = Date.now();
                 if (now - (this._lastAwHabitsSync || 0) > 30000) {
                     this._lastAwHabitsSync = now;
                     await this.syncActivityWatchHabits();
-                    if (this.viewMode === 'habits') {
+                    if (this.hasActiveDockView('habits')) {
                         this.render();
                     }
                 }
             }
         };
-        postItsTab.onclick  = () => { this.viewMode = 'postits';   this.render(); };
+        postItsTab.onclick  = () => switchMainView('postits');
 
         // Navigation (for Gantt, Timeblocking & Habits)
-        if (this.viewMode === 'gantt' || this.viewMode === 'timeblock' || this.viewMode === 'habits') {
+        const showNav = this.hasActiveDockView('gantt') || this.hasActiveDockView('timeblock') || this.hasActiveDockView('habits');
+        if (showNav) {
             const nav = tb.createDiv('kt-nav');
 
             const prevBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '‹' });
 
             const ws            = this.getWeekStart();
-            const daysDisplayed = this.viewMode === 'gantt' ? this.getGanttDays() : 7;
+            const daysDisplayed = this.hasActiveDockView('gantt') ? this.getGanttDays() : 7;
             const we            = new Date(ws); we.setDate(we.getDate() + (daysDisplayed - 1));
             const lbl           = nav.createDiv('kt-date-label');
             lbl.setText(`${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}`);
@@ -3730,27 +4294,27 @@ kanban-plugin: basic
                 this.selectedDay = new Date();
                 this.awHabitCache = {};
                 this.render();
-                if (this.viewMode === 'habits' && this.plugin.settings.awConnected) {
+                if (this.hasActiveDockView('habits') && this.plugin.settings.awConnected) {
                     await this.syncActivityWatchHabits();
-                    if (this.viewMode === 'habits') this.render();
+                    if (this.hasActiveDockView('habits')) this.render();
                 }
             };
             prevBtn.onclick  = async () => {
                 this.weekOffset--;
                 this.awHabitCache = {};
                 this.render();
-                if (this.viewMode === 'habits' && this.plugin.settings.awConnected) {
+                if (this.hasActiveDockView('habits') && this.plugin.settings.awConnected) {
                     await this.syncActivityWatchHabits();
-                    if (this.viewMode === 'habits') this.render();
+                    if (this.hasActiveDockView('habits')) this.render();
                 }
             };
             nextBtn.onclick  = async () => {
                 this.weekOffset++;
                 this.awHabitCache = {};
                 this.render();
-                if (this.viewMode === 'habits' && this.plugin.settings.awConnected) {
+                if (this.hasActiveDockView('habits') && this.plugin.settings.awConnected) {
                     await this.syncActivityWatchHabits();
-                    if (this.viewMode === 'habits') this.render();
+                    if (this.hasActiveDockView('habits')) this.render();
                 }
             };
 
@@ -3766,8 +4330,8 @@ kanban-plugin: basic
             }
         }
 
-        // Period Range Selector (Only in Gantt mode)
-        if (this.viewMode === 'gantt') {
+        // Period Range Selector (If Gantt view is active)
+        if (this.hasActiveDockView('gantt')) {
             const rangeSelector = tb.createDiv('kt-range-selector');
             const currentMode   = this.plugin.settings.ganttDaysMode || '14';
 
@@ -3791,6 +4355,43 @@ kanban-plugin: basic
                 };
             });
         }
+
+        // Layouts / Workspace Presets Menu Button
+        const layoutBtn = tb.createEl('button', { cls: 'kt-layout-btn', text: '◫ Layout' });
+        layoutBtn.title = 'Configurar divisões de tela e layouts (estilo Blender / Unity)';
+        layoutBtn.onclick = (e) => {
+            e.stopPropagation();
+            const menu = new obsidian.Menu();
+            
+            menu.addItem(item => {
+                item.setTitle('🔲 Padrão (1 Painel)')
+                    .onClick(() => this.applyDockPreset('single'));
+            });
+            menu.addSeparator();
+            menu.addItem(item => {
+                item.setTitle('◫ Timeblocking + Cronograma (Lado a Lado)')
+                    .onClick(() => this.applyDockPreset('tb-gantt-h'));
+            });
+            menu.addItem(item => {
+                item.setTitle('⬒ Cronograma + Timeblocking (Cima / Baixo)')
+                    .onClick(() => this.applyDockPreset('gantt-tb-v'));
+            });
+            menu.addItem(item => {
+                item.setTitle('📑 Timeblocking + Kanban (Lado a Lado)')
+                    .onClick(() => this.applyDockPreset('tb-kanban-h'));
+            });
+            menu.addItem(item => {
+                item.setTitle('🗔 Tríplice (Timeblocking + Cronograma + Kanban)')
+                    .onClick(() => this.applyDockPreset('triple'));
+            });
+            menu.addSeparator();
+            menu.addItem(item => {
+                item.setTitle('🔄 Redefinir Layout')
+                    .onClick(() => this.applyDockPreset('single'));
+            });
+
+            menu.showAtMouseEvent(e);
+        };
 
         // File selector
         const files  = this.app.vault.getFiles().filter(f => f.extension === 'md');
@@ -8028,6 +8629,7 @@ const DEFAULT_SETTINGS = {
     remoteCalendarAutoSyncMinutes: 15,
     awConnected: false,
     awHost: 'http://127.0.0.1:5600',
+    dockLayout: null,
 };
 
 class KanbanTimelinePlugin extends obsidian.Plugin {
