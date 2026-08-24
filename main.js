@@ -224,6 +224,20 @@ function isIgnoredColumn(columnName) {
            col === 'settings';
 }
 
+function isDoneColumn(columnName) {
+    if (!columnName || typeof columnName !== 'string') return false;
+    const col = columnName.trim().toLowerCase();
+    return col === 'done' || 
+           col === 'concluido' || 
+           col === 'concluído';
+}
+
+function getDoneColumnName(columns) {
+    if (!columns || !columns.length) return 'Done';
+    const found = columns.find(c => isDoneColumn(c));
+    return found || 'Done';
+}
+
 function parseTimeEstimate(str) {
     if (!str || typeof str !== 'string') return { minutes: 0, text: '', clean: str };
     
@@ -963,6 +977,15 @@ class KanbanParser {
         const cardLines = lines.slice(cardLineIndex, endIndex);
         const cardChunkLen = endIndex - cardLineIndex;
 
+        // Auto-complete if moving into Done column, or reopen if moving into an active work column
+        if (cardLines.length > 0) {
+            if (isDoneColumn(targetColumnName)) {
+                cardLines[0] = cardLines[0].replace(/^-\s+\[\s*\]/, '- [x]');
+            } else if (!isIgnoredColumn(targetColumnName)) {
+                cardLines[0] = cardLines[0].replace(/^-\s+\[[xX]\]/, '- [ ]');
+            }
+        }
+
         // Remove card lines from original position
         lines.splice(cardLineIndex, cardChunkLen);
 
@@ -1056,6 +1079,24 @@ class KanbanParser {
                 tgtEnd--;
             }
             insertPos = tgtEnd;
+        }
+
+        // Find which column this insertion point belongs to
+        let targetColName = '';
+        for (let i = insertPos; i >= 0; i--) {
+            if (i < lines.length && /^##\s+/.test(lines[i].trim())) {
+                targetColName = lines[i].trim().replace(/^##\s+/, '').replace(/<!--[\s\S]*?-->/, '').trim();
+                break;
+            }
+        }
+
+        // Auto-complete if moving into Done column, or reopen if moving into an active work column
+        if (cardLines.length > 0) {
+            if (isDoneColumn(targetColName)) {
+                cardLines[0] = cardLines[0].replace(/^-\s+\[\s*\]/, '- [x]');
+            } else if (targetColName && !isIgnoredColumn(targetColName)) {
+                cardLines[0] = cardLines[0].replace(/^-\s+\[[xX]\]/, '- [ ]');
+            }
         }
 
         // Insert cardLines
@@ -5162,9 +5203,26 @@ kanban-plugin: basic
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         let content = await this.app.vault.read(file);
-        content = this.parser.toggleCardCompletion(content, card.lineIndex);
+
+        if (!card.isCompleted) {
+            // Completing the task: mark as [x] and move to Done column
+            const doneCol = getDoneColumnName(this.columns);
+            content = this.parser.toggleCardCompletion(content, card.lineIndex);
+
+            if (!isDoneColumn(card.column)) {
+                content = this.parser.moveCardToColumn(content, card.lineIndex, doneCol);
+                new obsidian.Notice(`✓ ${card.title} concluído e movido para ${doneCol}`);
+            } else {
+                new obsidian.Notice(`✓ ${card.title} concluído`);
+            }
+        } else {
+            // Reopening the task: mark as [ ]
+            content = this.parser.toggleCardCompletion(content, card.lineIndex);
+            new obsidian.Notice(`○ ${card.title} reaberto`);
+        }
+
         await this.app.vault.modify(file, content);
-        new obsidian.Notice(card.isCompleted ? `○ ${card.title} reaberto` : `✓ ${card.title} concluído`);
+        await this.refresh();
     }
 
     async moveCardToColumn(card, targetColumnName, targetLineIndex = -1) {
