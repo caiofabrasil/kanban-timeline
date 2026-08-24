@@ -3417,6 +3417,7 @@ body.kt-is-tb-resizing * {
     flex-direction: column;
     transition: box-shadow 0.15s, transform 0.15s;
     user-select: text;
+    box-sizing: border-box;
 }
 
 .kt-postit-note::after {
@@ -3424,11 +3425,31 @@ body.kt-is-tb-resizing * {
     position: absolute;
     bottom: 0;
     right: 0;
-    width: 18px;
-    height: 18px;
-    background: linear-gradient(135deg, transparent 50%, rgba(0, 0, 0, 0.14) 50%);
+    width: 20px;
+    height: 20px;
+    background: linear-gradient(135deg, transparent 50%, rgba(0, 0, 0, 0.16) 50%);
     border-bottom-right-radius: 12px;
     pointer-events: none;
+}
+
+/* Bottom-Right Resize Handle */
+.kt-postit-resize-handle {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 26px;
+    height: 26px;
+    cursor: nwse-resize;
+    z-index: 10;
+    user-select: none;
+    touch-action: none;
+    border-bottom-right-radius: 12px;
+    transition: background 0.12s;
+}
+
+.kt-postit-resize-handle:hover,
+.kt-postit-note.is-resizing .kt-postit-resize-handle {
+    background: rgba(0, 0, 0, 0.08);
 }
 
 .kt-postit-note:hover {
@@ -3440,6 +3461,17 @@ body.kt-is-tb-resizing * {
     box-shadow: 8px 24px 36px rgba(0, 0, 0, 0.45) !important;
     transform: scale(1.05) rotate(0deg) !important;
     opacity: 0.95;
+}
+
+.kt-postit-note.is-resizing {
+    cursor: nwse-resize !important;
+    box-shadow: 4px 16px 32px rgba(0, 0, 0, 0.42) !important;
+    transition: none !important;
+}
+
+body.kt-is-postit-resizing {
+    cursor: nwse-resize !important;
+    user-select: none !important;
 }
 
 /* Realistic Color Palettes */
@@ -3498,24 +3530,38 @@ body.kt-is-tb-resizing * {
 }
 
 /* Note Textarea */
-.kt-postit-textarea {
+.kt-postit-textarea,
+.kt-postit-textarea:hover,
+.kt-postit-textarea:focus,
+.kt-postit-textarea:active {
     flex: 1;
     width: 100%;
-    border: none;
-    background: transparent;
-    resize: none;
-    font-size: 13.5px;
-    line-height: 1.45;
-    font-family: inherit;
-    color: inherit;
-    outline: none;
-    padding: 0;
-    min-height: 110px;
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    resize: none !important;
+    font-size: 15px;
+    line-height: 1.55;
+    font-family: 'Segoe Print', 'Ink Free', 'Caveat', 'Bradley Hand', 'Chalkboard SE', 'Comic Sans MS', 'Patrick Hand', cursive, sans-serif !important;
+    color: inherit !important;
+    outline: none !important;
+    padding: 4px 6px;
+    min-height: 100px;
+    border-radius: 4px;
+    transition: background-color 0.15s ease;
+}
+
+.kt-postit-textarea:hover {
+    background: rgba(0, 0, 0, 0.035) !important;
+}
+
+.kt-postit-textarea:focus {
+    background: rgba(0, 0, 0, 0.055) !important;
 }
 
 .kt-postit-textarea::placeholder {
     color: inherit;
-    opacity: 0.45;
+    opacity: 0.4;
     font-style: italic;
 }
 
@@ -3525,6 +3571,7 @@ body.kt-is-tb-resizing * {
     justify-content: flex-end;
     align-items: center;
     margin-top: 6px;
+    margin-right: 18px;
     opacity: 0.35;
     transition: opacity 0.15s;
 }

@@ -7375,6 +7375,8 @@ kanban-plugin: basic
         const note = canvas.createDiv(`kt-postit-note note-${pi.color || 'yellow'}`);
         note.style.left = `${pi.x || 50}px`;
         note.style.top = `${pi.y || 50}px`;
+        if (pi.width) note.style.width = `${pi.width}px`;
+        if (pi.height) note.style.height = `${pi.height}px`;
         note.style.transform = `rotate(${pi.rotation || 0}deg)`;
         note.style.zIndex = String(pi.zIndex || 1);
 
@@ -7411,6 +7413,9 @@ kanban-plugin: basic
             placeholder: 'Escreva algo aqui...'
         });
         textarea.value = pi.text || '';
+        if (pi.fontSize) {
+            textarea.style.fontSize = `${pi.fontSize}px`;
+        }
 
         // Auto focus if just created
         if (this.newlyCreatedPostItId === pi.id) {
@@ -7435,6 +7440,25 @@ kanban-plugin: basic
             await this.plugin.saveSettings();
         });
 
+        // Ctrl + Scroll Wheel to Zoom Font Size
+        note.addEventListener('wheel', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const curSize = pi.fontSize || 15;
+                const step = e.deltaY < 0 ? 1 : -1;
+                const newSize = Math.max(10, Math.min(52, curSize + step));
+                pi.fontSize = newSize;
+                textarea.style.fontSize = `${newSize}px`;
+
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(async () => {
+                    await this.plugin.saveSettings();
+                }, 400);
+            }
+        }, { passive: false });
+
         // Color palette switcher in bottom bar of post-it
         const footer = note.createDiv('kt-postit-footer');
         const colorPalette = footer.createDiv('kt-postit-palette');
@@ -7446,6 +7470,68 @@ kanban-plugin: basic
                 await this.plugin.saveSettings();
                 this.render();
             };
+        });
+
+        // Bottom-Right Corner Resize Handle
+        const resizeHandle = note.createDiv('kt-postit-resize-handle');
+        resizeHandle.title = 'Arrastar para redimensionar o post-it';
+
+        let isResizing = false;
+        let rStartX, rStartY;
+        let initialW, initialH;
+
+        resizeHandle.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            isResizing = true;
+            rStartX = e.clientX;
+            rStartY = e.clientY;
+            initialW = note.offsetWidth;
+            initialH = note.offsetHeight;
+
+            // Bring to top while resizing
+            this.maxPostItZIndex = (this.maxPostItZIndex || 10) + 1;
+            pi.zIndex = this.maxPostItZIndex;
+            note.style.zIndex = String(pi.zIndex);
+
+            note.addClass('is-resizing');
+            document.body.addClass('kt-is-postit-resizing');
+
+            const rad = ((pi.rotation || 0) * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+
+            const onPointerMove = (moveEvt) => {
+                if (!isResizing) return;
+                const rawDx = moveEvt.clientX - rStartX;
+                const rawDy = moveEvt.clientY - rStartY;
+
+                // Project mouse movement onto rotated post-it coordinate system
+                const unrotatedDx = rawDx * cos + rawDy * sin;
+                const unrotatedDy = -rawDx * sin + rawDy * cos;
+
+                const newW = Math.max(140, Math.min(900, Math.round(initialW + unrotatedDx)));
+                const newH = Math.max(130, Math.min(900, Math.round(initialH + unrotatedDy)));
+
+                note.style.width = `${newW}px`;
+                note.style.height = `${newH}px`;
+                pi.width = newW;
+                pi.height = newH;
+            };
+
+            const onPointerUp = async () => {
+                if (!isResizing) return;
+                isResizing = false;
+                note.removeClass('is-resizing');
+                document.body.removeClass('kt-is-postit-resizing');
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', onPointerUp);
+                await this.plugin.saveSettings();
+            };
+
+            document.addEventListener('pointermove', onPointerMove);
+            document.addEventListener('pointerup', onPointerUp);
         });
 
         // Dragging the post-it on the canvas
