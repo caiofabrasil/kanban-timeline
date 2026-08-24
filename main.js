@@ -832,6 +832,109 @@ class KanbanParser {
         return lines.join('\n');
     }
 
+    /** Reorder columns in markdown file according to orderedColumnNames */
+    reorderColumns(content, orderedColumnNames) {
+        const lines = content.split('\n');
+        
+        // 1. Separate pre-column lines (lines before the first ## Heading)
+        let firstHeadingIndex = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (/^##\s+/.test(lines[i].trim())) {
+                firstHeadingIndex = i;
+                break;
+            }
+        }
+
+        if (firstHeadingIndex === -1) return content; // No columns found
+
+        const preLines = lines.slice(0, firstHeadingIndex);
+
+        // 2. Identify the footer / settings block (%% kanban:settings ... %%)
+        let settingsIndex = -1;
+        for (let i = firstHeadingIndex; i < lines.length; i++) {
+            if (/^%%\s*kanban:settings/i.test(lines[i].trim())) {
+                settingsIndex = i;
+                break;
+            }
+        }
+
+        const footerLines = settingsIndex !== -1 ? lines.slice(settingsIndex) : [];
+        const columnLinesSlice = settingsIndex !== -1 
+            ? lines.slice(firstHeadingIndex, settingsIndex) 
+            : lines.slice(firstHeadingIndex);
+
+        // 3. Extract each column block
+        const columnBlocks = []; // [{ name, cleanName, lines: [...] }]
+        let currentBlock = null;
+
+        for (let i = 0; i < columnLinesSlice.length; i++) {
+            const line = columnLinesSlice[i];
+            const trimmed = line.trim();
+
+            if (/^##\s+/.test(trimmed)) {
+                if (currentBlock) {
+                    while (currentBlock.lines.length > 0 && currentBlock.lines[currentBlock.lines.length - 1].trim() === '') {
+                        currentBlock.lines.pop();
+                    }
+                    columnBlocks.push(currentBlock);
+                }
+
+                const rawCol = trimmed.replace(/^##\s+/, '').replace(/<!--[\s\S]*?-->/, '').trim();
+                const cleanName = rawCol.toLowerCase().replace(/[\s-_]+/g, '');
+                currentBlock = {
+                    name: rawCol,
+                    cleanName: cleanName,
+                    lines: [line]
+                };
+            } else {
+                if (currentBlock) {
+                    currentBlock.lines.push(line);
+                }
+            }
+        }
+
+        if (currentBlock) {
+            while (currentBlock.lines.length > 0 && currentBlock.lines[currentBlock.lines.length - 1].trim() === '') {
+                currentBlock.lines.pop();
+            }
+            columnBlocks.push(currentBlock);
+        }
+
+        // 4. Assemble columns in requested order
+        const resultLines = [...preLines];
+        if (resultLines.length > 0 && resultLines[resultLines.length - 1].trim() !== '') {
+            resultLines.push('');
+        }
+
+        const placedBlocks = new Set();
+
+        orderedColumnNames.forEach(colName => {
+            const targetClean = colName.trim().toLowerCase().replace(/[\s-_]+/g, '');
+            const blockIndex = columnBlocks.findIndex((b, idx) => !placedBlocks.has(idx) && (b.cleanName === targetClean || b.name.toLowerCase() === colName.toLowerCase()));
+            if (blockIndex !== -1) {
+                placedBlocks.add(blockIndex);
+                resultLines.push(...columnBlocks[blockIndex].lines, '');
+            }
+        });
+
+        // 5. Append any remaining blocks not in orderedColumnNames
+        columnBlocks.forEach((block, idx) => {
+            if (!placedBlocks.has(idx)) {
+                resultLines.push(...block.lines, '');
+            }
+        });
+
+        // 6. Append footer/settings lines
+        if (footerLines.length > 0) {
+            if (resultLines.length > 0 && resultLines[resultLines.length - 1].trim() !== '') {
+                resultLines.push('');
+            }
+            resultLines.push(...footerLines);
+        }
+
+        return resultLines.join('\n');
+    }
+
     /** Move a card block (including subtasks/tags) to another column or position */
     moveCardToColumn(content, cardLineIndex, targetColumnName, targetLineIndex = -1) {
         const lines = content.split('\n');
@@ -5013,6 +5116,48 @@ kanban-plugin: basic
         await this.refresh();
     }
 
+    async reorderKanbanColumn(draggedColName, targetColName, isAfter) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+
+        const allCols = [...this.columns];
+        const findColIdx = (cols, name) => {
+            if (!name) return -1;
+            const clean = name.trim().toLowerCase().replace(/[\s-_]+/g, '');
+            return cols.findIndex(c => c.trim().toLowerCase().replace(/[\s-_]+/g, '') === clean);
+        };
+
+        const draggedIdx = findColIdx(allCols, draggedColName);
+        if (draggedIdx === -1) return;
+
+        const targetIdx = findColIdx(allCols, targetColName);
+        if (targetIdx === -1) return;
+
+        // Actual column name as stored in array
+        const realDraggedCol = allCols[draggedIdx];
+        const realTargetCol = allCols[targetIdx];
+
+        // Remove dragged column from current list
+        allCols.splice(draggedIdx, 1);
+
+        // Find destination in the modified array
+        let insertIdx = findColIdx(allCols, realTargetCol);
+        if (insertIdx === -1) {
+            allCols.push(realDraggedCol);
+        } else {
+            if (isAfter) {
+                insertIdx += 1;
+            }
+            allCols.splice(insertIdx, 0, realDraggedCol);
+        }
+
+        let content = await this.app.vault.read(file);
+        content = this.parser.reorderColumns(content, allCols);
+        await this.app.vault.modify(file, content);
+        new obsidian.Notice(`Coluna "${realDraggedCol}" reordenada`);
+        await this.refresh();
+    }
+
     async toggleCardCompletion(card) {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
@@ -7480,6 +7625,83 @@ kanban-plugin: basic
 
         const lanesWrap = kanbanWrap.createDiv('kt-kanban-lanes-full');
 
+        // Continuous fluid column dragover across the entire lanes container
+        lanesWrap.addEventListener('dragover', (e) => {
+            if (!this.draggedColumn) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const lanes = Array.from(lanesWrap.querySelectorAll('.kt-lane'));
+            if (lanes.length === 0) return;
+
+            const clientX = e.clientX;
+            const draggedIdx = lanes.findIndex(l => l.dataset.columnName === this.draggedColumn);
+            if (draggedIdx === -1) return;
+
+            // Compute center X of each visible lane
+            const midpoints = lanes.map(lane => {
+                const rect = lane.getBoundingClientRect();
+                return rect.left + rect.width / 2;
+            });
+
+            // Find target slot index (from 0 to lanes.length)
+            let targetSlot = 0;
+            while (targetSlot < lanes.length && clientX > midpoints[targetSlot]) {
+                targetSlot++;
+            }
+
+            // Remove existing indicator classes from all lanes
+            lanes.forEach(l => l.classList.remove('kt-col-drop-before', 'kt-col-drop-after'));
+
+            // If targetSlot is draggedIdx or draggedIdx + 1, it represents the column's current position -> no move
+            if (targetSlot === draggedIdx || targetSlot === draggedIdx + 1) {
+                this.columnDropTarget = null;
+                return;
+            }
+
+            if (targetSlot < draggedIdx) {
+                // Moving left: place indicator BEFORE lanes[targetSlot]
+                lanes[targetSlot].classList.add('kt-col-drop-before');
+                this.columnDropTarget = {
+                    targetCol: lanes[targetSlot].dataset.columnName,
+                    isAfter: false
+                };
+            } else {
+                // Moving right: place indicator AFTER lanes[targetSlot - 1]
+                lanes[targetSlot - 1].classList.add('kt-col-drop-after');
+                this.columnDropTarget = {
+                    targetCol: lanes[targetSlot - 1].dataset.columnName,
+                    isAfter: true
+                };
+            }
+        });
+
+        lanesWrap.addEventListener('dragleave', (e) => {
+            if (this.draggedColumn && !lanesWrap.contains(e.relatedTarget)) {
+                lanesWrap.querySelectorAll('.kt-col-drop-before, .kt-col-drop-after')
+                    .forEach(l => l.classList.remove('kt-col-drop-before', 'kt-col-drop-after'));
+                this.columnDropTarget = null;
+            }
+        });
+
+        lanesWrap.addEventListener('drop', async (e) => {
+            if (!this.draggedColumn) return;
+            const draggedCol = this.draggedColumn;
+            const dropTarget = this.columnDropTarget;
+            this.draggedColumn = null;
+            this.columnDropTarget = null;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            lanesWrap.querySelectorAll('.kt-column-is-dragging, .kt-col-drop-before, .kt-col-drop-after')
+                .forEach(el => el.classList.remove('kt-column-is-dragging', 'kt-col-drop-before', 'kt-col-drop-after'));
+
+            if (dropTarget && dropTarget.targetCol && dropTarget.targetCol !== draggedCol) {
+                await this.reorderKanbanColumn(draggedCol, dropTarget.targetCol, dropTarget.isAfter);
+            }
+        });
+
         // Group ALL cards by column (including Done) — only visible columns
         const grouped = {};
         visibleColumns.forEach(col => { grouped[col] = []; });
@@ -7588,12 +7810,82 @@ kanban-plugin: basic
             this.render();
         };
 
+        // Helper to enable dragging columns
+        const setupColumnDrag = (headerEl) => {
+            if (!isFullView) return;
+            headerEl.draggable = true;
+            headerEl.addClass('kt-lane-hdr-draggable');
+            headerEl.title = headerEl.title || `Arraste para reordenar a coluna "${colName}"`;
+
+            headerEl.addEventListener('dragstart', (e) => {
+                if (e.target.closest('button, input, textarea, .kt-lane-collapse-btn, .kt-lane-color-dot, .kt-lane-quick-add, .kt-lane-menu-btn')) {
+                    e.preventDefault();
+                    return;
+                }
+                this.draggedColumn = colName;
+                this.columnDropTarget = null;
+                this.draggedCard = null;
+                e.dataTransfer.setData('text/plain', colName);
+                e.dataTransfer.effectAllowed = 'move';
+                lane.addClass('kt-column-is-dragging');
+            });
+
+            headerEl.addEventListener('dragend', async () => {
+                const draggedCol = this.draggedColumn;
+                const dropTarget = this.columnDropTarget;
+                this.draggedColumn = null;
+                this.columnDropTarget = null;
+
+                document.querySelectorAll('.kt-column-is-dragging, .kt-col-drop-before, .kt-col-drop-after')
+                    .forEach(el => el.classList.remove('kt-column-is-dragging', 'kt-col-drop-before', 'kt-col-drop-after'));
+
+                // Reliable fallback if drop event was not caught by lanesWrap
+                if (draggedCol && dropTarget && dropTarget.targetCol && dropTarget.targetCol !== draggedCol) {
+                    await this.reorderKanbanColumn(draggedCol, dropTarget.targetCol, dropTarget.isAfter);
+                }
+            });
+        };
+
+        // Setup drop for cards (and fallback for columns)
+        lane.addEventListener('dragover', (e) => {
+            if (this.draggedColumn) return; // handled by lanesWrap continuous tracker
+            if (!this.draggedCard) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            lane.classList.add('kt-lane-drop-hover');
+        });
+
+        lane.addEventListener('dragleave', (e) => {
+            if (this.draggedColumn) return;
+            if (!lane.contains(e.relatedTarget)) {
+                lane.classList.remove('kt-lane-drop-hover');
+            }
+        });
+
+        lane.addEventListener('drop', async (e) => {
+            if (this.draggedColumn) return; // handled by lanesWrap
+            if (!this.draggedCard) return;
+            e.preventDefault();
+            e.stopPropagation();
+            lane.classList.remove('kt-lane-drop-hover');
+            document.querySelectorAll('.kt-drop-above, .kt-drop-below').forEach(el => el.classList.remove('kt-drop-above', 'kt-drop-below'));
+
+            const card = this.draggedCard;
+            this.draggedCard = null;
+
+            if (card.column !== colName) {
+                await this.moveCardToColumn(card, colName);
+                await this.refresh();
+            }
+        });
+
         // 1. If Column is Collapsed (Vertical Strip) - only in full view
         if (isCollapsed) {
             lane.title = `Coluna minimizada: ${colName} (${colCards.length} cards) — clique para expandir`;
             lane.onclick = toggleColumnCollapse;
 
             const laneHdr = lane.createDiv('kt-lane-header');
+            setupColumnDrag(laneHdr);
             
             const expandBtn = laneHdr.createSpan({ cls: 'kt-lane-collapse-btn', text: '▶' });
             expandBtn.title = 'Expandir coluna';
@@ -7609,6 +7901,7 @@ kanban-plugin: basic
 
         // 2. Expanded Lane Header
         const laneHdr = lane.createDiv('kt-lane-header');
+        setupColumnDrag(laneHdr);
         if (isFullView) laneHdr.ondblclick = toggleColumnCollapse;
 
         const colorDot = laneHdr.createSpan('kt-lane-color-dot');
@@ -7641,6 +7934,29 @@ kanban-plugin: basic
                 evt.preventDefault();
                 evt.stopPropagation();
                 const menu = new obsidian.Menu();
+
+                const curIdx = this.columns.indexOf(colName);
+                if (curIdx > 0) {
+                    menu.addItem(item => {
+                        item.setTitle('Mover para a Esquerda')
+                            .onClick(async () => {
+                                const targetCol = this.columns[curIdx - 1];
+                                await this.reorderKanbanColumn(colName, targetCol, false);
+                            });
+                    });
+                }
+
+                if (curIdx !== -1 && curIdx < this.columns.length - 1) {
+                    menu.addItem(item => {
+                        item.setTitle('Mover para a Direita')
+                            .onClick(async () => {
+                                const targetCol = this.columns[curIdx + 1];
+                                await this.reorderKanbanColumn(colName, targetCol, true);
+                            });
+                    });
+                }
+
+                menu.addSeparator();
 
                 menu.addItem(item => {
                     item.setTitle('Alterar Cor')
@@ -7696,35 +8012,6 @@ kanban-plugin: basic
 
         // 3. Lane Cards List (Drop Target for dragging cards between columns)
         const laneCards = lane.createDiv('kt-lane-cards');
-
-        lane.addEventListener('dragover', (e) => {
-            if (!this.draggedCard) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            lane.classList.add('kt-lane-drop-hover');
-        });
-
-        lane.addEventListener('dragleave', (e) => {
-            if (!lane.contains(e.relatedTarget)) {
-                lane.classList.remove('kt-lane-drop-hover');
-            }
-        });
-
-        lane.addEventListener('drop', async (e) => {
-            if (!this.draggedCard) return;
-            e.preventDefault();
-            e.stopPropagation();
-            lane.classList.remove('kt-lane-drop-hover');
-            document.querySelectorAll('.kt-drop-above, .kt-drop-below').forEach(el => el.classList.remove('kt-drop-above', 'kt-drop-below'));
-
-            const card = this.draggedCard;
-            this.draggedCard = null;
-
-            if (card.column !== colName) {
-                await this.moveCardToColumn(card, colName);
-                await this.refresh();
-            }
-        });
 
         if (colCards.length === 0) {
             laneCards.createDiv('kt-lane-empty').setText('Sem cards');

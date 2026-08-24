@@ -704,6 +704,74 @@ body.kt-is-resizing * {
     background: color-mix(in srgb, var(--interactive-accent, #6366f1) 7%, var(--background-secondary)) !important;
 }
 
+/* Column Reordering Drag & Drop */
+.kt-lane-hdr-draggable {
+    cursor: grab !important;
+}
+
+.kt-lane-hdr-draggable:active {
+    cursor: grabbing !important;
+}
+
+.kt-lane.kt-column-is-dragging {
+    opacity: 0.25 !important;
+    transform: scale(0.96) !important;
+    border: 2px dashed var(--interactive-accent) !important;
+    box-shadow: none !important;
+}
+
+.kt-lane.kt-col-drop-before,
+.kt-lane.kt-col-drop-after {
+    position: relative !important;
+    overflow: visible !important;
+    outline: 2px solid rgba(var(--color-accent-1, 99, 102, 241), 0.7) !important;
+    outline-offset: -1px;
+    background: color-mix(in srgb, var(--interactive-accent, #6366f1) 12%, var(--background-secondary)) !important;
+}
+
+/* Prominent Glowing Vertical Beam in the gap before the column */
+.kt-lane.kt-col-drop-before::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -10px;
+    width: 6px;
+    background: var(--interactive-accent, #6366f1);
+    border-radius: 6px;
+    box-shadow: 0 0 14px var(--interactive-accent, #6366f1), 0 0 4px #ffffff;
+    z-index: 1000;
+    pointer-events: none;
+    animation: kt-glow-pulse 0.9s ease-in-out infinite alternate;
+}
+
+/* Prominent Glowing Vertical Beam in the gap after the column */
+.kt-lane.kt-col-drop-after::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -10px;
+    width: 6px;
+    background: var(--interactive-accent, #6366f1);
+    border-radius: 6px;
+    box-shadow: 0 0 14px var(--interactive-accent, #6366f1), 0 0 4px #ffffff;
+    z-index: 1000;
+    pointer-events: none;
+    animation: kt-glow-pulse 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes kt-glow-pulse {
+    from {
+        opacity: 0.85;
+        box-shadow: 0 0 8px var(--interactive-accent, #6366f1);
+    }
+    to {
+        opacity: 1;
+        box-shadow: 0 0 20px var(--interactive-accent, #6366f1), 0 0 6px #ffffff;
+    }
+}
+
 .kt-lane-header {
     display: flex;
     align-items: center;
