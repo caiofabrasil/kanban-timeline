@@ -3694,7 +3694,20 @@ kanban-plugin: basic
         };
         kanbanTab.onclick   = () => { this.viewMode = 'kanban';    this.render(); };
         projectsTab.onclick = () => { this.viewMode = 'projects';  this.render(); };
-        habitsTab.onclick   = () => { this.viewMode = 'habits';    this.render(); };
+        habitsTab.onclick   = async () => {
+            this.viewMode = 'habits';
+            this.render();
+            if (this.plugin.settings.awConnected) {
+                const now = Date.now();
+                if (now - (this._lastAwHabitsSync || 0) > 30000) {
+                    this._lastAwHabitsSync = now;
+                    await this.syncActivityWatchHabits();
+                    if (this.viewMode === 'habits') {
+                        this.render();
+                    }
+                }
+            }
+        };
         postItsTab.onclick  = () => { this.viewMode = 'postits';   this.render(); };
 
         // Navigation (for Gantt, Timeblocking & Habits)
@@ -3712,9 +3725,34 @@ kanban-plugin: basic
             const nextBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '›' });
 
             const todayBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-today-btn', text: 'Hoje' });
-            todayBtn.onclick = () => { this.weekOffset = 0; this.selectedDay = new Date(); this.awHabitCache = {}; this.render(); };
-            prevBtn.onclick  = () => { this.weekOffset--; this.awHabitCache = {}; this.render(); };
-            nextBtn.onclick  = () => { this.weekOffset++; this.awHabitCache = {}; this.render(); };
+            todayBtn.onclick = async () => {
+                this.weekOffset = 0;
+                this.selectedDay = new Date();
+                this.awHabitCache = {};
+                this.render();
+                if (this.viewMode === 'habits' && this.plugin.settings.awConnected) {
+                    await this.syncActivityWatchHabits();
+                    if (this.viewMode === 'habits') this.render();
+                }
+            };
+            prevBtn.onclick  = async () => {
+                this.weekOffset--;
+                this.awHabitCache = {};
+                this.render();
+                if (this.viewMode === 'habits' && this.plugin.settings.awConnected) {
+                    await this.syncActivityWatchHabits();
+                    if (this.viewMode === 'habits') this.render();
+                }
+            };
+            nextBtn.onclick  = async () => {
+                this.weekOffset++;
+                this.awHabitCache = {};
+                this.render();
+                if (this.viewMode === 'habits' && this.plugin.settings.awConnected) {
+                    await this.syncActivityWatchHabits();
+                    if (this.viewMode === 'habits') this.render();
+                }
+            };
 
             if (this.plugin.settings.remoteCalendars && this.plugin.settings.remoteCalendars.length > 0) {
                 const syncCalBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-sync-cal-btn', text: '🔄 Agenda' });
@@ -5576,18 +5614,6 @@ kanban-plugin: basic
         const now = new Date();
         const todayStr = getHabitDateKey(now);
 
-        // Pre-fetch / sync AW data for habits with awFilter (async, re-renders when ready)
-        if (this.plugin.settings.awConnected) {
-            const hasAwHabits = (this.plugin.settings.habits || []).some(h => h.type === 'time' && h.awFilter);
-            if (hasAwHabits && !this._isSyncingAwHabits) {
-                this._isSyncingAwHabits = true;
-                this.syncActivityWatchHabits().finally(() => {
-                    this._isSyncingAwHabits = false;
-                    this.render();
-                });
-            }
-        }
-
         const habits = this.plugin.settings.habits || [];
         const logs = this.plugin.settings.habitLogs || {};
 
@@ -5614,6 +5640,23 @@ kanban-plugin: basic
         });
 
         const topActions = topBar.createDiv('kt-habits-top-actions');
+
+        if (this.plugin.settings.awConnected) {
+            const syncAwBtn = topActions.createEl('button', {
+                cls: 'kt-btn-sync-aw',
+                text: '🔄 ActivityWatch'
+            });
+            syncAwBtn.title = 'Sincronizar dados do ActivityWatch para a semana atual';
+            syncAwBtn.onclick = async () => {
+                syncAwBtn.setText('⏳ Sincronizando...');
+                syncAwBtn.disabled = true;
+                await this.syncActivityWatchHabits();
+                syncAwBtn.setText('🔄 ActivityWatch');
+                syncAwBtn.disabled = false;
+                this.render();
+                new obsidian.Notice('✓ Hábitos sincronizados com ActivityWatch!');
+            };
+        }
 
         const newHabitBtn = topActions.createEl('button', {
             cls: 'kt-btn-new-habit mod-cta',

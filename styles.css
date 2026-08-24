@@ -2739,6 +2739,23 @@ body.kt-is-tb-resizing * {
     border-radius: 6px;
 }
 
+.kt-btn-sync-aw {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.kt-btn-sync-aw:hover {
+    background: var(--background-modifier-border);
+    border-color: var(--text-faint);
+}
+
 /* KPI Row */
 .kt-habits-kpi-row {
     display: grid;
