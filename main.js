@@ -793,6 +793,45 @@ class KanbanParser {
         return lines.join('\n');
     }
 
+    /** Delete a column heading and all cards under it */
+    deleteColumn(content, targetColumnName) {
+        const lines = content.split('\n');
+        const targetClean = targetColumnName.trim().toLowerCase().replace(/[\s-_]+/g, '');
+        let startIndex = -1;
+
+        for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trim();
+            if (/^##\s+/.test(trimmed)) {
+                const name = trimmed.replace(/^##\s+/, '').replace(/<!--[\s\S]*?-->/, '').trim();
+                const nameClean = name.toLowerCase().replace(/[\s-_]+/g, '');
+                if (nameClean === targetClean || name.toLowerCase() === targetColumnName.toLowerCase()) {
+                    startIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (startIndex === -1) return content;
+
+        // Find end index (next column heading ## or %% kanban:settings or end of file)
+        let endIndex = startIndex + 1;
+        while (endIndex < lines.length) {
+            const trimmed = lines[endIndex].trim();
+            if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) {
+                break;
+            }
+            endIndex++;
+        }
+
+        // Clean up empty lines before startIndex if any
+        while (startIndex > 0 && lines[startIndex - 1].trim() === '') {
+            startIndex--;
+        }
+
+        lines.splice(startIndex, endIndex - startIndex);
+        return lines.join('\n');
+    }
+
     /** Move a card block (including subtasks/tags) to another column or position */
     moveCardToColumn(content, cardLineIndex, targetColumnName, targetLineIndex = -1) {
         const lines = content.split('\n');
@@ -1196,6 +1235,44 @@ class ConfirmDeleteModal extends obsidian.Modal {
         cancelBtn.onclick = () => this.close();
 
         const confirmBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir definitivamente' });
+        confirmBtn.onclick = async () => {
+            this.close();
+            if (this.onConfirm) await this.onConfirm();
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class ConfirmDeleteColumnModal extends obsidian.Modal {
+    constructor(app, colName, cardCount, onConfirm) {
+        super(app);
+        this.colName = colName;
+        this.cardCount = cardCount;
+        this.onConfirm = onConfirm;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.addClass('kt-confirm-modal');
+        contentEl.createEl('h2', { text: `Excluir coluna "${this.colName}"` });
+        if (this.cardCount > 0) {
+            contentEl.createEl('p', {
+                text: `Esta coluna contém ${this.cardCount} ${this.cardCount === 1 ? 'tarefa' : 'tarefas'}. Deseja realmente excluir permanentemente a coluna e todo o seu conteúdo do arquivo Kanban?`
+            });
+        } else {
+            contentEl.createEl('p', {
+                text: `Deseja realmente excluir permanentemente a coluna "${this.colName}" do arquivo Kanban?`
+            });
+        }
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const confirmBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir Coluna' });
         confirmBtn.onclick = async () => {
             this.close();
             if (this.onConfirm) await this.onConfirm();
@@ -3172,6 +3249,46 @@ class KanbanTimelineSettingsTab extends obsidian.PluginSettingTab {
                     });
                 });
         });
+
+        // Section: Hidden Columns
+        const hiddenCols = this.plugin.settings.hiddenColumns || [];
+        containerEl.createEl('h3', { text: 'Colunas Ocultas' });
+        if (hiddenCols.length === 0) {
+            containerEl.createEl('p', {
+                cls: 'setting-item-description',
+                text: 'Nenhuma coluna está oculta. Para ocultar colunas, use o botão "Ocultar Colunas" na aba Kanban.'
+            });
+        } else {
+            containerEl.createEl('p', {
+                cls: 'setting-item-description',
+                text: 'Colunas ocultas não aparecem na aba Kanban. Clique em "Mostrar" para restaurá-las.'
+            });
+            hiddenCols.forEach(col => {
+                new obsidian.Setting(containerEl)
+                    .setName(col)
+                    .setDesc(`Coluna "${col}" está oculta`)
+                    .addButton(b => {
+                        b.setButtonText('Mostrar')
+                            .setCta()
+                            .onClick(async () => {
+                                this.plugin.settings.hiddenColumns = (this.plugin.settings.hiddenColumns || []).filter(c => c !== col);
+                                await this.plugin.saveSettings();
+                                new obsidian.Notice(`Coluna "${col}" restaurada`);
+                                this.display(); // Re-render settings tab
+                            });
+                    });
+            });
+            new obsidian.Setting(containerEl)
+                .addButton(b => {
+                    b.setButtonText('Mostrar Todas as Colunas')
+                        .onClick(async () => {
+                            this.plugin.settings.hiddenColumns = [];
+                            await this.plugin.saveSettings();
+                            new obsidian.Notice('Todas as colunas restauradas');
+                            this.display();
+                        });
+                });
+        }
     }
 }
 
@@ -4855,6 +4972,45 @@ kanban-plugin: basic
         content = this.parser.addCardToColumn(content, columnName, cardTitle);
         await this.app.vault.modify(file, content);
         new obsidian.Notice(`➕ Card adicionado em "${columnName}"`);
+    }
+
+    async addColumnToKanban(columnName) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+        const lines = content.split('\n');
+
+        // Insert before the %% kanban:settings section if it exists, otherwise at the end
+        const settingsIdx = lines.findIndex(l => /^%%\s*kanban:settings/i.test(l.trim()));
+        if (settingsIdx !== -1) {
+            lines.splice(settingsIdx, 0, '', `## ${columnName}`, '');
+        } else {
+            lines.push('', `## ${columnName}`, '');
+        }
+
+        await this.app.vault.modify(file, lines.join('\n'));
+    }
+
+    async deleteColumnFromKanban(columnName) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+        content = this.parser.deleteColumn(content, columnName);
+        await this.app.vault.modify(file, content);
+
+        // Clean up settings
+        if (this.plugin.settings.hiddenColumns) {
+            this.plugin.settings.hiddenColumns = this.plugin.settings.hiddenColumns.filter(c => c !== columnName);
+        }
+        if (this.plugin.settings.collapsedColumns) {
+            this.plugin.settings.collapsedColumns = this.plugin.settings.collapsedColumns.filter(c => c !== columnName);
+        }
+        if (this.plugin.settings.columnColors && this.plugin.settings.columnColors[columnName]) {
+            delete this.plugin.settings.columnColors[columnName];
+        }
+        await this.plugin.saveSettings();
+        new obsidian.Notice(`Coluna "${columnName}" excluída`);
+        await this.refresh();
     }
 
     async toggleCardCompletion(card) {
@@ -7205,22 +7361,135 @@ kanban-plugin: basic
     renderFullKanban(container) {
         const kanbanWrap = container.createDiv('kt-kanban-full-view');
 
+        const hiddenColumns = this.plugin.settings.hiddenColumns || [];
+        const visibleColumns = this.columns.filter(c => !hiddenColumns.includes(c));
+
         const topBar = kanbanWrap.createDiv('kt-kanban-top-bar');
         const activeCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina');
-        topBar.createDiv('kt-kanban-stats').setText(`${this.columns.length} Colunas • ${activeCards.length} Tarefas no total`);
+        topBar.createDiv('kt-kanban-stats').setText(
+            `${visibleColumns.length} Colunas • ${activeCards.length} Tarefas no total` +
+            (hiddenColumns.length > 0 ? ` • ${hiddenColumns.length} ocultas` : '')
+        );
+
+        const topBarActions = topBar.createDiv('kt-kanban-top-actions');
+
+        // ── Button: Hide columns ───────────────────────────────────────
+        const hideBtn = topBarActions.createEl('button', {
+            cls: 'kt-kanban-action-btn',
+            text: 'Ocultar Colunas'
+        });
+        hideBtn.title = 'Selecione colunas para ocultar da visualização';
+        hideBtn.onclick = (e) => {
+            e.stopPropagation();
+            const menu = new obsidian.Menu();
+
+            const allCols = this.columns.filter(c => c !== 'Rotina');
+            allCols.forEach(col => {
+                const isHidden = hiddenColumns.includes(col);
+                menu.addItem(item => {
+                    item.setTitle(`${isHidden ? '☐' : '☑'} ${col}`)
+                        .onClick(async () => {
+                            if (!this.plugin.settings.hiddenColumns) this.plugin.settings.hiddenColumns = [];
+                            if (isHidden) {
+                                this.plugin.settings.hiddenColumns = this.plugin.settings.hiddenColumns.filter(c => c !== col);
+                                new obsidian.Notice(`Coluna "${col}" visível novamente`);
+                            } else {
+                                this.plugin.settings.hiddenColumns.push(col);
+                                new obsidian.Notice(`Coluna "${col}" ocultada`);
+                            }
+                            await this.plugin.saveSettings();
+                            this.render();
+                        });
+                });
+            });
+
+            if (hiddenColumns.length > 0) {
+                menu.addSeparator();
+                menu.addItem(item => {
+                    item.setTitle('Mostrar todas as colunas')
+                        .onClick(async () => {
+                            this.plugin.settings.hiddenColumns = [];
+                            await this.plugin.saveSettings();
+                            this.render();
+                            new obsidian.Notice('Todas as colunas estão visíveis');
+                        });
+                });
+            }
+
+            menu.showAtMouseEvent(e);
+        };
+
+        // ── Button: Add new column ─────────────────────────────────────
+        const addColBtn = topBarActions.createEl('button', {
+            cls: 'kt-kanban-action-btn kt-kanban-add-col-btn',
+            text: '+ Nova Coluna'
+        });
+        addColBtn.title = 'Criar uma nova coluna no Kanban';
+
+        // Inline form to add a new column (nested inside topBarActions to keep layout aligned)
+        const addColForm = topBarActions.createDiv('kt-add-col-form');
+        addColForm.style.display = 'none';
+
+        const addColInput = addColForm.createEl('input', {
+            cls: 'kt-add-col-input',
+            type: 'text',
+            attr: { placeholder: 'Nome da nova coluna...' }
+        });
+
+        const addColActions = addColForm.createDiv('kt-add-col-actions');
+        const addColConfirm = addColActions.createEl('button', { cls: 'kt-btn-confirm-add', text: 'Criar' });
+        const addColCancel  = addColActions.createEl('button', { cls: 'kt-btn-cancel-add', text: '✕' });
+
+        const openAddColForm = () => {
+            addColBtn.style.display = 'none';
+            addColForm.style.display = 'inline-flex';
+            addColInput.value = '';
+            addColInput.focus();
+        };
+
+        const closeAddColForm = () => {
+            addColForm.style.display = 'none';
+            addColBtn.style.display = '';
+        };
+
+        const submitAddCol = async () => {
+            const colName = addColInput.value.trim();
+            if (!colName) return;
+            if (this.columns.map(c => c.toLowerCase()).includes(colName.toLowerCase())) {
+                new obsidian.Notice(`Já existe uma coluna chamada "${colName}"`);
+                return;
+            }
+            await this.addColumnToKanban(colName);
+            closeAddColForm();
+            new obsidian.Notice(`Coluna "${colName}" criada`);
+            await this.refresh();
+        };
+
+        addColBtn.onclick     = openAddColForm;
+        addColCancel.onclick  = closeAddColForm;
+        addColConfirm.onclick = submitAddCol;
+
+        addColInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                await submitAddCol();
+            } else if (e.key === 'Escape') {
+                closeAddColForm();
+            }
+        });
 
         const lanesWrap = kanbanWrap.createDiv('kt-kanban-lanes-full');
 
-        // Group ALL cards by column (including Done)
+        // Group ALL cards by column (including Done) — only visible columns
         const grouped = {};
-        this.columns.forEach(col => { grouped[col] = []; });
+        visibleColumns.forEach(col => { grouped[col] = []; });
         this.cards.forEach(c => {
             if (c.isEvent || c.column === 'Rotina') return;
-            if (!grouped[c.column]) grouped[c.column] = [];
+            if (!grouped[c.column]) return; // skip cards from hidden columns
             grouped[c.column].push(c);
         });
 
-        this.columns.forEach(colName => {
+        visibleColumns.forEach(colName => {
             const colCards = grouped[colName] || [];
             this.renderKanbanLane(lanesWrap, colName, colCards, true);
         });
@@ -7368,6 +7637,58 @@ kanban-plugin: basic
         quickAddBtn.title = `Adicionar card em ${colName}`;
 
         if (isFullView) {
+            const openColMenu = (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                const menu = new obsidian.Menu();
+
+                menu.addItem(item => {
+                    item.setTitle('Alterar Cor')
+                        .onClick(() => {
+                            new ColumnColorModal(this.app, this.plugin, colName, colColor, () => this.refresh()).open();
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('Ocultar Coluna')
+                        .onClick(async () => {
+                            if (!this.plugin.settings.hiddenColumns) this.plugin.settings.hiddenColumns = [];
+                            if (!this.plugin.settings.hiddenColumns.includes(colName)) {
+                                this.plugin.settings.hiddenColumns.push(colName);
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`Coluna "${colName}" ocultada`);
+                            }
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('Minimizar Coluna')
+                        .onClick(async () => {
+                            await toggleColumnCollapse();
+                        });
+                });
+
+                menu.addSeparator();
+
+                menu.addItem(item => {
+                    item.setTitle('Excluir Coluna')
+                        .onClick(() => {
+                            new ConfirmDeleteColumnModal(this.app, colName, colCards.length, async () => {
+                                await this.deleteColumnFromKanban(colName);
+                            }).open();
+                        });
+                });
+
+                menu.showAtMouseEvent(evt);
+            };
+
+            const menuBtn = laneHdr.createSpan({ cls: 'kt-lane-menu-btn', text: '⋮' });
+            menuBtn.title = `Opções da coluna "${colName}"`;
+            menuBtn.onclick = openColMenu;
+
+            laneHdr.addEventListener('contextmenu', openColMenu);
+
             const collapseBtn = laneHdr.createSpan({ cls: 'kt-lane-collapse-btn', text: '◀' });
             collapseBtn.title = `Minimizar coluna ${colName}`;
             collapseBtn.onclick = toggleColumnCollapse;
@@ -8605,6 +8926,7 @@ const DEFAULT_SETTINGS = {
     ganttDaysMode:         '14',
     autoMoveTodayToInDev:  false,
     collapsedColumns:      [],
+    hiddenColumns:         [],
     projects: [
         { id: 'proj-1', name: 'Projeto Principal', tag: '#Projeto', columns: ['Backlog'], color: '#6366f1', targetHours: 0, hourlyRate: 0, currency: 'R$' },
     ],

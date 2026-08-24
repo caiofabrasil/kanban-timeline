@@ -1236,6 +1236,7 @@ body.kt-is-resizing * {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     margin-bottom: 10px;
     padding-bottom: 6px;
     border-bottom: 1px solid var(--background-modifier-border);
@@ -1246,6 +1247,90 @@ body.kt-is-resizing * {
     font-weight: 600;
     color: var(--text-muted);
 }
+
+/* Kanban top-bar action buttons (Add Column, Hide Columns) */
+.kt-kanban-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-kanban-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.kt-kanban-action-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+}
+
+.kt-kanban-add-col-btn {
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+}
+
+/* Inline "New Column" form in topBarActions */
+.kt-add-col-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    background: var(--background-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--interactive-accent);
+}
+
+.kt-add-col-input {
+    min-width: 160px;
+    padding: 3px 8px;
+    font-size: 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    outline: none;
+}
+
+.kt-add-col-input:focus {
+    border-color: var(--interactive-accent);
+}
+
+.kt-add-col-actions {
+    display: flex;
+    gap: 3px;
+}
+
+.kt-lane-menu-btn {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-faint);
+    padding: 1px 4px;
+    border-radius: 4px;
+    transition: all 0.12s;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.kt-lane-menu-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
 
 .kt-kanban-lanes-full {
     display: flex;
