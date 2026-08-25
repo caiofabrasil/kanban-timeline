@@ -3005,9 +3005,10 @@ class ICalParser {
 // ================================================================
 
 class RemoteEventModal extends obsidian.Modal {
-    constructor(app, event) {
+    constructor(app, event, onHide = null) {
         super(app);
         this.event = event;
+        this.onHide = onHide;
     }
 
     onOpen() {
@@ -3060,6 +3061,18 @@ class RemoteEventModal extends obsidian.Modal {
         }
 
         const footer = contentEl.createDiv('kt-modal-footer');
+        if (this.onHide) {
+            const leftGroup = footer.createDiv('kt-modal-footer-left');
+            const hideBtn = leftGroup.createEl('button', {
+                cls: 'kt-card-del-btn kt-re-hide-btn',
+                text: 'Ocultar evento'
+            });
+            hideBtn.onclick = async () => {
+                this.close();
+                await this.onHide();
+            };
+        }
+
         const rightGroup = footer.createDiv('kt-modal-footer-right');
         const closeBtn = rightGroup.createEl('button', { text: 'Fechar' });
         closeBtn.onclick = () => this.close();
@@ -3369,6 +3382,28 @@ class KanbanTimelineSettingsTab extends obsidian.PluginSettingTab {
                         new obsidian.Notice(`✓ Sincronização concluída: ${count} eventos encontrados.`);
                     });
             });
+
+        if (this.plugin.settings.hiddenRemoteEvents && this.plugin.settings.hiddenRemoteEvents.length > 0) {
+            const hiddenCount = this.plugin.settings.hiddenRemoteEvents.length;
+            new obsidian.Setting(containerEl)
+                .setName('Eventos do Google Agenda Ocultados')
+                .setDesc(`${hiddenCount} evento(s) ou série(s) ocultados manualmente via botão direito no Timeblocking.`)
+                .addButton(b => {
+                    b.setButtonText('Reexibir Todos os Eventos Ocultos')
+                        .onClick(async () => {
+                            this.plugin.settings.hiddenRemoteEvents = [];
+                            await this.plugin.saveSettings();
+                            new obsidian.Notice('Todos os eventos do Google Agenda foram reexibidos!');
+                            this.display();
+                            const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+                            leaves.forEach(leaf => {
+                                if (leaf.view && typeof leaf.view.render === 'function') {
+                                    leaf.view.render();
+                                }
+                            });
+                        });
+                });
+        }
 
         // Section: Cores das Colunas
         containerEl.createEl('h3', { text: '🎨 Cores das Colunas do Kanban' });
@@ -8799,9 +8834,10 @@ kanban-plugin: basic
         const timedCards = dayCards.filter(c => !!getTimeForDay(c, day));
         const remoteEvents = this.getRemoteEventsForDay(day);
         const allDayItems = [...timedCards, ...remoteEvents];
-        const layoutItems = this.computeTimeblockLayout(allDayItems, day);
-        layoutItems.forEach(item => {
-            this.renderTbCard(eventsLayer, item.card, day, dayStart, dayEnd, PX_PER_MIN, item);
+        const layoutMap = this.computeTimeblockLayout(allDayItems, day);
+        allDayItems.forEach(card => {
+            const layoutInfo = layoutMap.get(card.id || card.uid || card.lineIndex);
+            this.renderTbCard(eventsLayer, card, day, dayStart, dayEnd, PX_PER_MIN, layoutInfo);
         });
 
         // 4. Linha de Guia do Horário Atual (Now Indicator - Guiando o olhar no ponto exato do dia)
@@ -8830,11 +8866,61 @@ kanban-plugin: basic
 
     getRemoteEventsForDay(day) {
         if (!this.plugin.remoteEventsCache || this.plugin.remoteEventsCache.length === 0) return [];
-        return this.plugin.remoteEventsCache.filter(evt => sameDay(evt.startDate, day));
+        const hiddenList = this.plugin.settings.hiddenRemoteEvents || [];
+        const dayKey = formatDate(day);
+
+        return this.plugin.remoteEventsCache.filter(evt => {
+            if (!sameDay(evt.startDate, day)) return false;
+
+            const instanceKey = `${evt.calendarId || ''}::${evt.uid || ''}::${dayKey}`;
+            const seriesKey = `${evt.calendarId || ''}::${evt.uid || ''}`;
+
+            if (hiddenList.includes(instanceKey) || 
+                hiddenList.includes(seriesKey) || 
+                (evt.id && hiddenList.includes(evt.id))) {
+                return false;
+            }
+            return true;
+        });
+    }
+
+    async hideRemoteEvent(card, scope = 'single') {
+        if (!this.plugin.settings.hiddenRemoteEvents) {
+            this.plugin.settings.hiddenRemoteEvents = [];
+        }
+
+        const dayKey = formatDate(card.startDate);
+        const instanceKey = `${card.calendarId || ''}::${card.uid || ''}::${dayKey}`;
+        const seriesKey = `${card.calendarId || ''}::${card.uid || ''}`;
+
+        if (scope === 'all' && card.uid) {
+            if (!this.plugin.settings.hiddenRemoteEvents.includes(seriesKey)) {
+                this.plugin.settings.hiddenRemoteEvents.push(seriesKey);
+            }
+            new obsidian.Notice(`Série de eventos "${card.cleanTitle || card.title}" ocultada`);
+        } else {
+            if (!this.plugin.settings.hiddenRemoteEvents.includes(instanceKey)) {
+                this.plugin.settings.hiddenRemoteEvents.push(instanceKey);
+            }
+            if (card.id && !this.plugin.settings.hiddenRemoteEvents.includes(card.id)) {
+                this.plugin.settings.hiddenRemoteEvents.push(card.id);
+            }
+            new obsidian.Notice(`Evento "${card.cleanTitle || card.title}" (${dayKey}) ocultado`);
+        }
+
+        await this.plugin.saveSettings();
+        this.render();
+    }
+
+    async unhideAllRemoteEvents() {
+        this.plugin.settings.hiddenRemoteEvents = [];
+        await this.plugin.saveSettings();
+        new obsidian.Notice('Todos os eventos do Google Agenda foram reexibidos!');
+        this.render();
     }
 
     computeTimeblockLayout(timedCards, day) {
-        if (!timedCards || timedCards.length === 0) return [];
+        if (!timedCards || timedCards.length === 0) return new Map();
 
         const items = timedCards.map(card => {
             const dt = getTimeForDay(card, day);
@@ -8850,46 +8936,39 @@ kanban-plugin: basic
             };
         });
 
-        // 1. Sort by start time ascending, then by duration descending
-        items.sort((a, b) => {
-            if (a.startMin !== b.startMin) return a.startMin - b.startMin;
-            return (b.endMin - b.startMin) - (a.endMin - a.startMin);
-        });
+        // Sort chronologically (earlier start first; longer duration first if same start)
+        items.sort((a, b) => a.startMin - b.startMin || (b.endMin - b.startMin) - (a.endMin - a.startMin));
 
-        // 2. Group into clusters of overlapping events
+        // Group overlapping items into cluster collision groups
         const clusters = [];
-        let currentCluster = [];
+        let curCluster = [];
         let clusterEnd = -1;
 
         for (const item of items) {
-            if (currentCluster.length === 0) {
-                currentCluster.push(item);
+            if (curCluster.length === 0) {
+                curCluster.push(item);
                 clusterEnd = item.endMin;
+            } else if (item.startMin < clusterEnd) {
+                curCluster.push(item);
+                clusterEnd = Math.max(clusterEnd, item.endMin);
             } else {
-                if (item.startMin < clusterEnd) {
-                    currentCluster.push(item);
-                    clusterEnd = Math.max(clusterEnd, item.endMin);
-                } else {
-                    clusters.push(currentCluster);
-                    currentCluster = [item];
-                    clusterEnd = item.endMin;
-                }
+                clusters.push(curCluster);
+                curCluster = [item];
+                clusterEnd = item.endMin;
             }
         }
-        if (currentCluster.length > 0) {
-            clusters.push(currentCluster);
-        }
+        if (curCluster.length > 0) clusters.push(curCluster);
 
-        // 3. Assign non-overlapping columns in each cluster
+        // Assign columns in each cluster
+        const layoutMap = new Map();
         for (const cluster of clusters) {
-            const columns = []; // array of endMin times for each column
-
+            const columns = []; // array of endMin for each column
             for (const item of cluster) {
                 let placed = false;
-                for (let c = 0; c < columns.length; c++) {
-                    if (columns[c] <= item.startMin) {
-                        item.colIndex = c;
-                        columns[c] = item.endMin;
+                for (let col = 0; col < columns.length; col++) {
+                    if (columns[col] <= item.startMin) {
+                        columns[col] = item.endMin;
+                        item.colIndex = col;
                         placed = true;
                         break;
                     }
@@ -8899,14 +8978,14 @@ kanban-plugin: basic
                     columns.push(item.endMin);
                 }
             }
-
             const totalCols = columns.length;
             for (const item of cluster) {
                 item.totalCols = totalCols;
+                layoutMap.set(item.card.id || item.card.uid || item.card.lineIndex, { colIndex: item.colIndex, totalCols });
             }
         }
 
-        return items;
+        return layoutMap;
     }
 
     onSlotClick(h, m, dayCards, day) {
@@ -8986,7 +9065,9 @@ kanban-plugin: basic
         timeLabel.onclick = (e) => {
             e.stopPropagation();
             if (card.isRemoteCalendarEvent) {
-                new RemoteEventModal(this.app, card).open();
+                new RemoteEventModal(this.app, card, async () => {
+                    await this.hideRemoteEvent(card, 'single');
+                }).open();
             } else if (card.isEvent) {
                 new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
                     await this.persistTimeBlock(card, day, ts, te);
@@ -9004,7 +9085,9 @@ kanban-plugin: basic
         titleEl.onclick = (e) => {
             e.stopPropagation();
             if (card.isRemoteCalendarEvent) {
-                new RemoteEventModal(this.app, card).open();
+                new RemoteEventModal(this.app, card, async () => {
+                    await this.hideRemoteEvent(card, 'single');
+                }).open();
             } else if (card.isEvent) {
                 new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
                     await this.persistTimeBlock(card, day, ts, te);
@@ -9090,6 +9173,40 @@ kanban-plugin: basic
             e.stopPropagation();
 
             const menu = new obsidian.Menu();
+
+            if (card.isRemoteCalendarEvent) {
+                menu.addItem(item => {
+                    item.setTitle('Ver detalhes do evento')
+                        .setIcon('calendar')
+                        .onClick(() => {
+                            new RemoteEventModal(this.app, card, async () => {
+                                await this.hideRemoteEvent(card, 'single');
+                            }).open();
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('Ocultar este evento')
+                        .setIcon('eye-off')
+                        .onClick(async () => {
+                            await this.hideRemoteEvent(card, 'single');
+                        });
+                });
+
+                if (card.uid) {
+                    menu.addItem(item => {
+                        item.setTitle('Ocultar toda a série repetida')
+                            .setIcon('calendar-off')
+                            .onClick(async () => {
+                                await this.hideRemoteEvent(card, 'all');
+                            });
+                    });
+                }
+
+                menu.showAtMouseEvent(e);
+                return;
+            }
+
             menu.addItem(item => {
                 item.setTitle('Editar horário')
                     .setIcon('pencil')
@@ -9379,6 +9496,7 @@ const DEFAULT_SETTINGS = {
         'Rotina':           '#8b5cf6',
     },
     remoteCalendars: [],
+    hiddenRemoteEvents: [],
     remoteCalendarAutoSyncMinutes: 15,
     awConnected: false,
     awHost: 'http://127.0.0.1:5600',
@@ -9480,6 +9598,9 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (!this.settings.remoteCalendars) {
             this.settings.remoteCalendars = [];
+        }
+        if (!this.settings.hiddenRemoteEvents) {
+            this.settings.hiddenRemoteEvents = [];
         }
     }
 

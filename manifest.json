@@ -1,7 +1,7 @@
 {
   "id": "kanban-timeline",
   "name": "Kanban Timeline & Timeblocking",
-  "version": "v1.0.1",
+  "version": "1.0.1",
   "minAppVersion": "1.4.0",
   "description": "Cronograma Horizontal (Gantt) e Timeblocking Vertical integrados com o Obsidian Kanban.",
   "author": "Custom",
