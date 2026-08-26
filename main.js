@@ -671,6 +671,9 @@ class KanbanParser {
                 isEvent = true; eventType = 'focus';
             }
 
+            const seriesMatch = rawComment.match(/series:([^\s]+)/i);
+            const seriesId = seriesMatch ? seriesMatch[1] : null;
+
             const tagColor = isEvent ? null : getCardTagColor(tags, customProjects);
             const colColor = isEvent ? null : getColumnColor(currentColumn, { ...customColors, ...colColors }, customProjects);
             const projColor = isEvent ? null : getProjectColor(tags, currentColumn, { ...customColors, ...colColors }, customProjects);
@@ -694,6 +697,7 @@ class KanbanParser {
                 dailyTimes,
                 isEvent,
                 eventType,
+                seriesId,
                 lineIndex:       i,
                 tagColor:        tagColor,
                 projectColor:    isEvent ? null : (projColor || '#6366f1'),
@@ -1210,9 +1214,19 @@ class KanbanParser {
     }
 
     /** Add a new routine/event timeblock to the Kanban file */
-    addTimeEvent(content, title, date, timeStart, timeEnd, eventType = 'break') {
-        const dateStr = formatDate(date);
-        const cardLine = `- [ ] ${title} @{${dateStr}} <!-- tb: ${dateStr} ${timeStart}-${timeEnd} type:${eventType} -->`;
+    addTimeEvent(content, title, date, timeStart, timeEnd, eventType = 'break', seriesId = null) {
+        return this.addTimeEventsBatch(content, [{ title, date, timeStart, timeEnd, eventType, seriesId }]);
+    }
+
+    /** Add multiple routine/event timeblocks to the Kanban file in one batch */
+    addTimeEventsBatch(content, items) {
+        if (!items || items.length === 0) return content;
+
+        const cardLines = items.map(item => {
+            const dateStr = formatDate(item.date);
+            const seriesTag = item.seriesId ? ` series:${item.seriesId}` : '';
+            return `- [ ] ${item.title} @{${dateStr}} <!-- tb: ${dateStr} ${item.timeStart}-${item.timeEnd} type:${item.eventType || 'break'}${seriesTag} -->`;
+        });
 
         const lines = content.split('\n');
         let targetIdx = -1;
@@ -1224,7 +1238,7 @@ class KanbanParser {
         }
 
         if (targetIdx !== -1) {
-            lines.splice(targetIdx + 1, 0, cardLine);
+            lines.splice(targetIdx + 1, 0, ...cardLines);
         } else {
             let settingsIdx = -1;
             for (let i = 0; i < lines.length; i++) {
@@ -1234,12 +1248,93 @@ class KanbanParser {
                 }
             }
             if (settingsIdx !== -1) {
-                lines.splice(settingsIdx, 0, '', '## Rotina', '', cardLine, '');
+                lines.splice(settingsIdx, 0, '', '## Rotina', '', ...cardLines, '');
             } else {
-                lines.push('', '## Rotina', '', cardLine);
+                lines.push('', '## Rotina', '', ...cardLines);
             }
         }
         return lines.join('\n');
+    }
+
+    /** Update all routine/event cards in a recurring series */
+    updateTimeEventSeries(content, seriesId, titleMatch, newTitle, newTimeStart, newTimeEnd, newEventType = null, fromDate = null) {
+        const lines = content.split('\n');
+        const fromDateObj = fromDate ? startOfDay(fromDate) : null;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!/^-\s+\[[ x]\]/.test(line)) continue;
+
+            const hasSeries = seriesId && line.includes(`series:${seriesId}`);
+            const hasTitleMatch = !seriesId && titleMatch && line.includes(titleMatch);
+
+            if (hasSeries || hasTitleMatch) {
+                const dateMatch = line.match(/@\{([\d-]+)/);
+                if (fromDateObj && dateMatch) {
+                    const cardDate = parseDate(dateMatch[1]);
+                    if (cardDate && startOfDay(cardDate) < fromDateObj) continue;
+                }
+
+                let updatedLine = line;
+                if (newTitle && titleMatch && newTitle !== titleMatch) {
+                    updatedLine = updatedLine.replace(titleMatch, newTitle);
+                }
+
+                if (newTimeStart && newTimeEnd) {
+                    const commentMatch = updatedLine.match(/<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/);
+                    if (commentMatch) {
+                        const dateStrMatch = commentMatch[1].match(/\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2}/);
+                        const curDateStr = dateStrMatch ? dateStrMatch[0] : (dateMatch ? dateMatch[1] : '');
+                        const typeMatch = commentMatch[1].match(/type:([^\s]+)/);
+                        const curType = newEventType || (typeMatch ? typeMatch[1] : 'break');
+                        const sId = seriesId || (commentMatch[1].match(/series:([^\s]+)/) || [])[1] || '';
+                        const sIdTag = sId ? ` series:${sId}` : '';
+
+                        const newComment = `<!-- tb: ${curDateStr} ${newTimeStart}-${newTimeEnd} type:${curType}${sIdTag} -->`;
+                        updatedLine = updatedLine.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/, newComment);
+                    }
+                }
+
+                lines[i] = updatedLine;
+            }
+        }
+        return lines.join('\n');
+    }
+
+    /** Delete all routine/event cards in a recurring series */
+    deleteTimeEventSeries(content, seriesId, titleMatch, fromDate = null) {
+        const lines = content.split('\n');
+        const fromDateObj = fromDate ? startOfDay(fromDate) : null;
+        const filtered = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!/^-\s+\[[ x]\]/.test(line)) {
+                filtered.push(line);
+                continue;
+            }
+
+            const hasSeries = seriesId && line.includes(`series:${seriesId}`);
+            const hasTitleMatch = !seriesId && titleMatch && line.includes(titleMatch);
+
+            if (hasSeries || hasTitleMatch) {
+                if (fromDateObj) {
+                    const dateMatch = line.match(/@\{([\d-]+)/);
+                    if (dateMatch) {
+                        const cardDate = parseDate(dateMatch[1]);
+                        if (cardDate && startOfDay(cardDate) < fromDateObj) {
+                            filtered.push(line);
+                            continue;
+                        }
+                    }
+                }
+                // Skip line to delete it
+                continue;
+            }
+
+            filtered.push(line);
+        }
+        return filtered.join('\n');
     }
 
     /** Replace or add a date range metadatum in a card line */
@@ -2503,28 +2598,32 @@ class CustomEventModal extends obsidian.Modal {
     onOpen() {
         const { contentEl, date } = this;
         contentEl.addClass('kt-modal');
-        contentEl.createEl('h2', { text: `➕ Novo Bloco Especial (${formatDate(date)})` });
+        contentEl.createEl('h2', { text: `➕ Novo Bloco / Evento (${formatDate(date)})` });
 
         let titleVal = '☕ Pausa';
         let typeVal  = 'break';
         const startMin = this.defaultHour * 60 + this.defaultMin;
         let startVal = minutesToTime(startMin);
-        let endVal   = minutesToTime(Math.min(23 * 60 + 59, startMin + 30));
+        let endVal   = minutesToTime(Math.min(23 * 60 + 59, startMin + 60));
+
+        let repeatRule = 'none';
+        let repeatWeeks = 4;
+        let customDays = [date.getDay()];
 
         new obsidian.Setting(contentEl)
             .setName('Nome do Bloco')
             .addText(t => {
-                t.setValue(titleVal).setPlaceholder('Ex: Café, Reunião com Cliente, Almoço...');
+                t.setValue(titleVal).setPlaceholder('Ex: Almoço, Reunião com Cliente, Academia...');
                 t.onChange(v => titleVal = v);
             });
 
         new obsidian.Setting(contentEl)
             .setName('Tipo de Visual')
             .addDropdown(d => {
-                d.addOption('break', '☕ Pausa / Descanso / Refeição (Suave)');
-                d.addOption('meeting', '👥 Reunião / Alinhamento (Roxo)');
-                d.addOption('focus', '🎯 Foco / Estudo (Verde)');
-                d.addOption('custom', '📝 Geral / Outro (Neutro)');
+                d.addOption('break', '🍽️ Refeição / ☕ Pausa / Descanso');
+                d.addOption('meeting', '👥 Reunião / Alinhamento');
+                d.addOption('focus', '🎯 Foco / Estudo / Trabalho');
+                d.addOption('custom', '📝 Geral / Outro');
                 d.setValue(typeVal);
                 d.onChange(v => typeVal = v);
             });
@@ -2537,6 +2636,95 @@ class CustomEventModal extends obsidian.Modal {
             .setName('Horário Fim')
             .addText(t => { t.setValue(endVal); t.onChange(v => endVal = v); });
 
+        // Recurrence Setting (Google Calendar style)
+        const dowNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const todayDowName = dowNames[date.getDay()];
+
+        const repeatSetting = new obsidian.Setting(contentEl)
+            .setName('Repetição')
+            .setDesc('Preencher automaticamente em múltiplos dias');
+
+        const customDaysWrap = contentEl.createDiv('kt-custom-days-wrap');
+        customDaysWrap.style.display = 'none';
+        customDaysWrap.style.margin = '4px 0 14px 0';
+        customDaysWrap.style.padding = '8px 12px';
+        customDaysWrap.style.background = 'var(--background-secondary)';
+        customDaysWrap.style.borderRadius = '6px';
+
+        const customDaysTitle = customDaysWrap.createEl('div', { text: 'Repetir em quais dias da semana:', cls: 'kt-custom-days-label' });
+        customDaysTitle.style.fontSize = '12px';
+        customDaysTitle.style.marginBottom = '6px';
+        customDaysTitle.style.color = 'var(--text-muted)';
+
+        const daysBtnRow = customDaysWrap.createDiv('kt-custom-days-row');
+        daysBtnRow.style.display = 'flex';
+        daysBtnRow.style.gap = '6px';
+
+        const dayAbbrs = [
+            { dow: 1, label: 'Seg' },
+            { dow: 2, label: 'Ter' },
+            { dow: 3, label: 'Qua' },
+            { dow: 4, label: 'Qui' },
+            { dow: 5, label: 'Sex' },
+            { dow: 6, label: 'Sáb' },
+            { dow: 0, label: 'Dom' },
+        ];
+
+        dayAbbrs.forEach(dInfo => {
+            const b = daysBtnRow.createEl('button', {
+                text: dInfo.label,
+                cls: `kt-day-select-btn ${customDays.includes(dInfo.dow) ? 'is-active' : ''}`
+            });
+            b.style.padding = '4px 8px';
+            b.style.fontSize = '11.5px';
+            b.onclick = (e) => {
+                e.preventDefault();
+                if (customDays.includes(dInfo.dow)) {
+                    customDays = customDays.filter(x => x !== dInfo.dow);
+                    b.classList.remove('is-active');
+                } else {
+                    customDays.push(dInfo.dow);
+                    b.classList.add('is-active');
+                }
+            };
+        });
+
+        // Horizon setting
+        const horizonSetting = new obsidian.Setting(contentEl)
+            .setName('Duração da Série')
+            .setDesc('Quantas semanas preencher automaticamente')
+            .addDropdown(d => {
+                d.addOption('4', '4 semanas (~1 mês)');
+                d.addOption('8', '8 semanas (~2 meses)');
+                d.addOption('12', '12 semanas (~3 meses)');
+                d.addOption('26', '26 semanas (~6 meses)');
+                d.setValue('4');
+                d.onChange(v => repeatWeeks = parseInt(v, 10) || 4);
+            });
+        horizonSetting.settingEl.style.display = 'none';
+
+        repeatSetting.addDropdown(d => {
+            d.addOption('none', 'Não se repete (Apenas hoje)');
+            d.addOption('daily', 'Todos os dias (Seg a Dom)');
+            d.addOption('weekdays', 'Dias úteis (Segunda a Sexta)');
+            d.addOption('weekly', `Semanalmente (Toda ${todayDowName})`);
+            d.addOption('custom', 'Personalizado (Escolher dias da semana)');
+            d.setValue(repeatRule);
+            d.onChange(v => {
+                repeatRule = v;
+                if (v === 'none') {
+                    customDaysWrap.style.display = 'none';
+                    horizonSetting.settingEl.style.display = 'none';
+                } else if (v === 'custom') {
+                    customDaysWrap.style.display = 'block';
+                    horizonSetting.settingEl.style.display = 'flex';
+                } else {
+                    customDaysWrap.style.display = 'none';
+                    horizonSetting.settingEl.style.display = 'flex';
+                }
+            });
+        });
+
         new obsidian.Setting(contentEl)
             .addButton(b => b.setButtonText('💾 Criar Bloco').setCta().onClick(() => {
                 if (!titleVal.trim()) { new obsidian.Notice('⚠️ Digite um nome para o bloco'); return; }
@@ -2544,7 +2732,7 @@ class CustomEventModal extends obsidian.Modal {
                     new obsidian.Notice('⚠️ Horário inválido. Use HH:mm');
                     return;
                 }
-                this.onSave(titleVal.trim(), startVal, endVal, typeVal);
+                this.onSave(titleVal.trim(), startVal, endVal, typeVal, repeatRule, customDays, repeatWeeks);
                 this.close();
             }))
             .addButton(b => b.setButtonText('Cancelar').onClick(() => this.close()));
@@ -2558,12 +2746,13 @@ class CustomEventModal extends obsidian.Modal {
 // ================================================================
 
 class TimeBlockModal extends obsidian.Modal {
-    constructor(app, card, date, defaultHour, onSave) {
+    constructor(app, card, date, defaultHour, onSave, onDelete) {
         super(app);
         this.card        = card;
         this.date        = date;
         this.defaultHour = defaultHour;
         this.onSave      = onSave;
+        this.onDelete    = onDelete;
     }
 
     onOpen() {
@@ -2575,8 +2764,21 @@ class TimeBlockModal extends obsidian.Modal {
         const pad = n => String(n).padStart(2, '0');
         const dayTime = getTimeForDay(card, date);
 
+        let titleVal = card.title;
         let startVal = dayTime?.timeStart || `${pad(this.defaultHour)}:00`;
         let endVal   = dayTime?.timeEnd   || `${pad(this.defaultHour + 1)}:00`;
+        let applyToAll = false;
+
+        const isRoutineOrEvent = card.isEvent || card.column === 'Rotina' || !!card.seriesId;
+
+        if (isRoutineOrEvent) {
+            new obsidian.Setting(contentEl)
+                .setName('Nome do Evento')
+                .addText(t => {
+                    t.setValue(titleVal);
+                    t.onChange(v => titleVal = v);
+                });
+        }
 
         new obsidian.Setting(contentEl)
             .setName('Início').addText(t => { t.setValue(startVal); t.onChange(v => startVal = v); });
@@ -2584,20 +2786,50 @@ class TimeBlockModal extends obsidian.Modal {
         new obsidian.Setting(contentEl)
             .setName('Fim').addText(t => { t.setValue(endVal); t.onChange(v => endVal = v); });
 
-        new obsidian.Setting(contentEl)
-            .addButton(b => b.setButtonText('Salvar').setCta().onClick(() => {
-                if (!/^\d{2}:\d{2}$/.test(startVal) || !/^\d{2}:\d{2}$/.test(endVal)) {
-                    new obsidian.Notice('Formato inválido. Use HH:mm');
-                    return;
-                }
-                this.onSave(startVal, endVal);
-                this.close();
-            }))
-            .addButton(b => b.setButtonText('Limpar deste dia').setWarning().onClick(() => {
-                this.onSave(null, null);
-                this.close();
-            }))
-            .addButton(b => b.setButtonText('Cancelar').onClick(() => this.close()));
+        if (isRoutineOrEvent) {
+            new obsidian.Setting(contentEl)
+                .setName('Escopo da Alteração')
+                .setDesc('Aplicar alteração neste evento ou em toda a série')
+                .addDropdown(d => {
+                    d.addOption('single', `Apenas neste dia (${dateStr})`);
+                    d.addOption('all', `Toda a série recorrente (${card.title})`);
+                    d.setValue('single');
+                    d.onChange(v => applyToAll = (v === 'all'));
+                });
+        }
+
+        const buttonsRow = new obsidian.Setting(contentEl);
+
+        buttonsRow.addButton(b => b.setButtonText('Salvar').setCta().onClick(() => {
+            if (!/^\d{2}:\d{2}$/.test(startVal) || !/^\d{2}:\d{2}$/.test(endVal)) {
+                new obsidian.Notice('Formato inválido. Use HH:mm');
+                return;
+            }
+            this.onSave(titleVal, startVal, endVal, applyToAll);
+            this.close();
+        }));
+
+        buttonsRow.addButton(b => b.setButtonText('Limpar deste dia').setWarning().onClick(() => {
+            if (this.onDelete) {
+                this.onDelete(false);
+            } else {
+                this.onSave(titleVal, null, null, false);
+            }
+            this.close();
+        }));
+
+        if (isRoutineOrEvent) {
+            buttonsRow.addButton(b => b.setButtonText('Excluir toda a série').setWarning().onClick(() => {
+                new ConfirmDeleteModal(this.app, `toda a série "${card.title}"`, () => {
+                    if (this.onDelete) {
+                        this.onDelete(true);
+                    }
+                    this.close();
+                }).open();
+            }));
+        }
+
+        buttonsRow.addButton(b => b.setButtonText('Cancelar').onClick(() => this.close()));
     }
 
     onClose() { this.contentEl.empty(); }
@@ -3666,16 +3898,95 @@ kanban-plugin: basic
         const endMin   = Math.min(23 * 60 + 59, startMin + durationMins);
         const ts       = minutesToTime(startMin);
         const te       = minutesToTime(endMin);
-        await this.createCustomTimeEvent(title, date, ts, te, eventType);
+        await this.createCustomTimeEvent(title, date, ts, te, eventType, 'none');
     }
 
-    async createCustomTimeEvent(title, date, ts, te, eventType) {
+    async createCustomTimeEvent(title, date, ts, te, eventType, repeatRule = 'none', customDays = [], repeatWeeks = 4) {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
-        const content = await this.app.vault.read(file);
-        const updated = this.parser.addTimeEvent(content, title, date, ts, te, eventType);
-        await this.app.vault.modify(file, updated);
-        new obsidian.Notice(`${title} adicionado (${ts} – ${te})`);
+
+        const items = [];
+        const baseDate = startOfDay(date);
+
+        if (repeatRule === 'none') {
+            items.push({ title, date: baseDate, timeStart: ts, timeEnd: te, eventType });
+        } else {
+            const seriesId = 'series_' + Date.now();
+            const totalDays = repeatWeeks * 7;
+
+            for (let i = 0; i < totalDays; i++) {
+                const curDate = new Date(baseDate);
+                curDate.setDate(curDate.getDate() + i);
+                const dow = curDate.getDay();
+
+                let shouldAdd = false;
+                if (repeatRule === 'daily') {
+                    shouldAdd = true;
+                } else if (repeatRule === 'weekdays') {
+                    shouldAdd = (dow >= 1 && dow <= 5);
+                } else if (repeatRule === 'weekly') {
+                    shouldAdd = (dow === baseDate.getDay());
+                } else if (repeatRule === 'custom') {
+                    shouldAdd = customDays.includes(dow);
+                }
+
+                if (shouldAdd) {
+                    items.push({
+                        title,
+                        date: curDate,
+                        timeStart: ts,
+                        timeEnd: te,
+                        eventType,
+                        seriesId
+                    });
+                }
+            }
+        }
+
+        let content = await this.app.vault.read(file);
+        content = this.parser.addTimeEventsBatch(content, items);
+        await this.app.vault.modify(file, content);
+
+        if (items.length > 1) {
+            new obsidian.Notice(`✓ Criados ${items.length} blocos recorrentes para "${title}" (${ts} – ${te})`);
+        } else {
+            new obsidian.Notice(`✓ ${title} adicionado (${ts} – ${te})`);
+        }
+        await this.refresh();
+    }
+
+    async updateTimeEventSeries(card, day, newTitle, newTs, newTe, applyToAll = false) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+
+        if (!applyToAll) {
+            content = this.parser.updateTimeBlock(content, card.lineIndex, day, newTs, newTe);
+            if (newTitle && newTitle !== card.title) {
+                content = this.parser.saveCardEdit(content, card.lineIndex, newTitle, card.column, card.column, card.startDate, card.endDate);
+            }
+        } else {
+            content = this.parser.updateTimeEventSeries(content, card.seriesId, card.title, newTitle, newTs, newTe, card.eventType, day);
+        }
+
+        await this.app.vault.modify(file, content);
+        new obsidian.Notice('Evento(s) atualizado(s)');
+        await this.refresh();
+    }
+
+    async deleteTimeEventSeries(card, day, deleteAll = false) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+
+        if (!deleteAll) {
+            content = this.parser.deleteCard(content, card.lineIndex);
+        } else {
+            content = this.parser.deleteTimeEventSeries(content, card.seriesId, card.title, day);
+        }
+
+        await this.app.vault.modify(file, content);
+        new obsidian.Notice(deleteAll ? `Série "${card.title}" excluída` : `Evento excluído`);
         await this.refresh();
     }
 
@@ -3903,7 +4214,8 @@ kanban-plugin: basic
     hasActiveDockView(viewKey) {
         const layout = this.getDockLayout();
         const allPanes = this.getAllDockPanes(layout);
-        return allPanes.some(p => p.activeTab === viewKey || p.tabs?.includes(viewKey));
+        if (!allPanes || allPanes.length === 0) return this.viewMode === viewKey;
+        return allPanes.some(p => (p.activeTab || p.tabs?.[0]) === viewKey);
     }
 
     splitDockPane(targetPaneId, direction, newViewMode = null) {
@@ -4450,17 +4762,25 @@ kanban-plugin: basic
             this.plugin.syncAllRemoteCalendars(false);
         }
 
+        this.plugin.settings.timeblockSubView = 'day';
+        this.plugin.saveSettings();
+
         // Activate Timeblocking in layout
         const layout = this.getDockLayout();
         const allPanes = this.getAllDockPanes(layout);
-        const tbPane = allPanes.find(p => p.activeTab === 'timeblock' || p.tabs?.includes('timeblock'));
-        if (tbPane) {
-            tbPane.activeTab = 'timeblock';
-            if (!tbPane.tabs?.includes('timeblock')) tbPane.tabs.push('timeblock');
+        if (allPanes.length === 1) {
+            allPanes[0].activeTab = 'timeblock';
+            allPanes[0].tabs = ['timeblock'];
             this.saveDockLayout(layout);
         } else if (allPanes.length > 0) {
-            allPanes[0].activeTab = 'timeblock';
-            if (!allPanes[0].tabs?.includes('timeblock')) allPanes[0].tabs.push('timeblock');
+            const tbPane = allPanes.find(p => p.activeTab === 'timeblock' || p.tabs?.includes('timeblock'));
+            if (tbPane) {
+                tbPane.activeTab = 'timeblock';
+                if (!tbPane.tabs?.includes('timeblock')) tbPane.tabs.push('timeblock');
+            } else {
+                allPanes[0].activeTab = 'timeblock';
+                if (!allPanes[0].tabs?.includes('timeblock')) allPanes[0].tabs.push('timeblock');
+            }
             this.saveDockLayout(layout);
         }
 
@@ -4477,6 +4797,9 @@ kanban-plugin: basic
             const availableW = (containerWidth || window.innerWidth) - 260;
             const daysCount = Math.max(14, Math.floor(availableW / 75));
             return daysCount;
+        }
+        if (mode === 'month') {
+            return 28;
         }
         return parseInt(mode, 10) || 14;
     }
@@ -4576,39 +4899,69 @@ kanban-plugin: basic
 
             const prevBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '‹' });
 
-            const ws            = this.getWeekStart();
-            const daysDisplayed = this.hasActiveDockView('gantt') ? this.getGanttDays() : 7;
-            const we            = new Date(ws); we.setDate(we.getDate() + (daysDisplayed - 1));
-            const lbl           = nav.createDiv('kt-date-label');
-            lbl.setText(`${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}`);
+            const isGanttActive  = this.hasActiveDockView('gantt');
+            const isTbActive     = this.hasActiveDockView('timeblock');
+            const isHabitsActive = this.hasActiveDockView('habits');
+            const isCalView      = isGanttActive && (this.plugin.settings.cronogramaSubView === 'calendar');
+            const lbl            = nav.createDiv('kt-date-label');
+
+            if (isGanttActive && isCalView) {
+                const mInfo = this.getCalendarGridInfo();
+                lbl.setText(mInfo.monthLabel);
+            } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
+                const targetDay = this.selectedDay || new Date();
+                lbl.setText(this.dayLabel(targetDay, true));
+            } else {
+                const ws            = this.getWeekStart();
+                const daysDisplayed = isGanttActive ? this.getGanttDays() : 7;
+                const we            = new Date(ws); we.setDate(we.getDate() + (daysDisplayed - 1));
+                lbl.setText(`${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}`);
+            }
 
             const nextBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '›' });
 
             const todayBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-today-btn', text: 'Hoje' });
             todayBtn.onclick = async () => {
                 this.weekOffset = 0;
+                this.monthOffset = 0;
                 this.selectedDay = new Date();
                 this.awHabitCache = {};
                 this.render();
-                if (this.hasActiveDockView('habits') && this.plugin.settings.awConnected) {
+                if (isHabitsActive && this.plugin.settings.awConnected) {
                     await this.syncActivityWatchHabits();
                     if (this.hasActiveDockView('habits')) this.render();
                 }
             };
             prevBtn.onclick  = async () => {
-                this.weekOffset--;
+                if (isGanttActive && isCalView && this.plugin.settings.ganttDaysMode === 'month') {
+                    this.monthOffset = (this.monthOffset || 0) - 1;
+                } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
+                    const cur = this.selectedDay || new Date();
+                    const prevD = new Date(cur); prevD.setDate(prevD.getDate() - 1);
+                    this.selectedDay = prevD;
+                } else {
+                    this.weekOffset--;
+                }
                 this.awHabitCache = {};
                 this.render();
-                if (this.hasActiveDockView('habits') && this.plugin.settings.awConnected) {
+                if (isHabitsActive && this.plugin.settings.awConnected) {
                     await this.syncActivityWatchHabits();
                     if (this.hasActiveDockView('habits')) this.render();
                 }
             };
             nextBtn.onclick  = async () => {
-                this.weekOffset++;
+                if (isGanttActive && isCalView && this.plugin.settings.ganttDaysMode === 'month') {
+                    this.monthOffset = (this.monthOffset || 0) + 1;
+                } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
+                    const cur = this.selectedDay || new Date();
+                    const nextD = new Date(cur); nextD.setDate(nextD.getDate() + 1);
+                    this.selectedDay = nextD;
+                } else {
+                    this.weekOffset++;
+                }
                 this.awHabitCache = {};
                 this.render();
-                if (this.hasActiveDockView('habits') && this.plugin.settings.awConnected) {
+                if (isHabitsActive && this.plugin.settings.awConnected) {
                     await this.syncActivityWatchHabits();
                     if (this.hasActiveDockView('habits')) this.render();
                 }
@@ -4626,16 +4979,101 @@ kanban-plugin: basic
             }
         }
 
-        // Period Range Selector (If Gantt view is active)
+        // Sub-view Toggle for Cronograma (Gantt vs Calendar Grid)
+        if (this.hasActiveDockView('gantt')) {
+            const subToggle = tb.createDiv('kt-subview-toggle');
+            const curSub = this.plugin.settings.cronogramaSubView || 'gantt';
+
+            const ganttBtn = subToggle.createEl('button', {
+                cls: `kt-subview-btn ${curSub === 'gantt' ? 'is-active' : ''}`,
+                text: '📊 Gantt'
+            });
+            ganttBtn.title = 'Visualização em barras horizontais contínuas (Gantt)';
+            ganttBtn.onclick = async () => {
+                this.plugin.settings.cronogramaSubView = 'gantt';
+                await this.plugin.saveSettings();
+                this.render();
+            };
+
+            const calBtn = subToggle.createEl('button', {
+                cls: `kt-subview-btn ${curSub === 'calendar' ? 'is-active' : ''}`,
+                text: '📅 Calendário'
+            });
+            calBtn.title = 'Visualização em grade de calendário com cartões (estilo Trello)';
+            calBtn.onclick = async () => {
+                this.plugin.settings.cronogramaSubView = 'calendar';
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        }
+
+        // Sub-view Toggle for Timeblocking (1 Dia vs Semana Multi-Day)
+        if (this.hasActiveDockView('timeblock')) {
+            const subToggle = tb.createDiv('kt-subview-toggle');
+            const curSub = this.plugin.settings.timeblockSubView || 'day';
+
+            const dayBtn = subToggle.createEl('button', {
+                cls: `kt-subview-btn ${curSub === 'day' ? 'is-active' : ''}`,
+                text: '📅 1 Dia'
+            });
+            dayBtn.title = 'Visualização focada no dia selecionado com barra lateral';
+            dayBtn.onclick = async () => {
+                this.plugin.settings.timeblockSubView = 'day';
+                await this.plugin.saveSettings();
+                this.render();
+            };
+
+            const weekBtn = subToggle.createEl('button', {
+                cls: `kt-subview-btn ${curSub === 'week' ? 'is-active' : ''}`,
+                text: '🗓️ Semana'
+            });
+            weekBtn.title = 'Visualização semanal com dias lado a lado (Multi-Day View)';
+            weekBtn.onclick = async () => {
+                this.plugin.settings.timeblockSubView = 'week';
+                await this.plugin.saveSettings();
+                this.render();
+            };
+
+            // Days filter (7d vs 5d / Seg-Sex) when in Week mode
+            if (curSub === 'week') {
+                const daysToggle = tb.createDiv('kt-subview-toggle');
+                const hideW = !!this.plugin.settings.timeblockHideWeekends;
+
+                const d7Btn = daysToggle.createEl('button', {
+                    cls: `kt-subview-btn ${!hideW ? 'is-active' : ''}`,
+                    text: '7d'
+                });
+                d7Btn.title = 'Visualizar todos os 7 dias da semana (Seg a Dom)';
+                d7Btn.onclick = async () => {
+                    this.plugin.settings.timeblockHideWeekends = false;
+                    await this.plugin.saveSettings();
+                    this.render();
+                };
+
+                const d5Btn = daysToggle.createEl('button', {
+                    cls: `kt-subview-btn ${hideW ? 'is-active' : ''}`,
+                    text: '5d (Seg-Sex)'
+                });
+                d5Btn.title = 'Ocultar Sábado e Domingo (Segunda a Sexta)';
+                d5Btn.onclick = async () => {
+                    this.plugin.settings.timeblockHideWeekends = true;
+                    await this.plugin.saveSettings();
+                    this.render();
+                };
+            }
+        }
+
+        // Period Range Selector (If Gantt/Cronograma view is active)
         if (this.hasActiveDockView('gantt')) {
             const rangeSelector = tb.createDiv('kt-range-selector');
             const currentMode   = this.plugin.settings.ganttDaysMode || '14';
 
             const options = [
-                { id: '14',   label: '14d (2 Sem)' },
-                { id: '21',   label: '21d (3 Sem)' },
-                { id: '28',   label: '28d (4 Sem)' },
-                { id: 'auto', label: '⛶ Auto' },
+                { id: '14',    label: '14d (2 Sem)' },
+                { id: '21',    label: '21d (3 Sem)' },
+                { id: '28',    label: '28d (4 Sem)' },
+                { id: 'month', label: '📅 1 Mês' },
+                { id: 'auto',  label: '⛶ Auto' },
             ];
 
             options.forEach(opt => {
@@ -4707,10 +5145,438 @@ kanban-plugin: basic
     }
 
     // ----------------------------------------------------------
-    // GANTT VIEW
+    // CRONOGRAMA VIEW (Gantt & Calendar Grid)
     // ----------------------------------------------------------
 
     renderGantt(container) {
+        const subView = this.plugin.settings.cronogramaSubView || 'gantt';
+        if (subView === 'calendar') {
+            this.renderCalendarGrid(container);
+        } else {
+            this.renderGanttTimeline(container);
+        }
+    }
+
+    getCalendarGridInfo(containerWidth) {
+        const mode = this.plugin.settings.ganttDaysMode || '14';
+        
+        if (mode === 'month') {
+            const now = new Date();
+            const baseMonth = now.getMonth() + (this.monthOffset || 0);
+            const targetDate = new Date(now.getFullYear(), baseMonth, 1);
+            const y = targetDate.getFullYear();
+            const m = targetDate.getMonth();
+
+            const firstDayOfMonth = new Date(y, m, 1);
+            const lastDayOfMonth = new Date(y, m + 1, 0);
+
+            // Monday start: 0=Sun->-6, 1=Mon->0, 2=Tue->-1, etc.
+            const firstDow = firstDayOfMonth.getDay();
+            const startDiff = firstDow === 0 ? -6 : 1 - firstDow;
+            const gridStart = new Date(firstDayOfMonth);
+            gridStart.setDate(gridStart.getDate() + startDiff);
+
+            const days = [];
+            const cur = new Date(gridStart);
+            while (cur <= lastDayOfMonth || days.length % 7 !== 0 || days.length < 28) {
+                days.push(new Date(cur));
+                cur.setDate(cur.getDate() + 1);
+                if (days.length >= 42) break; // Max 6 weeks
+            }
+
+            const weeksCount = Math.ceil(days.length / 7);
+            const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+            const monthLabel = `${monthNames[m]} de ${y}`;
+
+            return {
+                isMonthMode: true,
+                targetDate,
+                monthLabel,
+                targetMonth: m,
+                targetYear: y,
+                days,
+                weeksCount
+            };
+        } else {
+            // Multi-week mode (14d, 21d, 28d, auto)
+            const ws = this.getWeekStart();
+            const rawDays = this.getGanttDays(containerWidth);
+            const weeksCount = Math.max(1, Math.ceil(rawDays / 7));
+            const totalDays = weeksCount * 7;
+
+            const days = [];
+            for (let i = 0; i < totalDays; i++) {
+                const d = new Date(ws);
+                d.setDate(d.getDate() + i);
+                days.push(d);
+            }
+
+            const we = days[days.length - 1];
+            const dateLabel = `${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}`;
+
+            return {
+                isMonthMode: false,
+                targetDate: ws,
+                monthLabel: dateLabel,
+                targetMonth: ws.getMonth(),
+                targetYear: ws.getFullYear(),
+                days,
+                weeksCount
+            };
+        }
+    }
+
+    getMonthGrid(containerWidth) {
+        return this.getCalendarGridInfo(containerWidth);
+    }
+
+    renderCalendarGrid(container) {
+        const monthInfo     = this.getCalendarGridInfo(container.clientWidth || window.innerWidth);
+        const days          = monthInfo.days;
+        const weeksCount    = monthInfo.weeksCount;
+        const scheduled     = this.cards.filter(c => c.startDate && !c.isEvent && !c.isRemoteCalendarEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+        const unscheduled   = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+
+        const calContainer = container.createDiv('kt-cal-container');
+        const calSection = calContainer.createDiv('kt-cal-section');
+
+        // 1. Weekday Headers (Dom, Seg, Ter, Qua, Qui, Sex, Sáb)
+        const weekdaysHdr = calSection.createDiv('kt-cal-weekdays-header');
+        const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        for (let i = 0; i < 7; i++) {
+            const d = days[i];
+            const wday = weekdaysHdr.createDiv('kt-cal-weekday-title');
+            wday.setText(dayNames[d.getDay()]);
+            if (d.getDay() === 0 || d.getDay() === 6) wday.addClass('kt-is-weekend');
+        }
+
+        // 2. Calendar Grid Area by Week Rows (Continuous multi-day bars)
+        const weeksClass = weeksCount <= 2 ? 'kt-weeks-2' : (weeksCount === 3 ? 'kt-weeks-3' : (weeksCount === 4 ? 'kt-weeks-4' : 'kt-weeks-compact'));
+        const gridArea = calSection.createDiv(`kt-cal-grid ${weeksClass}`);
+
+        for (let w = 0; w < weeksCount; w++) {
+            const weekDays = days.slice(w * 7, w * 7 + 7);
+            const weekRow = gridArea.createDiv('kt-cal-week-row');
+
+            // Layer A: Background 7 Day Cells
+            const weekBg = weekRow.createDiv('kt-cal-week-bg');
+            weekDays.forEach((d, colIdx) => {
+                const globalDayIdx = w * 7 + colIdx;
+                const isToday = sameDay(d, new Date());
+                const isWeekend = (d.getDay() === 0 || d.getDay() === 6);
+                const isOtherMonth = d.getMonth() !== monthInfo.targetMonth;
+
+                const dayCell = weekBg.createDiv(`kt-cal-day-cell${isToday ? ' kt-is-today' : ''}${isWeekend ? ' kt-is-weekend' : ''}${isOtherMonth ? ' kt-is-other-month' : ''}`);
+                dayCell.dataset.dayIndex = String(globalDayIdx);
+                dayCell.dataset.date = formatDate(d);
+
+                const cellHdr = dayCell.createDiv('kt-cal-day-header');
+                const numEl = cellHdr.createSpan('kt-cal-day-num');
+                if (d.getDate() === 1 || (w === 0 && colIdx === 0)) {
+                    const monthShorts = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+                    numEl.setText(`${d.getDate()} ${monthShorts[d.getMonth()]}`);
+                } else {
+                    numEl.setText(String(d.getDate()));
+                }
+
+                // Drag & drop directly on day cell
+                dayCell.addEventListener('dragover', (e) => {
+                    if (!this.draggedCard) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    dayCell.classList.add('kt-cal-drop-hover');
+                });
+
+                dayCell.addEventListener('dragleave', (e) => {
+                    if (!dayCell.contains(e.relatedTarget)) {
+                        dayCell.classList.remove('kt-cal-drop-hover');
+                    }
+                });
+
+                dayCell.addEventListener('drop', async (e) => {
+                    if (!this.draggedCard) return;
+                    e.preventDefault();
+                    dayCell.classList.remove('kt-cal-drop-hover');
+
+                    const card = this.draggedCard;
+                    this.draggedCard = null;
+
+                    const targetDate = startOfDay(d);
+                    let durationDays = 0;
+                    if (card.startDate && card.endDate) {
+                        const s = startOfDay(card.startDate);
+                        const end = startOfDay(card.endDate);
+                        durationDays = Math.max(0, Math.round((end.getTime() - s.getTime()) / 86400000));
+                    }
+
+                    const newEndDate = new Date(targetDate);
+                    newEndDate.setDate(newEndDate.getDate() + durationDays);
+
+                    await this.persistDateRange(card, targetDate, newEndDate);
+                    await this.refresh();
+                });
+
+                dayCell.onclick = (e) => {
+                    if (e.target === dayCell || e.target === cellHdr || e.target === numEl) {
+                        this.openDayInTimeblocking(d);
+                    }
+                };
+            });
+
+            // Layer B: Foreground Continuous Events Tracks
+            const weekStart = startOfDay(weekDays[0]);
+            const weekEnd = endOfDay(weekDays[6]);
+
+            const weekCards = scheduled.filter(c => {
+                const s = startOfDay(c.startDate);
+                const e = endOfDay(c.endDate || c.startDate);
+                return e >= weekStart && s <= weekEnd;
+            });
+
+            // Multi-day cards first (longer duration first), then by start date
+            weekCards.sort((a, b) => {
+                const durA = (a.endDate ? a.endDate.getTime() : a.startDate.getTime()) - a.startDate.getTime();
+                const durB = (b.endDate ? b.endDate.getTime() : b.startDate.getTime()) - b.startDate.getTime();
+                if (durB !== durA) return durB - durA;
+                return a.startDate.getTime() - b.startDate.getTime();
+            });
+
+            const tracks = [];
+            const eventsLayer = weekRow.createDiv('kt-cal-week-events-layer');
+
+            weekCards.forEach(card => {
+                const cardStart = startOfDay(card.startDate);
+                const cardEnd = endOfDay(card.endDate || card.startDate);
+
+                let startCol = 0;
+                for (let c = 0; c < 7; c++) {
+                    if (sameDay(weekDays[c], cardStart) || weekDays[c] > cardStart) {
+                        startCol = c;
+                        break;
+                    }
+                }
+                if (cardStart < weekStart) startCol = 0;
+
+                let endCol = 6;
+                for (let c = 6; c >= 0; c--) {
+                    if (sameDay(weekDays[c], cardEnd) || weekDays[c] < cardEnd) {
+                        endCol = c;
+                        break;
+                    }
+                }
+                if (cardEnd > weekEnd) endCol = 6;
+
+                if (startCol > endCol) startCol = endCol;
+                const colSpan = endCol - startCol + 1;
+
+                // Find track
+                let trackIdx = 0;
+                while (true) {
+                    if (!tracks[trackIdx]) {
+                        tracks[trackIdx] = [false, false, false, false, false, false, false];
+                    }
+                    let coll = false;
+                    for (let col = startCol; col <= endCol; col++) {
+                        if (tracks[trackIdx][col]) { coll = true; break; }
+                    }
+                    if (!coll) {
+                        for (let col = startCol; col <= endCol; col++) {
+                            tracks[trackIdx][col] = true;
+                        }
+                        break;
+                    }
+                    trackIdx++;
+                }
+
+                const isStart = cardStart >= weekStart;
+                const isEnd = cardEnd <= weekEnd;
+                const isMultiDay = (card.endDate && !sameDay(card.startDate, card.endDate));
+
+                const bar = eventsLayer.createDiv(`kt-cal-bar${isMultiDay ? ' kt-cal-bar-multi' : ''}${card.isCompleted ? ' is-completed' : ''}`);
+                bar.style.gridColumn = `${startCol + 1} / span ${colSpan}`;
+                bar.style.gridRow = `${trackIdx + 1}`;
+
+                const projColor = card.tagColor || card.projectColor || getCardTagColor(card.tags, this.plugin.settings.projects) || getProjectColor([], card.column, this.plugin.settings.columnColors) || '#6366f1';
+                bar.style.setProperty('--proj-color', projColor);
+
+                if (!isStart) bar.addClass('kt-cal-cont-prev');
+                if (!isEnd) bar.addClass('kt-cal-cont-next');
+
+                // Left resize handle (Drag to adjust start date)
+                if (isStart) {
+                    const handleL = bar.createDiv('kt-cal-bar-handle kt-cal-handle-left');
+                    handleL.title = 'Arrastar para alterar data de início';
+                    this.attachCalendarResize(handleL, 'start', card, days);
+                }
+
+                // Right resize handle (Drag to adjust end date)
+                if (isEnd) {
+                    const handleR = bar.createDiv('kt-cal-bar-handle kt-cal-handle-right');
+                    handleR.title = 'Arrastar para alterar data de término';
+                    this.attachCalendarResize(handleR, 'end', card, days);
+                }
+
+                // Inner wrapper for 1-line card layout: [ ⚪ Checkbox | Título           ⏱ Horas | #Tag ]
+                const innerWrap = bar.createDiv('kt-cal-card-inner');
+                const row = innerWrap.createDiv('kt-cal-card-row');
+
+                // Check circle
+                if (isStart || !isMultiDay) {
+                    const chk = row.createSpan('kt-cal-card-chk');
+                    chk.setText(card.isCompleted ? '✓' : '○');
+                    chk.title = card.isCompleted ? 'Marcar como pendente' : 'Concluir tarefa';
+                    chk.onclick = async (e) => {
+                        e.stopPropagation();
+                        await this.toggleCardCompletion(card);
+                    };
+                }
+
+                const titleEl = row.createDiv('kt-cal-card-title');
+                titleEl.setText(card.title);
+
+                const metaRow = row.createDiv('kt-cal-card-meta-row');
+
+                if (isStart && card.estimateMinutes && card.estimateMinutes > 0) {
+                    const estSpan = metaRow.createSpan('kt-cal-card-est');
+                    estSpan.setText(`⏱ ${card.estimateText}`);
+                }
+
+                if (card.tags && card.tags.length > 0) {
+                    this.renderTagPills(metaRow, card.tags, true);
+                }
+
+                const sStr = formatDate(card.startDate);
+                const eStr = card.endDate ? formatDate(card.endDate) : sStr;
+                bar.title = `${card.title} (${sStr === eStr ? sStr : `${sStr} → ${eStr}`})`;
+
+                // Dragging
+                bar.setAttribute('draggable', 'true');
+                bar.addEventListener('dragstart', (e) => {
+                    this.draggedCard = card;
+                    e.dataTransfer.setData('text/plain', card.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    bar.classList.add('kt-dragging');
+                    document.body.classList.add('kt-is-card-dragging');
+                });
+                bar.addEventListener('dragend', () => {
+                    bar.classList.remove('kt-dragging');
+                    document.body.classList.remove('kt-is-card-dragging');
+                    this.draggedCard = null;
+                });
+
+                bar.onclick = (e) => {
+                    e.stopPropagation();
+                    this.openCardOptionsModal(card, card.startDate);
+                };
+
+                bar.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = new obsidian.Menu();
+                    menu.addItem(item => {
+                        item.setTitle('Abrir detalhes da tarefa')
+                            .setIcon('pencil')
+                            .onClick(() => this.openCardOptionsModal(card, card.startDate));
+                    });
+                    menu.addItem(item => {
+                        item.setTitle(card.isCompleted ? 'Marcar como pendente' : 'Concluir tarefa')
+                            .setIcon(card.isCompleted ? 'check-circle' : 'circle')
+                            .onClick(async () => await this.toggleCardCompletion(card));
+                    });
+                    menu.addItem(item => {
+                        item.setTitle('Remover do cronograma')
+                            .setIcon('calendar-x')
+                            .onClick(async () => {
+                                await this.clearCardDates(card);
+                                await this.refresh();
+                            });
+                    });
+                    menu.showAtMouseEvent(e);
+                });
+            });
+        }
+
+        // 3. Backlog Drawer (Overlay at bottom)
+        this.renderBacklogDrawer(calContainer, unscheduled);
+    }
+
+    attachCalendarResize(handleEl, edgeType, card, allGridDays) {
+        handleEl.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const currentStart = startOfDay(card.startDate);
+            const currentEnd   = startOfDay(card.endDate || card.startDate);
+            let previewStart = new Date(currentStart);
+            let previewEnd   = new Date(currentEnd);
+            let hasMoved     = false;
+
+            document.body.classList.add('kt-is-resizing');
+
+            const onPointerMove = (moveEvt) => {
+                hasMoved = true;
+                const target = document.elementFromPoint(moveEvt.clientX, moveEvt.clientY);
+                const cell = target ? target.closest('.kt-cal-day-cell') : null;
+
+                if (cell && cell.dataset.dayIndex !== undefined) {
+                    const idx = parseInt(cell.dataset.dayIndex, 10);
+                    if (allGridDays[idx]) {
+                        const hoveredDate = startOfDay(allGridDays[idx]);
+
+                        if (edgeType === 'start') {
+                            if (hoveredDate.getTime() <= currentEnd.getTime()) {
+                                previewStart = hoveredDate;
+                                previewEnd   = currentEnd;
+                            } else {
+                                previewStart = currentEnd;
+                                previewEnd   = hoveredDate;
+                            }
+                        } else { // 'end'
+                            if (hoveredDate.getTime() >= currentStart.getTime()) {
+                                previewStart = currentStart;
+                                previewEnd   = hoveredDate;
+                            } else {
+                                previewStart = hoveredDate;
+                                previewEnd   = currentStart;
+                            }
+                        }
+
+                        // Provide visual feedback on day cells
+                        document.querySelectorAll('.kt-cal-day-cell').forEach((cEl) => {
+                            const cIdx = parseInt(cEl.dataset.dayIndex, 10);
+                            if (allGridDays[cIdx]) {
+                                const cDate = startOfDay(allGridDays[cIdx]);
+                                if (cDate >= previewStart && cDate <= previewEnd) {
+                                    cEl.classList.add('kt-cal-resize-hover');
+                                } else {
+                                    cEl.classList.remove('kt-cal-resize-hover');
+                                }
+                            }
+                        });
+                    }
+                }
+            };
+
+            const onPointerUp = async () => {
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', onPointerUp);
+                document.body.classList.remove('kt-is-resizing');
+                document.querySelectorAll('.kt-cal-day-cell').forEach(cEl => cEl.classList.remove('kt-cal-resize-hover'));
+
+                if (hasMoved) {
+                    if (!sameDay(previewStart, card.startDate) || !sameDay(previewEnd, card.endDate || card.startDate)) {
+                        await this.persistDateRange(card, previewStart, previewEnd);
+                        await this.refresh();
+                    }
+                }
+            };
+
+            document.addEventListener('pointermove', onPointerMove);
+            document.addEventListener('pointerup', onPointerUp);
+        });
+    }
+
+    renderGanttTimeline(container) {
         const ws            = this.getWeekStart();
         const daysDisplayed = this.getGanttDays(container.clientWidth || window.innerWidth);
         const scheduled     = this.cards.filter(c => c.startDate && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
@@ -8478,13 +9344,265 @@ kanban-plugin: basic
     }
 
     // ----------------------------------------------------------
-    // TIMEBLOCK VIEW
+    // TIMEBLOCK VIEW (1-Day & Week Multi-Day)
     // ----------------------------------------------------------
 
     renderTimeblock(container) {
-        const split = container.createDiv('kt-tb-split');
-        this.renderTbSidebar(split);
-        this.renderDayGrid(split);
+        const subView = this.plugin.settings.timeblockSubView || 'day';
+        if (subView === 'week') {
+            this.renderWeekTimeblock(container);
+        } else {
+            const split = container.createDiv('kt-tb-split');
+            this.renderTbSidebar(split);
+            this.renderDayGrid(split);
+        }
+    }
+
+    renderWeekTimeblock(container) {
+        const ws          = this.getWeekStart();
+        const dayStart    = this.plugin.settings.dayStart;
+        const dayEnd      = this.plugin.settings.dayEnd;
+        const SLOT_HEIGHT = 36; // px per 30 min
+        const PX_PER_MIN  = SLOT_HEIGHT / 30; // 1.2 px per min
+        const TOTAL_HEIGHT = (dayEnd - dayStart + 1) * 60 * PX_PER_MIN;
+
+        const split = container.createDiv('kt-tb-split kt-tb-week-split');
+
+        // Sidebar with Backlog
+        const sidebar = split.createDiv('kt-tb-sidebar kt-tb-week-sidebar');
+        if (this.savedSidebarScrollTop !== undefined && this.savedSidebarScrollTop !== null) {
+            sidebar.scrollTop = this.savedSidebarScrollTop;
+        }
+
+        // Section: BACKLOG GERAL SEM DATA
+        const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+        sidebar.createEl('p', { cls: 'kt-section-label', text: `📋 BACKLOG GERAL (${unscheduled.length})` });
+        if (unscheduled.length === 0) {
+            const emptyNotice = sidebar.createDiv('kt-empty');
+            emptyNotice.setText('Nenhum card no backlog.');
+        } else {
+            unscheduled.forEach(card => {
+                const c = sidebar.createDiv('kt-sb-card');
+                c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
+                if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
+                c.createDiv('kt-c-title').setText(card.title);
+                const metaRow = c.createDiv('kt-card-meta-row');
+                this.renderTagPills(metaRow, card.tags, true);
+                if (card.estimateMinutes && card.estimateMinutes > 0) {
+                    const estBadge = metaRow.createSpan('kt-card-est-badge');
+                    estBadge.setText(`⏱ ${card.estimateText}`);
+                }
+                c.title = 'Arraste para qualquer dia da semana para agendar horário';
+                c.setAttribute('draggable', 'true');
+
+                c.addEventListener('dragstart', (e) => {
+                    this.draggedCard = card;
+                    e.dataTransfer.setData('text/plain', card.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    c.classList.add('kt-dragging');
+                    document.body.classList.add('kt-is-card-dragging');
+                });
+
+                c.addEventListener('dragend', () => {
+                    c.classList.remove('kt-dragging');
+                    document.body.classList.remove('kt-is-card-dragging');
+                    this.draggedCard = null;
+                });
+
+                c.onclick = () => this.openCardOptionsModal(card);
+            });
+        }
+
+        // Main MultiDayView
+        const main = split.createDiv('kt-tb-main kt-tb-week-main');
+
+        const hideWeekends = !!this.plugin.settings.timeblockHideWeekends;
+        const daysCount   = hideWeekends ? 5 : 7;
+
+        // Week Title Header
+        const we = new Date(ws); we.setDate(we.getDate() + (daysCount - 1));
+        const hdr = main.createDiv('kt-tb-day-header kt-tb-week-day-header');
+        hdr.createEl('span', { cls: 'kt-tb-day-title', text: `Semana: ${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}` });
+
+        // Sticky Header Row for Weekday Columns
+        const headerRow = main.createDiv('kt-tb-week-header-row');
+        headerRow.createDiv('kt-tb-week-axis-spacer'); // Left spacer for time axis
+
+        const headersWrap = headerRow.createDiv('kt-tb-week-headers-wrap');
+        headersWrap.style.gridTemplateColumns = `repeat(${daysCount}, minmax(0, 1fr))`;
+
+        const days = [];
+        for (let i = 0; i < daysCount; i++) {
+            const d = new Date(ws);
+            d.setDate(d.getDate() + i);
+            days.push(d);
+
+            const isToday = sameDay(d, new Date());
+            const isSel = this.selectedDay && sameDay(d, this.selectedDay);
+            const isWeekend = (d.getDay() === 0 || d.getDay() === 6);
+
+            const hdCell = headersWrap.createDiv(`kt-tb-week-hd-cell${isToday ? ' kt-is-today' : ''}${isSel ? ' kt-selected' : ''}${isWeekend ? ' kt-is-weekend' : ''}`);
+            
+            const titleSpan = hdCell.createSpan('kt-tb-week-hd-title');
+            titleSpan.setText(this.dayLabel(d));
+
+            if (isToday) {
+                const todayTag = hdCell.createSpan('kt-tb-today-pill');
+                todayTag.setText('Hoje');
+            }
+            
+            const dayScheduled = this.cards.filter(c => {
+                if (c.isEvent || c.column === 'Rotina') return false;
+                if (!c.startDate) return false;
+                const s = startOfDay(c.startDate);
+                const e = endOfDay(c.endDate || c.startDate);
+                return startOfDay(d) >= s && startOfDay(d) <= e;
+            });
+            if (dayScheduled.length > 0) {
+                const badge = hdCell.createSpan('kt-day-badge');
+                badge.setText(String(dayScheduled.length));
+            }
+
+            hdCell.title = `Clique para abrir ${this.dayLabel(d)} no modo 1 Dia`;
+            hdCell.onclick = () => {
+                this.selectedDay = d;
+                this.plugin.settings.timeblockSubView = 'day';
+                this.plugin.saveSettings();
+                this.render();
+            };
+        }
+
+        // Scroll Area with shared time axis and day columns
+        const scrollArea = main.createDiv('kt-tb-scroll-area kt-tb-week-scroll-area');
+        const schedWrap = scrollArea.createDiv('kt-tb-schedule-wrapper kt-tb-week-sched-wrap');
+
+        // Restore scroll position
+        if (this.savedTbScrollTop !== undefined && this.savedTbScrollTop !== null) {
+            scrollArea.scrollTop = this.savedTbScrollTop;
+            requestAnimationFrame(() => {
+                if (scrollArea) scrollArea.scrollTop = this.savedTbScrollTop;
+            });
+        } else {
+            const now = new Date();
+            const currentH = now.getHours();
+            const targetMin = Math.max(0, (currentH - 1 - dayStart) * 60);
+            scrollArea.scrollTop = targetMin * PX_PER_MIN;
+        }
+
+        // 1. Shared Left Time Axis
+        const timeAxis = schedWrap.createDiv('kt-tb-time-axis kt-tb-week-time-axis');
+        for (let h = dayStart; h <= dayEnd; h++) {
+            const lbl00 = timeAxis.createDiv('kt-tb-hour-lbl');
+            lbl00.setText(`${String(h).padStart(2, '0')}:00`);
+
+            const lbl30 = timeAxis.createDiv('kt-tb-hour-lbl kt-tb-half');
+            lbl30.setText(`${String(h).padStart(2, '0')}:30`);
+        }
+
+        // 2. Multi-Day Columns Container
+        const colsWrap = schedWrap.createDiv('kt-tb-week-cols-wrap');
+        colsWrap.style.height = `${TOTAL_HEIGHT}px`;
+        colsWrap.style.gridTemplateColumns = `repeat(${daysCount}, minmax(0, 1fr))`;
+
+        days.forEach((day) => {
+            const isToday = sameDay(day, new Date());
+            const isWeekend = (day.getDay() === 0 || day.getDay() === 6);
+            const isSel = this.selectedDay && sameDay(day, this.selectedDay);
+
+            const dayCol = colsWrap.createDiv(`kt-tb-week-day-col${isToday ? ' kt-is-today' : ''}${isWeekend ? ' kt-is-weekend' : ''}${isSel ? ' kt-selected' : ''}`);
+            dayCol.style.height = `${TOTAL_HEIGHT}px`;
+
+            // Background Grid Slots with exact lines matching daily view!
+            const slotsLayer = dayCol.createDiv('kt-tb-slots-layer');
+            const dayCards = this.cards.filter(c => {
+                if (!c.startDate) return false;
+                const s = startOfDay(c.startDate);
+                const e = endOfDay(c.endDate || c.startDate);
+                return startOfDay(day) >= s && startOfDay(day) <= e;
+            });
+
+            for (let h = dayStart; h <= dayEnd; h++) {
+                const s00 = slotsLayer.createDiv('kt-tb-slot-line');
+                s00.style.height = `${SLOT_HEIGHT}px`;
+                s00.onclick = () => this.onSlotClick(h, 0, dayCards, day);
+                s00.addEventListener('contextmenu', (e) => this.openSlotContextMenu(e, day, h, 0));
+
+                const s30 = slotsLayer.createDiv('kt-tb-slot-line kt-tb-half-line');
+                s30.style.height = `${SLOT_HEIGHT}px`;
+                s30.onclick = () => this.onSlotClick(h, 30, dayCards, day);
+                s30.addEventListener('contextmenu', (e) => this.openSlotContextMenu(e, day, h, 30));
+            }
+
+            // Events Layer
+            const eventsLayer = dayCol.createDiv('kt-tb-events-layer');
+
+            const timedCards = dayCards.filter(c => !!getTimeForDay(c, day));
+            const remoteEvents = this.getRemoteEventsForDay(day);
+            const allDayItems = [...timedCards, ...remoteEvents];
+
+            const layoutMap = this.computeTimeblockLayout(allDayItems, day);
+            allDayItems.forEach(card => {
+                const layoutInfo = layoutMap.get(card.id || card.uid || card.lineIndex);
+                this.renderTbCard(eventsLayer, card, day, dayStart, dayEnd, PX_PER_MIN, layoutInfo);
+            });
+
+            // Live Now Indicator on current day
+            if (isToday) {
+                const now = new Date();
+                const currentMin = now.getHours() * 60 + now.getMinutes();
+                const startMin = dayStart * 60;
+                const endMin = (dayEnd + 1) * 60;
+                if (currentMin >= startMin && currentMin <= endMin) {
+                    const topPx = (currentMin - startMin) * PX_PER_MIN;
+                    const indicator = eventsLayer.createDiv('kt-tb-now-indicator');
+                    indicator.style.top = `${topPx}px`;
+                    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                    const badge = indicator.createSpan('kt-tb-now-badge');
+                    badge.setText(timeStr);
+                    indicator.createDiv('kt-tb-now-dot');
+                    indicator.createDiv('kt-tb-now-line');
+                }
+            }
+
+            // Drag & Drop on day column
+            dayCol.addEventListener('dragover', (e) => {
+                if (!this.draggedCard) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                dayCol.classList.add('kt-tb-col-drop-hover');
+            });
+            dayCol.addEventListener('dragleave', (e) => {
+                if (!dayCol.contains(e.relatedTarget)) {
+                    dayCol.classList.remove('kt-tb-col-drop-hover');
+                }
+            });
+            dayCol.addEventListener('drop', async (e) => {
+                if (!this.draggedCard) return;
+                e.preventDefault();
+                dayCol.classList.remove('kt-tb-col-drop-hover');
+
+                const rect = dayCol.getBoundingClientRect();
+                const relY = e.clientY - rect.top;
+                const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
+                const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
+                const startMins = totalMinutes % 60;
+
+                const card = this.draggedCard;
+                this.draggedCard = null;
+
+                const estMin = (card.estimateMinutes && card.estimateMinutes > 0) ? card.estimateMinutes : 60;
+                const endTotalMin = startHours * 60 + startMins + estMin;
+                const endHours = Math.floor(endTotalMin / 60);
+                const endMins = endTotalMin % 60;
+
+                const pad = n => String(n).padStart(2, '0');
+                const ts = `${pad(startHours)}:${pad(startMins)}`;
+                const te = `${pad(endHours)}:${pad(endMins)}`;
+
+                await this.persistTimeBlock(card, day, ts, te);
+                await this.refresh();
+            });
+        });
     }
 
     renderTbSidebar(parent) {
@@ -8775,58 +9893,7 @@ kanban-plugin: basic
                 slotLine.onclick = () => this.onSlotClick(h, m, dayCards, day);
 
                 // Clique DIREITO para abrir Menu de Criação de Pausas / Reuniões / Blocos especiais
-                slotLine.addEventListener('contextmenu', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-
-                    const menu = new obsidian.Menu();
-
-                    menu.addItem(item => {
-                        item.setTitle('☕ Pausa / Café (15 min)')
-                            .setIcon('coffee')
-                            .onClick(async () => {
-                                await this.createTimeEvent('☕ Pausa', day, h, m, 15, 'break');
-                            });
-                    });
-
-                    menu.addItem(item => {
-                        item.setTitle('🍽️ Almoço / Refeição (1h)')
-                            .setIcon('utensils')
-                            .onClick(async () => {
-                                await this.createTimeEvent('🍽️ Almoço', day, h, m, 60, 'break');
-                            });
-                    });
-
-                    menu.addItem(item => {
-                        item.setTitle('👥 Reunião (30 min)')
-                            .setIcon('users')
-                            .onClick(async () => {
-                                await this.createTimeEvent('👥 Reunião', day, h, m, 30, 'meeting');
-                            });
-                    });
-
-                    menu.addItem(item => {
-                        item.setTitle('🎯 Bloco de Foco (1h)')
-                            .setIcon('target')
-                            .onClick(async () => {
-                                await this.createTimeEvent('🎯 Bloco de Foco', day, h, m, 60, 'focus');
-                            });
-                    });
-
-                    menu.addSeparator();
-
-                    menu.addItem(item => {
-                        item.setTitle('✍️ Bloco Personalizado...')
-                            .setIcon('plus-circle')
-                            .onClick(() => {
-                                new CustomEventModal(this.app, day, h, m, async (title, start, end, type) => {
-                                    await this.createCustomTimeEvent(title, day, start, end, type);
-                                }).open();
-                            });
-                    });
-
-                    menu.showAtMouseEvent(e);
-                });
+                slotLine.addEventListener('contextmenu', (e) => this.openSlotContextMenu(e, day, h, m));
             });
         }
 
@@ -8862,6 +9929,59 @@ kanban-plugin: basic
                 indicator.createDiv('kt-tb-now-line');
             }
         }
+    }
+
+    openSlotContextMenu(e, day, h, m) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const menu = new obsidian.Menu();
+
+        menu.addItem(item => {
+            item.setTitle('☕ Pausa / Café (15 min)')
+                .setIcon('coffee')
+                .onClick(async () => {
+                    await this.createTimeEvent('☕ Pausa', day, h, m, 15, 'break');
+                });
+        });
+
+        menu.addItem(item => {
+            item.setTitle('🍽️ Almoço / Refeição (1h)')
+                .setIcon('utensils')
+                .onClick(async () => {
+                    await this.createTimeEvent('🍽️ Almoço', day, h, m, 60, 'break');
+                });
+        });
+
+        menu.addItem(item => {
+            item.setTitle('👥 Reunião (30 min)')
+                .setIcon('users')
+                .onClick(async () => {
+                    await this.createTimeEvent('👥 Reunião', day, h, m, 30, 'meeting');
+                });
+        });
+
+        menu.addItem(item => {
+            item.setTitle('🎯 Bloco de Foco (1h)')
+                .setIcon('target')
+                .onClick(async () => {
+                    await this.createTimeEvent('🎯 Bloco de Foco', day, h, m, 60, 'focus');
+                });
+        });
+
+        menu.addSeparator();
+
+        menu.addItem(item => {
+            item.setTitle('✍️ Bloco Personalizado / Recorrente...')
+                .setIcon('plus-circle')
+                .onClick(() => {
+                    new CustomEventModal(this.app, day, h, m, async (title, start, end, type, repeatRule, customDays, repeatWeeks) => {
+                        await this.createCustomTimeEvent(title, day, start, end, type, repeatRule, customDays, repeatWeeks);
+                    }).open();
+                });
+        });
+
+        menu.showAtMouseEvent(e);
     }
 
     getRemoteEventsForDay(day) {
@@ -9058,44 +10178,47 @@ kanban-plugin: basic
         }
 
         // Conteúdo do Card
-        const timeLabel = el.createDiv('kt-tb-card-time');
-        timeLabel.setText(`⏰ ${dayTime.timeStart} – ${dayTime.timeEnd}`);
-        timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : 'Clique para abrir e editar a tarefa';
-        timeLabel.style.cursor = 'pointer';
-        timeLabel.onclick = (e) => {
-            e.stopPropagation();
+        const isRoutineOrEvent = card.isEvent || card.column === 'Rotina' || !!card.seriesId;
+
+        const openEditModal = () => {
             if (card.isRemoteCalendarEvent) {
                 new RemoteEventModal(this.app, card, async () => {
                     await this.hideRemoteEvent(card, 'single');
                 }).open();
-            } else if (card.isEvent) {
-                new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
-                    await this.persistTimeBlock(card, day, ts, te);
-                    await this.refresh();
-                }).open();
+            } else if (isRoutineOrEvent) {
+                new TimeBlockModal(
+                    this.app,
+                    card,
+                    day,
+                    parseInt(dayTime?.timeStart || '9'),
+                    async (newTitle, ts, te, applyToAll) => {
+                        await this.updateTimeEventSeries(card, day, newTitle, ts, te, applyToAll);
+                    },
+                    async (deleteAll) => {
+                        await this.deleteTimeEventSeries(card, day, deleteAll);
+                    }
+                ).open();
             } else {
                 this.openCardOptionsModal(card, day);
             }
         };
 
+        const timeLabel = el.createDiv('kt-tb-card-time');
+        timeLabel.setText(`⏰ ${dayTime.timeStart} – ${dayTime.timeEnd}`);
+        timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para abrir e editar a tarefa');
+        timeLabel.style.cursor = 'pointer';
+        timeLabel.onclick = (e) => {
+            e.stopPropagation();
+            openEditModal();
+        };
+
         const titleEl = el.createDiv('kt-c-title');
         titleEl.setText(card.isRemoteCalendarEvent ? `🗓️ ${card.title}` : (isDone ? `✓ ${card.title}` : card.title));
-        titleEl.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : 'Clique para abrir e editar a tarefa';
+        titleEl.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para abrir e editar a tarefa');
         titleEl.style.cursor = 'pointer';
         titleEl.onclick = (e) => {
             e.stopPropagation();
-            if (card.isRemoteCalendarEvent) {
-                new RemoteEventModal(this.app, card, async () => {
-                    await this.hideRemoteEvent(card, 'single');
-                }).open();
-            } else if (card.isEvent) {
-                new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
-                    await this.persistTimeBlock(card, day, ts, te);
-                    await this.refresh();
-                }).open();
-            } else {
-                this.openCardOptionsModal(card, day);
-            }
+            openEditModal();
         };
 
         if (card.isRemoteCalendarEvent && card.calendarName) {
@@ -9207,28 +10330,56 @@ kanban-plugin: basic
                 return;
             }
 
-            menu.addItem(item => {
-                item.setTitle('Editar horário')
-                    .setIcon('pencil')
-                    .onClick(() => {
-                        new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
-                            await this.persistTimeBlock(card, day, ts, te);
-                            await this.refresh();
-                        }).open();
-                    });
-            });
+            if (isRoutineOrEvent) {
+                menu.addItem(item => {
+                    item.setTitle('✏️ Editar evento / série')
+                        .setIcon('pencil')
+                        .onClick(() => openEditModal());
+                });
 
-            menu.addItem(item => {
-                item.setTitle('Excluir card')
-                    .setIcon('trash')
-                    .setWarning()
-                    .onClick(async () => {
-                        new ConfirmDeleteModal(this.app, card.title, async () => {
-                            await this.deleteCardLine(card.lineIndex);
-                            await this.refresh();
-                        }).open();
-                    });
-            });
+                menu.addItem(item => {
+                    item.setTitle('🗑️ Excluir apenas deste dia')
+                        .setIcon('trash')
+                        .setWarning()
+                        .onClick(async () => {
+                            await this.deleteTimeEventSeries(card, day, false);
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('🗑️ Excluir toda a série')
+                        .setIcon('calendar-x')
+                        .setWarning()
+                        .onClick(() => {
+                            new ConfirmDeleteModal(this.app, `toda a série "${card.title}"`, async () => {
+                                await this.deleteTimeEventSeries(card, day, true);
+                            }).open();
+                        });
+                });
+            } else {
+                menu.addItem(item => {
+                    item.setTitle('Editar horário')
+                        .setIcon('pencil')
+                        .onClick(() => {
+                            new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (newTitle, ts, te) => {
+                                await this.persistTimeBlock(card, day, ts, te);
+                                await this.refresh();
+                            }).open();
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('Excluir card')
+                        .setIcon('trash')
+                        .setWarning()
+                        .onClick(async () => {
+                            new ConfirmDeleteModal(this.app, card.title, async () => {
+                                await this.deleteCardLine(card.lineIndex);
+                                await this.refresh();
+                            }).open();
+                        });
+                });
+            }
 
             menu.showAtMouseEvent(e);
         });
@@ -9497,6 +10648,9 @@ const DEFAULT_SETTINGS = {
     },
     remoteCalendars: [],
     hiddenRemoteEvents: [],
+    cronogramaSubView: 'gantt',
+    timeblockSubView: 'day',
+    timeblockHideWeekends: false,
     remoteCalendarAutoSyncMinutes: 15,
     awConnected: false,
     awHost: 'http://127.0.0.1:5600',
@@ -9601,6 +10755,15 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (!this.settings.hiddenRemoteEvents) {
             this.settings.hiddenRemoteEvents = [];
+        }
+        if (!this.settings.cronogramaSubView) {
+            this.settings.cronogramaSubView = 'gantt';
+        }
+        if (!this.settings.timeblockSubView) {
+            this.settings.timeblockSubView = 'day';
+        }
+        if (this.settings.timeblockHideWeekends === undefined) {
+            this.settings.timeblockHideWeekends = false;
         }
     }
 
