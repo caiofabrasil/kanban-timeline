@@ -5544,3 +5544,493 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     border-color: var(--interactive-accent) !important;
     font-weight: 700;
 }
+
+/* ================================================================
+   PROJECT REPORT MODAL (DISCRIMINADO & EXPORTAÇÃO PARA O CHEFE)
+   ================================================================ */
+
+.kt-report-modal-wrapper {
+    background: var(--background-primary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+.kt-report-modal {
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    color: var(--text-normal);
+}
+
+.kt-report-header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-report-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-report-proj-badge {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.kt-report-color-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+}
+
+.kt-report-proj-title {
+    margin: 0 !important;
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    color: var(--text-normal) !important;
+}
+
+.kt-report-tag-pill {
+    background: var(--background-modifier-hover);
+    color: var(--text-accent);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.kt-report-close-btn {
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+}
+
+.kt-report-close-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+/* Report Filter Bar */
+.kt-report-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+}
+
+.kt-report-btn-group {
+    display: flex;
+    align-items: center;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 3px;
+}
+
+.kt-report-filter-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-report-filter-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-filter-btn.is-active {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent, #ffffff) !important;
+    font-weight: 700;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* KPI Summary Cards */
+.kt-report-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.kt-report-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.kt-report-kpi-card.kt-kpi-green {
+    background: var(--background-secondary);
+    border-color: var(--background-modifier-border);
+}
+
+.kt-report-kpi-card.kt-kpi-green .kt-report-kpi-val {
+    color: var(--text-accent);
+}
+
+.kt-report-kpi-val {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-normal);
+    line-height: 1.2;
+}
+
+.kt-report-kpi-lbl {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+/* Actions Bar (Copy & Export) */
+.kt-report-actions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+}
+
+.kt-report-act-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+.kt-report-act-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+}
+
+.kt-btn-whatsapp {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent, #ffffff) !important;
+    border-color: var(--interactive-accent) !important;
+    font-weight: 600;
+}
+
+.kt-btn-whatsapp:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+/* Itemized Breakdown Section */
+.kt-report-breakdown-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 48vh;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.kt-report-breakdown-hdr h3 {
+    margin: 0 !important;
+    font-size: 12px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.kt-report-breakdown-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.kt-report-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    background: var(--background-secondary);
+    border-radius: 8px;
+    border: 1px dashed var(--background-modifier-border);
+}
+
+/* Day Blocks (Grouped by Date) */
+.kt-report-day-block {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.kt-report-day-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--background-secondary-alt);
+    border-bottom: 1px solid var(--background-modifier-border);
+    font-weight: 600;
+    font-size: 12.5px;
+}
+
+.kt-report-day-title {
+    color: var(--text-normal);
+}
+
+.kt-report-day-metrics {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-report-day-hours {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.kt-report-day-val {
+    background: var(--background-modifier-hover);
+    color: var(--text-accent);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.kt-report-day-items {
+    display: flex;
+    flex-direction: column;
+}
+
+.kt-report-item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    gap: 12px;
+    transition: background-color 0.1s ease;
+}
+
+.kt-report-item-row:last-child {
+    border-bottom: none;
+}
+
+.kt-report-item-row:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-item-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-report-item-chk {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.kt-report-item-row.is-done .kt-report-item-chk {
+    color: var(--text-accent);
+}
+
+.kt-report-item-time-range {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 500;
+    background: var(--background-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    flex-shrink: 0;
+}
+
+.kt-report-item-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-normal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-report-item-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.kt-report-item-col {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--background-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.kt-report-item-dur {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-report-item-earned {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-accent);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.kt-report-item-status {
+    font-size: 10.5px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--background-modifier-hover);
+    color: var(--text-muted);
+}
+
+.kt-report-item-status.is-done {
+    color: var(--text-accent);
+}
+
+/* Task Blocks (Grouped by Task) */
+.kt-report-task-block {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-report-task-block:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-task-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 12px;
+}
+
+.kt-report-task-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-report-task-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-normal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-report-task-dates {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--background-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    flex-shrink: 0;
+}
+
+.kt-report-task-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* ================================================================
+   QUICK CREATE TASK MODAL (TIMEBLOCKING EMPTY SLOT CLICK)
+   ================================================================ */
+
+.kt-quick-create-modal {
+    background: var(--background-primary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+.kt-quick-create-input {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    transition: all 0.15s ease;
+    box-sizing: border-box;
+}
+
+.kt-quick-create-input:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.25);
+    background: var(--background-primary);
+}
+
+.kt-untimed-quick-select-wrap {
+    border: 1px dashed var(--background-modifier-border);
+    transition: border-color 0.15s ease;
+}
+
+.kt-untimed-quick-select-wrap:hover {
+    border-color: var(--interactive-accent);
+}
+

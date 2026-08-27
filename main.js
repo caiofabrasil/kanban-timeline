@@ -2097,6 +2097,541 @@ class ProjectModal extends obsidian.Modal {
 }
 
 // ================================================================
+// PROJECT REPORT MODAL (Discriminado de Horas, Tarefas e Datas para Enviar ao Chefe)
+// ================================================================
+
+class ProjectReportModal extends obsidian.Modal {
+    constructor(app, plugin, project, cards, view) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.project = project;
+        this.cards = cards || [];
+        this.view = view;
+        this.periodFilter = 'all'; // 'all', 'month', 'week', 'today'
+        this.statusFilter = 'all'; // 'all', 'done', 'pending'
+        this.groupMode = 'date';   // 'date', 'task'
+    }
+
+    onOpen() {
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-report-modal-wrapper');
+        this.modalEl.style.width = '820px';
+        this.modalEl.style.maxWidth = '94vw';
+        this.modalEl.style.maxHeight = '90vh';
+        this.renderModal();
+    }
+
+    getReportEntries() {
+        const project = this.project;
+        const projTag = (project.tag || '').trim().toLowerCase().replace(/^#/, '');
+        const projCols = (project.columns || []).map(c => c.toLowerCase());
+        const excludedSet = new Set(project.excludedTaskTitles || []);
+
+        const matchingCards = this.cards.filter(c => {
+            if (c.isEvent || c.column === 'Rotina') return false;
+            const hasTag = projTag && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
+            const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
+            const hasTitleTag = projTag && c.title.toLowerCase().includes('#' + projTag);
+            return hasTag || inCol || hasTitleTag;
+        });
+
+        const now = new Date();
+        const startOfThisWeek = this.view ? this.view.getWeekStart() : startOfWeek(now);
+        const endOfThisWeek = new Date(startOfThisWeek);
+        endOfThisWeek.setDate(endOfThisWeek.getDate() + 7);
+
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        const entries = [];
+
+        matchingCards.forEach(c => {
+            const isDone = c.isCompleted || c.column === 'Done' || isIgnoredColumn(c.column);
+            const isExcluded = excludedSet.has(c.title.trim());
+            if (isExcluded) return; // Skip excluded tasks
+
+            if (this.statusFilter === 'done' && !isDone) return;
+            if (this.statusFilter === 'pending' && isDone) return;
+
+            const dKeys = Object.keys(c.dailyTimes || {});
+            if (dKeys.length > 0) {
+                for (const dKey of dKeys) {
+                    const dt = c.dailyTimes[dKey];
+                    const slotDate = parseDate(dKey);
+                    
+                    if (slotDate) {
+                        if (this.periodFilter === 'today' && !sameDay(slotDate, now)) continue;
+                        if (this.periodFilter === 'week' && (slotDate < startOfThisWeek || slotDate >= endOfThisWeek)) continue;
+                        if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) continue;
+                    }
+
+                    if (dt.timeStart && dt.timeEnd) {
+                        const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                        if (dur > 0) {
+                            entries.push({
+                                card: c,
+                                title: c.title,
+                                dateStr: dKey,
+                                dateObj: slotDate || now,
+                                timeStart: dt.timeStart,
+                                timeEnd: dt.timeEnd,
+                                durationMinutes: dur,
+                                isDone,
+                                column: c.column
+                            });
+                        }
+                    }
+                }
+            } else if (c.timeStart && c.timeEnd) {
+                const dur = timeToMinutes(c.timeEnd) - timeToMinutes(c.timeStart);
+                if (dur > 0) {
+                    const slotDate = c.startDate ? startOfDay(c.startDate) : null;
+                    if (slotDate) {
+                        if (this.periodFilter === 'today' && !sameDay(slotDate, now)) return;
+                        if (this.periodFilter === 'week' && (slotDate < startOfThisWeek || slotDate >= endOfThisWeek)) return;
+                        if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) return;
+                    }
+
+                    entries.push({
+                        card: c,
+                        title: c.title,
+                        dateStr: slotDate ? formatDate(slotDate) : 'Geral',
+                        dateObj: slotDate || now,
+                        timeStart: c.timeStart,
+                        timeEnd: c.timeEnd,
+                        durationMinutes: dur,
+                        isDone,
+                        column: c.column
+                    });
+                }
+            } else if (c.estimateMinutes && c.estimateMinutes > 0) {
+                const slotDate = c.startDate ? startOfDay(c.startDate) : null;
+                if (slotDate) {
+                    if (this.periodFilter === 'today' && !sameDay(slotDate, now)) return;
+                    if (this.periodFilter === 'week' && (slotDate < startOfThisWeek || slotDate >= endOfThisWeek)) return;
+                    if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) return;
+                } else if (this.periodFilter !== 'all') {
+                    return;
+                }
+
+                entries.push({
+                    card: c,
+                    title: c.title,
+                    dateStr: slotDate ? formatDate(slotDate) : 'Sem data',
+                    dateObj: slotDate || new Date(0),
+                    timeStart: null,
+                    timeEnd: null,
+                    durationMinutes: c.estimateMinutes,
+                    isDone,
+                    column: c.column
+                });
+            } else {
+                if (this.periodFilter === 'all') {
+                    const slotDate = c.startDate ? startOfDay(c.startDate) : null;
+                    entries.push({
+                        card: c,
+                        title: c.title,
+                        dateStr: slotDate ? formatDate(slotDate) : 'Sem data',
+                        dateObj: slotDate || new Date(0),
+                        timeStart: null,
+                        timeEnd: null,
+                        durationMinutes: 0,
+                        isDone,
+                        column: c.column
+                    });
+                }
+            }
+        });
+
+        // Sort descending by date (most recent first)
+        entries.sort((a, b) => {
+            const timeA = a.dateObj ? a.dateObj.getTime() : 0;
+            const timeB = b.dateObj ? b.dateObj.getTime() : 0;
+            if (timeB !== timeA) return timeB - timeA;
+            if (a.timeStart && b.timeStart) return a.timeStart.localeCompare(b.timeStart);
+            return a.title.localeCompare(b.title);
+        });
+
+        return entries;
+    }
+
+    renderModal() {
+        const { contentEl, project } = this;
+        contentEl.empty();
+        contentEl.addClass('kt-report-modal');
+
+        const entries = this.getReportEntries();
+        const totalMinutes = entries.reduce((acc, e) => acc + (e.durationMinutes || 0), 0);
+        const totalEarnings = (totalMinutes / 60) * (project.hourlyRate || 0);
+        const doneCount = entries.filter(e => e.isDone).length;
+        const totalTasks = entries.length;
+        const curr = project.currency || 'R$';
+
+        // 1. Top Header Banner
+        const topHdr = contentEl.createDiv('kt-report-header');
+        
+        const titleRow = topHdr.createDiv('kt-report-title-row');
+        const projBadge = titleRow.createDiv('kt-report-proj-badge');
+        const dot = projBadge.createSpan('kt-report-color-dot');
+        dot.style.backgroundColor = project.color || '#6366f1';
+        projBadge.createEl('h2', { cls: 'kt-report-proj-title', text: `Relatório de Horas: ${project.name}` });
+        if (project.tag) {
+            projBadge.createSpan({ cls: 'kt-report-tag-pill', text: project.tag });
+        }
+
+        const closeBtn = titleRow.createEl('button', { cls: 'kt-report-close-btn', text: '✕' });
+        closeBtn.title = 'Fechar Relatório (Esc)';
+        closeBtn.onclick = () => this.close();
+
+        // 2. Filter Bar (Período, Status, Agrupamento)
+        const filterBar = contentEl.createDiv('kt-report-filter-bar');
+
+        // Period filter group
+        const periodGrp = filterBar.createDiv('kt-report-btn-group');
+        const periods = [
+            { id: 'all', label: 'Tudo' },
+            { id: 'month', label: 'Este Mês' },
+            { id: 'week', label: 'Esta Semana' },
+            { id: 'today', label: 'Hoje' }
+        ];
+        periods.forEach(p => {
+            const btn = periodGrp.createEl('button', {
+                cls: `kt-report-filter-btn ${this.periodFilter === p.id ? 'is-active' : ''}`,
+                text: p.label
+            });
+            btn.onclick = () => {
+                this.periodFilter = p.id;
+                this.renderModal();
+            };
+        });
+
+        // Status filter group
+        const statusGrp = filterBar.createDiv('kt-report-btn-group');
+        const statuses = [
+            { id: 'all', label: 'Todas' },
+            { id: 'done', label: 'Concluídas' },
+            { id: 'pending', label: 'Pendentes' }
+        ];
+        statuses.forEach(s => {
+            const btn = statusGrp.createEl('button', {
+                cls: `kt-report-filter-btn ${this.statusFilter === s.id ? 'is-active' : ''}`,
+                text: s.label
+            });
+            btn.onclick = () => {
+                this.statusFilter = s.id;
+                this.renderModal();
+            };
+        });
+
+        // Grouping toggle group
+        const groupGrp = filterBar.createDiv('kt-report-btn-group');
+        const groups = [
+            { id: 'date', label: 'Por Data' },
+            { id: 'task', label: 'Por Tarefa' }
+        ];
+        groups.forEach(g => {
+            const btn = groupGrp.createEl('button', {
+                cls: `kt-report-filter-btn ${this.groupMode === g.id ? 'is-active' : ''}`,
+                text: g.label
+            });
+            btn.onclick = () => {
+                this.groupMode = g.id;
+                this.renderModal();
+            };
+        });
+
+        // 3. KPI Summary Row
+        const kpiRow = contentEl.createDiv('kt-report-kpi-row');
+
+        const kpi1 = kpiRow.createDiv('kt-report-kpi-card');
+        kpi1.createDiv('kt-report-kpi-val').setText(formatMinutesToHours(totalMinutes) || '0h');
+        kpi1.createDiv('kt-report-kpi-lbl').setText(`Total de Horas (${(totalMinutes / 60).toFixed(2)}h)`);
+
+        if (project.hourlyRate > 0) {
+            const kpi2 = kpiRow.createDiv('kt-report-kpi-card kt-kpi-green');
+            kpi2.createDiv('kt-report-kpi-val').setText(formatCurrency(totalEarnings, curr));
+            kpi2.createDiv('kt-report-kpi-lbl').setText(`Valor Total (${curr} ${project.hourlyRate}/h)`);
+        }
+
+        const kpi3 = kpiRow.createDiv('kt-report-kpi-card');
+        const pctDone = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0;
+        kpi3.createDiv('kt-report-kpi-val').setText(`${doneCount} / ${totalTasks} (${pctDone}%)`);
+        kpi3.createDiv('kt-report-kpi-lbl').setText('Tarefas Concluídas');
+
+        // 4. Action Export Buttons (Pronto para enviar ao chefe)
+        const actionsBar = contentEl.createDiv('kt-report-actions-bar');
+
+        const copyMsgBtn = actionsBar.createEl('button', {
+            cls: 'kt-report-act-btn kt-btn-copy-msg mod-cta',
+            text: 'Copiar Mensagem'
+        });
+        copyMsgBtn.title = 'Copiar lista limpa de tarefas por dia pronta para enviar';
+        copyMsgBtn.onclick = async () => {
+            const txt = this.generateSummaryText(entries);
+            await navigator.clipboard.writeText(txt);
+            new obsidian.Notice('✓ Mensagem copiada!');
+        };
+
+        const copyMdBtn = actionsBar.createEl('button', {
+            cls: 'kt-report-act-btn',
+            text: 'Copiar Tabela Markdown'
+        });
+        copyMdBtn.title = 'Copiar como tabela Markdown detalhada com horas, datas e status';
+        copyMdBtn.onclick = async () => {
+            const md = this.generateMarkdownTable(entries, totalMinutes, totalEarnings);
+            await navigator.clipboard.writeText(md);
+            new obsidian.Notice('✓ Tabela Markdown copiada!');
+        };
+
+        const exportCsvBtn = actionsBar.createEl('button', {
+            cls: 'kt-report-act-btn',
+            text: 'Exportar CSV'
+        });
+        exportCsvBtn.title = 'Baixar arquivo CSV compatível com Excel e Google Planilhas';
+        exportCsvBtn.onclick = () => this.exportCSV(entries);
+
+        // 5. Itemized Breakdown Content (Discriminado Detalhado)
+        const breakdownSection = contentEl.createDiv('kt-report-breakdown-section');
+        const breakdownHdr = breakdownSection.createDiv('kt-report-breakdown-hdr');
+        breakdownHdr.createEl('h3', { text: `Discriminado de Atividades (${entries.length} itens)` });
+
+        const breakdownList = breakdownSection.createDiv('kt-report-breakdown-list');
+
+        if (entries.length === 0) {
+            breakdownList.createDiv('kt-report-empty').setText('Nenhum registro encontrado para os filtros selecionados.');
+            return;
+        }
+
+        if (this.groupMode === 'date') {
+            // Group by Date
+            const byDate = {};
+            entries.forEach(e => {
+                const k = e.dateStr || 'Geral';
+                if (!byDate[k]) byDate[k] = [];
+                byDate[k].push(e);
+            });
+
+            const sortedDates = Object.keys(byDate).sort((a, b) => {
+                if (a === 'Geral' || a === 'Sem data') return 1;
+                if (b === 'Geral' || b === 'Sem data') return -1;
+                return b.localeCompare(a);
+            });
+
+            sortedDates.forEach(dKey => {
+                const list = byDate[dKey];
+                const dayMinutes = list.reduce((acc, x) => acc + (x.durationMinutes || 0), 0);
+                const dayEarnings = (dayMinutes / 60) * (project.hourlyRate || 0);
+
+                let headerDate = dKey;
+                const parsed = parseDate(dKey);
+                if (parsed) {
+                    const daysOfWeek = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+                    const dayName = daysOfWeek[parsed.getDay()];
+                    const parts = dKey.split('-');
+                    if (parts.length === 3) headerDate = `${parts[2]}/${parts[1]}/${parts[0]} (${dayName})`;
+                }
+
+                const dayBlock = breakdownList.createDiv('kt-report-day-block');
+                
+                const dayHdr = dayBlock.createDiv('kt-report-day-hdr');
+                dayHdr.createSpan({ cls: 'kt-report-day-title', text: headerDate });
+                
+                const dayMetrics = dayHdr.createDiv('kt-report-day-metrics');
+                dayMetrics.createSpan({ cls: 'kt-report-day-hours', text: formatMinutesToHours(dayMinutes) || '0h' });
+                if (project.hourlyRate > 0) {
+                    dayMetrics.createSpan({ cls: 'kt-report-day-val', text: formatCurrency(dayEarnings, curr) });
+                }
+
+                const dayItems = dayBlock.createDiv('kt-report-day-items');
+                list.forEach(item => {
+                    const rowEl = dayItems.createDiv(`kt-report-item-row ${item.isDone ? 'is-done' : ''}`);
+                    
+                    const left = rowEl.createDiv('kt-report-item-left');
+                    const chk = left.createSpan({ cls: 'kt-report-item-chk', text: item.isDone ? '✓' : '○' });
+                    if (item.timeStart && item.timeEnd) {
+                        left.createSpan({ cls: 'kt-report-item-time-range', text: `${item.timeStart} - ${item.timeEnd}` });
+                    }
+                    left.createSpan({ cls: 'kt-report-item-title', text: item.title });
+
+                    const right = rowEl.createDiv('kt-report-item-right');
+                    right.createSpan({ cls: 'kt-report-item-col', text: item.column });
+                    if (item.durationMinutes > 0) {
+                        right.createSpan({ cls: 'kt-report-item-dur', text: formatMinutesToHours(item.durationMinutes) });
+                        if (project.hourlyRate > 0) {
+                            const itemEarned = (item.durationMinutes / 60) * project.hourlyRate;
+                            right.createSpan({ cls: 'kt-report-item-earned', text: formatCurrency(itemEarned, curr) });
+                        }
+                    }
+                    right.createSpan({ cls: `kt-report-item-status ${item.isDone ? 'is-done' : 'is-pending'}`, text: item.isDone ? 'Concluído' : 'Pendente' });
+                });
+            });
+        } else {
+            // Group by Task
+            const byTask = {};
+            entries.forEach(e => {
+                if (!byTask[e.title]) {
+                    byTask[e.title] = {
+                        card: e.card,
+                        title: e.title,
+                        isDone: e.isDone,
+                        column: e.column,
+                        dates: new Set(),
+                        totalMinutes: 0,
+                        sessions: []
+                    };
+                }
+                byTask[e.title].totalMinutes += (e.durationMinutes || 0);
+                if (e.dateStr && e.dateStr !== 'Geral' && e.dateStr !== 'Sem data') {
+                    byTask[e.title].dates.add(e.dateStr);
+                }
+                byTask[e.title].sessions.push(e);
+            });
+
+            const sortedTasks = Object.values(byTask).sort((a, b) => b.totalMinutes - a.totalMinutes);
+
+            sortedTasks.forEach(t => {
+                const taskBlock = breakdownList.createDiv(`kt-report-task-block ${t.isDone ? 'is-done' : ''}`);
+                
+                const taskHdr = taskBlock.createDiv('kt-report-task-hdr');
+                const left = taskHdr.createDiv('kt-report-task-left');
+                left.createSpan({ cls: 'kt-report-item-chk', text: t.isDone ? '✓' : '○' });
+                left.createSpan({ cls: 'kt-report-task-title', text: t.title });
+
+                const datesArr = Array.from(t.dates).sort();
+                if (datesArr.length > 0) {
+                    const datesStr = datesArr.map(d => {
+                        const parts = d.split('-');
+                        return parts.length === 3 ? `${parts[2]}/${parts[1]}` : d;
+                    }).join(', ');
+                    left.createSpan({ cls: 'kt-report-task-dates', text: datesStr });
+                }
+
+                const right = taskHdr.createDiv('kt-report-task-right');
+                right.createSpan({ cls: 'kt-report-item-col', text: t.column });
+                right.createSpan({ cls: 'kt-report-item-dur', text: formatMinutesToHours(t.totalMinutes) || '0h' });
+                if (project.hourlyRate > 0) {
+                    const taskEarned = (t.totalMinutes / 60) * project.hourlyRate;
+                    right.createSpan({ cls: 'kt-report-item-earned', text: formatCurrency(taskEarned, curr) });
+                }
+                right.createSpan({ cls: `kt-report-item-status ${t.isDone ? 'is-done' : 'is-pending'}`, text: t.isDone ? 'Concluído' : 'Pendente' });
+            });
+        }
+    }
+
+    generateSummaryText(entries) {
+        if (!entries || entries.length === 0) return 'Nenhuma atividade registrada.';
+
+        if (this.groupMode === 'task') {
+            const byTask = {};
+            entries.forEach(e => {
+                const title = (e.title || '').trim();
+                if (!byTask[title]) byTask[title] = true;
+            });
+            return Object.keys(byTask).map(t => `• ${t}`).join('\n');
+        }
+
+        // Group by date (chronological order: oldest to newest)
+        const byDate = {};
+        entries.forEach(e => {
+            const k = e.dateStr || 'Sem data';
+            if (!byDate[k]) byDate[k] = new Set();
+            byDate[k].add((e.title || '').trim());
+        });
+
+        const sortedDates = Object.keys(byDate).sort((a, b) => {
+            if (a === 'Sem data' || a === 'Geral') return 1;
+            if (b === 'Sem data' || b === 'Geral') return -1;
+            return a.localeCompare(b); // Ascending: Segunda -> Terça -> Quarta
+        });
+
+        const sections = [];
+        sortedDates.forEach(dKey => {
+            let headerDate = dKey;
+            const parsed = parseDate(dKey);
+            if (parsed) {
+                const daysOfWeek = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+                const dayName = daysOfWeek[parsed.getDay()];
+                const parts = dKey.split('-');
+                if (parts.length === 3) headerDate = `${dayName} (${parts[2]}/${parts[1]}/${parts[0]})`;
+            }
+
+            const tasksList = Array.from(byDate[dKey]).map(t => `• ${t}`).join('\n');
+            sections.push(`${headerDate}\n${tasksList}`);
+        });
+
+        return sections.join('\n\n');
+    }
+
+    generateMarkdownTable(entries, totalMinutes, totalEarnings) {
+        const p = this.project;
+        const curr = p.currency || 'R$';
+        let md = `### Relatório de Horas: ${p.name}\n\n`;
+        md += `- **Projeto:** ${p.name} ${p.tag ? `(\`${p.tag}\`)` : ''}\n`;
+        md += `- **Total de Horas:** ${formatMinutesToHours(totalMinutes)} (${(totalMinutes/60).toFixed(2)}h)\n`;
+        if (p.hourlyRate > 0) {
+            md += `- **Valor Total:** ${formatCurrency(totalEarnings, curr)} (${curr} ${p.hourlyRate}/h)\n`;
+        }
+        md += `\n| Data | Horário | Tarefa | Duração | Status |${p.hourlyRate > 0 ? ' Valor |' : ''}\n`;
+        md += `| :--- | :--- | :--- | :--- | :--- |${p.hourlyRate > 0 ? ' :--- |' : ''}\n`;
+
+        entries.forEach(e => {
+            const timeRange = (e.timeStart && e.timeEnd) ? `${e.timeStart} - ${e.timeEnd}` : '-';
+            const durStr = formatMinutesToHours(e.durationMinutes) || '0h';
+            const statusStr = e.isDone ? 'Concluído' : 'Pendente';
+            const valStr = p.hourlyRate > 0 ? formatCurrency((e.durationMinutes / 60) * p.hourlyRate, curr) : '';
+            
+            let dateFormatted = e.dateStr;
+            if (e.dateStr && e.dateStr.includes('-')) {
+                const parts = e.dateStr.split('-');
+                if (parts.length === 3) dateFormatted = `${parts[2]}/${parts[1]}/${parts[0]}`;
+            }
+
+            md += `| ${dateFormatted} | ${timeRange} | ${e.title.replace(/\|/g, '-')} | ${durStr} | ${statusStr} |${p.hourlyRate > 0 ? ` ${valStr} |` : ''}\n`;
+        });
+
+        return md;
+    }
+
+    exportCSV(entries) {
+        const p = this.project;
+        let csv = '\uFEFF'; // UTF-8 BOM for Excel
+        csv += 'Data;Horario;Tarefa;Duracao_Minutos;Duracao_Horas_Formatada;Horas_Decimais;Status;Coluna';
+        if (p.hourlyRate > 0) csv += ';Valor_Hora;Valor_Total';
+        csv += '\n';
+
+        entries.forEach(e => {
+            const timeRange = (e.timeStart && e.timeEnd) ? `${e.timeStart} - ${e.timeEnd}` : '';
+            const durStr = formatMinutesToHours(e.durationMinutes) || '0h';
+            const decimal = (e.durationMinutes / 60).toFixed(2).replace('.', ',');
+            const statusStr = e.isDone ? 'Concluído' : 'Pendente';
+            const col = (e.column || '').replace(/;/g, ' ');
+            const safeTitle = `"${(e.title || '').replace(/"/g, '""')}"`;
+            
+            let row = `${e.dateStr};${timeRange};${safeTitle};${e.durationMinutes};${durStr};${decimal};${statusStr};${col}`;
+            if (p.hourlyRate > 0) {
+                const val = ((e.durationMinutes / 60) * p.hourlyRate).toFixed(2).replace('.', ',');
+                row += `;${p.hourlyRate};${val}`;
+            }
+            csv += row + '\n';
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const fileName = `Relatorio_${p.name.replace(/\s+/g, '_')}_${formatDate(new Date())}.csv`;
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        new obsidian.Notice(`✓ Arquivo CSV exportado: ${fileName}`);
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
 // HABIT MODAL (Novo Hábito / Editar Hábito)
 // ================================================================
 
@@ -2739,6 +3274,173 @@ class CustomEventModal extends obsidian.Modal {
     }
 
     onClose() { this.contentEl.empty(); }
+}
+
+// ================================================================
+// QUICK CREATE TASK MODAL (Clique no espaço vazio do Timeblocking)
+// ================================================================
+
+class QuickCreateTaskModal extends obsidian.Modal {
+    constructor(app, plugin, day, hour, min, columns, untimedCards, onSaveNew, onAssignExisting) {
+        super(app);
+        this.app            = app;
+        this.plugin         = plugin;
+        this.day            = day;
+        this.hour           = hour;
+        this.min            = min;
+        this.columns        = columns && columns.length > 0 ? columns : ['Todo'];
+        this.untimedCards   = untimedCards || [];
+        this.onSaveNew      = onSaveNew;
+        this.onAssignExisting = onAssignExisting;
+    }
+
+    onOpen() {
+        const { contentEl, day, hour, min } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-quick-create-modal');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const pad = n => String(n).padStart(2, '0');
+        const startMin = hour * 60 + min;
+        const endMin   = Math.min(23 * 60 + 59, startMin + 60);
+        let startVal   = minutesToTime(startMin);
+        let endVal     = minutesToTime(endMin);
+        let dateVal    = formatDate(day);
+        let selectedCol = this.columns[0];
+
+        const daysOfWeek = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const dayName = daysOfWeek[day.getDay()];
+
+        contentEl.createEl('h2', { text: `Nova Tarefa • ${dayName} (${dateVal})` });
+
+        // 1. Title Input Section
+        const contentSection = contentEl.createDiv('kt-edit-content-section');
+        contentSection.createEl('label', { cls: 'kt-edit-label', text: 'Nome da Tarefa:' });
+
+        const inputEl = contentSection.createEl('input', {
+            type: 'text',
+            cls: 'kt-quick-create-input',
+            attr: {
+                placeholder: 'Escreva a tarefa, #projeto ou tags...',
+                autofocus: 'autofocus'
+            }
+        });
+        inputEl.style.width = '100%';
+        inputEl.style.padding = '8px 12px';
+        inputEl.style.fontSize = '14px';
+        inputEl.style.borderRadius = '6px';
+        inputEl.style.border = '1px solid var(--background-modifier-border)';
+        inputEl.style.background = 'var(--background-primary)';
+        inputEl.style.color = 'var(--text-normal)';
+
+        // Autocomplete for project tags
+        new CardTextareaSuggester(this.app, inputEl, () => (this.plugin.settings.projects || []).map(p => p.tag).filter(Boolean));
+
+        setTimeout(() => {
+            inputEl.focus();
+        }, 30);
+
+        // 2. Untimed Cards Quick Selector (if there are existing cards on this day without time)
+        let selectedExistingCard = null;
+        if (this.untimedCards.length > 0) {
+            const existingWrap = contentEl.createDiv('kt-untimed-quick-select-wrap');
+            existingWrap.style.marginTop = '10px';
+            existingWrap.style.padding = '8px 12px';
+            existingWrap.style.background = 'var(--background-secondary)';
+            existingWrap.style.borderRadius = '6px';
+
+            new obsidian.Setting(existingWrap)
+                .setName('Ou vincular card existente:')
+                .addDropdown(d => {
+                    d.addOption('__new__', '-- Criar nova tarefa digitada acima --');
+                    this.untimedCards.forEach(c => {
+                        d.addOption(String(c.lineIndex), c.title);
+                    });
+                    d.setValue('__new__');
+                    d.onChange(v => {
+                        if (v === '__new__') {
+                            selectedExistingCard = null;
+                        } else {
+                            selectedExistingCard = this.untimedCards.find(c => String(c.lineIndex) === v);
+                            if (selectedExistingCard) {
+                                inputEl.value = selectedExistingCard.title;
+                            }
+                        }
+                    });
+                });
+        }
+
+        // 3. Kanban Column setting
+        const metaSection = contentEl.createDiv('kt-edit-meta-section');
+        metaSection.style.marginTop = '12px';
+
+        new obsidian.Setting(metaSection)
+            .setName('Coluna do Kanban')
+            .addDropdown(d => {
+                this.columns.forEach(c => d.addOption(c, c));
+                d.setValue(selectedCol);
+                d.onChange(v => selectedCol = v);
+            });
+
+        // 4. Time Setting
+        const timeSetting = new obsidian.Setting(metaSection)
+            .setName('Horário no Timeblocking')
+            .setDesc('Início e término agendado');
+
+        timeSetting.addText(t => {
+            t.setPlaceholder('HH:MM').setValue(startVal).onChange(v => startVal = v.trim());
+            t.inputEl.style.width = '100px';
+        });
+
+        timeSetting.addText(t => {
+            t.setPlaceholder('HH:MM').setValue(endVal).onChange(v => endVal = v.trim());
+            t.inputEl.style.width = '100px';
+        });
+
+        // 5. Footer buttons
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.marginTop = '16px';
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '8px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Criar Tarefa' });
+
+        const submit = () => {
+            const trimmed = inputEl.value.trim();
+            if (!trimmed && !selectedExistingCard) {
+                new obsidian.Notice('⚠️ Digite o nome da tarefa');
+                return;
+            }
+            if (!/^\d{2}:\d{2}$/.test(startVal) || !/^\d{2}:\d{2}$/.test(endVal)) {
+                new obsidian.Notice('⚠️ Horário inválido. Use HH:mm');
+                return;
+            }
+            this.close();
+
+            if (selectedExistingCard && this.onAssignExisting) {
+                this.onAssignExisting(selectedExistingCard, startVal, endVal);
+            } else if (this.onSaveNew) {
+                this.onSaveNew(trimmed, selectedCol, startVal, endVal);
+            }
+        };
+
+        saveBtn.onclick = submit;
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submit();
+            }
+        });
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
 }
 
 // ================================================================
@@ -6491,6 +7193,12 @@ kanban-plugin: basic
         const hdr = card.createDiv('kt-proj-card-header');
         
         const leftHdr = hdr.createDiv('kt-proj-card-title-group');
+        leftHdr.style.cursor = 'pointer';
+        leftHdr.title = 'Clique para abrir o discriminado de horas, tarefas e datas deste projeto';
+        leftHdr.onclick = () => {
+            new ProjectReportModal(this.app, this.plugin, project, this.cards, this).open();
+        };
+
         const colorDot = leftHdr.createSpan('kt-proj-color-dot');
         colorDot.style.backgroundColor = project.color || '#6366f1';
 
@@ -6502,6 +7210,14 @@ kanban-plugin: basic
         }
 
         const actions = hdr.createDiv('kt-proj-card-actions');
+
+        const reportBtn = actions.createEl('button', { cls: 'kt-proj-action-btn kt-proj-report-btn', text: '📋' });
+        reportBtn.title = 'Gerar discriminado de tarefas, horas e datas para enviar ao chefe';
+        reportBtn.onclick = (e) => {
+            e.stopPropagation();
+            new ProjectReportModal(this.app, this.plugin, project, this.cards, this).open();
+        };
+
         const editBtn = actions.createEl('button', { cls: 'kt-proj-action-btn', text: '✎' });
         editBtn.title = 'Editar Projeto';
         editBtn.onclick = (e) => {
@@ -6531,6 +7247,11 @@ kanban-plugin: basic
 
         // 2. Big Main Hours Metric (Horas Realizadas até Hoje)
         const hoursBox = card.createDiv('kt-proj-main-hours');
+        hoursBox.style.cursor = 'pointer';
+        hoursBox.title = 'Clique para abrir o discriminado completo de horas';
+        hoursBox.onclick = () => {
+            new ProjectReportModal(this.app, this.plugin, project, this.cards, this).open();
+        };
         const formattedPast = formatMinutesToHours(stats.pastMinutes) || '0h';
         hoursBox.createSpan({ cls: 'kt-proj-hours-val', text: formattedPast });
         hoursBox.createSpan({ cls: 'kt-proj-hours-lbl', text: 'realizadas (até hoje)' });
@@ -9938,6 +10659,22 @@ kanban-plugin: basic
         const menu = new obsidian.Menu();
 
         menu.addItem(item => {
+            item.setTitle('➕ Nova Tarefa do Kanban...')
+                .setIcon('plus')
+                .onClick(() => {
+                    const dayCards = this.cards.filter(c => {
+                        if (!c.startDate) return false;
+                        const s = startOfDay(c.startDate);
+                        const e = endOfDay(c.endDate || c.startDate);
+                        return startOfDay(day) >= s && startOfDay(day) <= e;
+                    });
+                    this.onSlotClick(h, m, dayCards, day);
+                });
+        });
+
+        menu.addSeparator();
+
+        menu.addItem(item => {
             item.setTitle('☕ Pausa / Café (15 min)')
                 .setIcon('coffee')
                 .onClick(async () => {
@@ -10110,14 +10847,37 @@ kanban-plugin: basic
 
     onSlotClick(h, m, dayCards, day) {
         const untimed = dayCards.filter(c => !getTimeForDay(c, day));
-        if (untimed.length > 0) {
-            new TimeBlockModal(this.app, untimed[0], day, h, async (ts, te) => {
-                await this.persistTimeBlock(untimed[0], day, ts, te);
+        new QuickCreateTaskModal(
+            this.app,
+            this.plugin,
+            day,
+            h,
+            m,
+            this.columns,
+            untimed,
+            async (title, column, startVal, endVal) => {
+                await this.createNewTaskInTimeblock(title, column, day, startVal, endVal);
+            },
+            async (existingCard, startVal, endVal) => {
+                await this.persistTimeBlock(existingCard, day, startVal, endVal);
                 await this.refresh();
-            }).open();
-        } else {
-            new obsidian.Notice('Todos os cards deste dia já têm horário definido. Arraste do backlog para criar novos.');
-        }
+            }
+        ).open();
+    }
+
+    async createNewTaskInTimeblock(title, column, day, startVal, endVal) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+
+        const dateTag = `@{${formatDate(day)}}`;
+        const timeTag = `<!-- tb: ${startVal}-${endVal} -->`;
+        const cardLineText = `${title} ${dateTag} ${timeTag}`;
+
+        let content = await this.app.vault.read(file);
+        content = this.parser.addCardToColumn(content, column, cardLineText);
+        await this.app.vault.modify(file, content);
+        new obsidian.Notice(`✓ Tarefa "${title}" criada em "${column}" (${startVal}–${endVal})`);
+        await this.refresh();
     }
 
     renderTbCard(parent, card, day, dayStart, dayEnd, pxPerMin, layoutInfo) {
