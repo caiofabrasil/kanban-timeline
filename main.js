@@ -3444,6 +3444,1608 @@ class QuickCreateTaskModal extends obsidian.Modal {
 }
 
 // ================================================================
+// FINANCE CURRENCY PARSER & UTILITIES
+// ================================================================
+
+function parseFinanceCurrencyInput(raw) {
+    if (typeof raw === 'number') return isNaN(raw) ? 0 : Math.round(raw * 100) / 100;
+    if (!raw) return 0;
+    
+    let str = String(raw).trim();
+    if (!str) return 0;
+
+    // If string contains parenthetical text/comments e.g. "325 ( 63 - Julia / 61 + 61 Ana e tuts)", remove them first
+    str = str.replace(/\(.*?\)/g, '').trim();
+
+    // Strip currency symbols (R$, $, €, £), spaces, and non-breaking spaces
+    str = str.replace(/R\$|\$|€|£|\s|\u00A0/gi, '');
+    if (!str) return 0;
+
+    // Distinguish Brazilian (7.954,54) vs US (7,954.54) vs Plain numbers (7954,54 or 7954.54)
+    if (str.includes(',') && str.includes('.')) {
+        if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+            // "7.954,54" -> Brazilian format
+            str = str.replace(/\./g, '').replace(',', '.');
+        } else {
+            // "7,954.54" -> US format
+            str = str.replace(/,/g, '');
+        }
+    } else if (str.includes(',')) {
+        // "7954,54" -> Comma as decimal
+        str = str.replace(',', '.');
+    } else if (str.includes('.')) {
+        // Check for multiple dots e.g. "1.000.000"
+        const dotCount = (str.match(/\./g) || []).length;
+        if (dotCount > 1) {
+            str = str.replace(/\./g, '');
+        }
+    }
+
+    // Extract leading number
+    const numMatch = str.match(/-?\d+(?:\.\d+)?/);
+    if (!numMatch) return 0;
+
+    const val = parseFloat(numMatch[0]);
+    return isNaN(val) ? 0 : Math.round(val * 100) / 100;
+}
+
+function getFinanceMonthName(m) {
+    const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const idx = parseInt(m, 10) - 1;
+    return (idx >= 0 && idx < monthNames.length) ? monthNames[idx] : `Mês ${m}`;
+}
+
+// ================================================================
+// FINANCE MODALS (Lançamentos, Parcelas, Datas, Cobrança/Split, Orçamento Planejado, Saldo e Importação)
+// ================================================================
+
+class FinanceInstallmentPopover {
+    constructor(anchorEl, currentInstallment, onSave) {
+        this.anchorEl           = anchorEl;
+        this.currentInstallment = currentInstallment || '1/1';
+        this.onSave             = onSave;
+        this.popoverEl          = null;
+        this.backdropEl         = null;
+    }
+
+    open() {
+        this.render();
+    }
+
+    close() {
+        if (this.popoverEl) {
+            this.popoverEl.remove();
+            this.popoverEl = null;
+        }
+        if (this.backdropEl) {
+            this.backdropEl.remove();
+            this.backdropEl = null;
+        }
+    }
+
+    render() {
+        this.close();
+
+        // 1. Transparent Backdrop
+        this.backdropEl = document.body.createDiv('kt-gcal-backdrop');
+        this.backdropEl.onclick = (e) => {
+            e.stopPropagation();
+            this.close();
+        };
+
+        // 2. Floating Popover Container
+        const pop = document.body.createDiv('kt-gcal-popover kt-installment-popover');
+        this.popoverEl = pop;
+        pop.onclick = (e) => e.stopPropagation();
+
+        const rect = this.anchorEl.getBoundingClientRect();
+        let top = rect.bottom + 4;
+        let left = rect.left;
+
+        if (left + 220 > window.innerWidth) {
+            left = window.innerWidth - 230;
+        }
+        if (top + 150 > window.innerHeight) {
+            top = Math.max(10, rect.top - 156);
+        }
+        pop.style.top = `${Math.max(10, top)}px`;
+        pop.style.left = `${Math.max(10, left)}px`;
+
+        const parts = this.currentInstallment.replace(/[()]/g, '').split('/');
+        let cur = parseInt(parts[0], 10) || 1;
+        let tot = parseInt(parts[1], 10) || 1;
+
+        // Header: Title
+        const hdr = pop.createDiv('kt-gcal-hdr');
+        hdr.createSpan({ cls: 'kt-gcal-title', text: '📦 Ajustar Parcela' });
+
+        // Stepper Bar
+        const stepRow = pop.createDiv('kt-inst-step-row');
+        const prevBtn = stepRow.createEl('button', { cls: 'kt-gcal-nav-btn', text: '‹' });
+        prevBtn.title = 'Parcela anterior';
+        prevBtn.disabled = cur <= 1;
+
+        const curDisplay = stepRow.createSpan({ cls: 'kt-inst-display', text: `(${cur}/${tot})` });
+
+        const nextBtn = stepRow.createEl('button', { cls: 'kt-gcal-nav-btn', text: '›' });
+        nextBtn.title = 'Próxima parcela';
+
+        prevBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (cur > 1) {
+                cur--;
+                this.close();
+                this.onSave(`${cur}/${tot}`);
+            }
+        };
+
+        nextBtn.onclick = (e) => {
+            e.stopPropagation();
+            cur++;
+            if (cur > tot) tot = cur;
+            this.close();
+            this.onSave(`${cur}/${tot}`);
+        };
+
+        // Custom Inputs Row: [ cur ] de [ tot ]
+        const inputRow = pop.createDiv('kt-inst-input-row');
+        inputRow.createSpan({ text: 'Parcela', cls: 'kt-inst-lbl' });
+
+        const curIn = inputRow.createEl('input', { type: 'number', attr: { min: '1', value: String(cur) } });
+        curIn.style.width = '44px';
+        curIn.oninput = (e) => {
+            const v = parseInt(e.target.value, 10);
+            if (!isNaN(v) && v > 0) {
+                cur = v;
+                curDisplay.setText(`(${cur}/${tot})`);
+            }
+        };
+
+        inputRow.createSpan({ text: 'de', cls: 'kt-inst-lbl' });
+
+        const totIn = inputRow.createEl('input', { type: 'number', attr: { min: '1', value: String(tot) } });
+        totIn.style.width = '44px';
+        totIn.oninput = (e) => {
+            const v = parseInt(e.target.value, 10);
+            if (!isNaN(v) && v > 0) {
+                tot = v;
+                curDisplay.setText(`(${cur}/${tot})`);
+            }
+        };
+
+        // Footer: À Vista & Salvar
+        const ftr = pop.createDiv('kt-gcal-ftr');
+        const removeLink = ftr.createEl('button', { cls: 'kt-gcal-link-btn kt-gcal-fixo-link', text: 'À vista' });
+        removeLink.onclick = (e) => {
+            e.stopPropagation();
+            this.close();
+            this.onSave('');
+        };
+
+        const saveBtn = ftr.createEl('button', { cls: 'kt-gcal-link-btn', text: 'Salvar' });
+        saveBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.close();
+            this.onSave(`${cur}/${tot}`);
+        };
+    }
+}
+
+const FinanceInstallmentModal = FinanceInstallmentPopover;
+
+class FinanceDatePickerPopover {
+    constructor(anchorEl, currentDate, year, month, onSave) {
+        this.anchorEl     = anchorEl;
+        this.currentDate  = currentDate || '';
+        this.viewYear     = year;
+        this.viewMonth    = month;
+        this.selectedDate = currentDate || '';
+        this.onSave       = onSave;
+        this.popoverEl    = null;
+        this.backdropEl   = null;
+    }
+
+    open() {
+        this.render();
+    }
+
+    close() {
+        if (this.popoverEl) {
+            this.popoverEl.remove();
+            this.popoverEl = null;
+        }
+        if (this.backdropEl) {
+            this.backdropEl.remove();
+            this.backdropEl = null;
+        }
+    }
+
+    render() {
+        this.close();
+
+        // 1. Transparent Backdrop to catch outside clicks
+        this.backdropEl = document.body.createDiv('kt-gcal-backdrop');
+        this.backdropEl.onclick = (e) => {
+            e.stopPropagation();
+            this.close();
+        };
+
+        // 2. Floating Popover Container
+        const pop = document.body.createDiv('kt-gcal-popover');
+        this.popoverEl = pop;
+        pop.onclick = (e) => e.stopPropagation();
+
+        // Position popover relative to anchorEl
+        const rect = this.anchorEl.getBoundingClientRect();
+        let top = rect.bottom + 4;
+        let left = rect.left;
+
+        // Ensure within screen bounds
+        if (left + 260 > window.innerWidth) {
+            left = window.innerWidth - 270;
+        }
+        if (top + 290 > window.innerHeight) {
+            top = Math.max(10, rect.top - 296);
+        }
+        pop.style.top = `${Math.max(10, top)}px`;
+        pop.style.left = `${Math.max(10, left)}px`;
+
+        const monthNames = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+        const monthTitle = `${monthNames[this.viewMonth - 1]} de ${this.viewYear}`;
+
+        // Header: Month/Year & Navigation Arrows
+        const hdr = pop.createDiv('kt-gcal-hdr');
+        hdr.createSpan({ cls: 'kt-gcal-title', text: monthTitle });
+
+        const navWrap = hdr.createDiv('kt-gcal-nav');
+        const prevBtn = navWrap.createEl('button', { cls: 'kt-gcal-nav-btn', text: '‹' });
+        prevBtn.title = 'Mês anterior';
+        prevBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (this.viewMonth === 1) {
+                this.viewMonth = 12;
+                this.viewYear--;
+            } else {
+                this.viewMonth--;
+            }
+            this.render();
+        };
+
+        const nextBtn = navWrap.createEl('button', { cls: 'kt-gcal-nav-btn', text: '›' });
+        nextBtn.title = 'Próximo mês';
+        nextBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (this.viewMonth === 12) {
+                this.viewMonth = 1;
+                this.viewYear++;
+            } else {
+                this.viewMonth++;
+            }
+            this.render();
+        };
+
+        // Weekday header row: D S T Q Q S S
+        const daysHdr = pop.createDiv('kt-gcal-weekdays');
+        ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].forEach(w => {
+            daysHdr.createSpan({ cls: 'kt-gcal-weekday', text: w });
+        });
+
+        // Days Grid (with leading and trailing days from prev/next month)
+        const grid = pop.createDiv('kt-gcal-grid');
+        const firstDayOfWeek = new Date(this.viewYear, this.viewMonth - 1, 1).getDay();
+        const daysInMonth = new Date(this.viewYear, this.viewMonth, 0).getDate();
+        const daysInPrevMonth = new Date(this.viewYear, this.viewMonth - 1, 0).getDate();
+
+        // Selected day check
+        let selDay = null, selMon = null, selYr = null;
+        if (this.selectedDate && this.selectedDate.includes('-')) {
+            const parts = this.selectedDate.split('-');
+            selYr = parseInt(parts[0], 10);
+            selMon = parseInt(parts[1], 10);
+            selDay = parseInt(parts[2], 10);
+        }
+
+        const now = new Date();
+        const todayYr = now.getFullYear();
+        const todayMon = now.getMonth() + 1;
+        const todayDay = now.getDate();
+
+        // Prev month muted days
+        for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+            const pDay = daysInPrevMonth - i;
+            const slot = grid.createDiv('kt-gcal-day kt-gcal-day-muted');
+            slot.setText(String(pDay));
+            slot.onclick = (e) => {
+                e.stopPropagation();
+                let m = this.viewMonth - 1;
+                let y = this.viewYear;
+                if (m === 0) { m = 12; y--; }
+                const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(pDay).padStart(2,'0')}`;
+                this.close();
+                this.onSave(dateStr, false);
+            };
+        }
+
+        // Current month days
+        for (let d = 1; d <= daysInMonth; d++) {
+            const isSelected = (selDay === d && selMon === this.viewMonth && selYr === this.viewYear);
+            const isToday = (todayDay === d && todayMon === this.viewMonth && todayYr === this.viewYear);
+            const slot = grid.createDiv(`kt-gcal-day ${isSelected ? 'is-selected' : ''} ${isToday ? 'is-today' : ''}`);
+            slot.setText(String(d));
+
+            slot.onclick = (e) => {
+                e.stopPropagation();
+                const dateStr = `${this.viewYear}-${String(this.viewMonth).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                this.close();
+                this.onSave(dateStr, false);
+            };
+        }
+
+        // Next month muted days to fill 5 or 6 rows (multiples of 7)
+        const totalSlots = firstDayOfWeek + daysInMonth;
+        const remaining = (totalSlots % 7 === 0) ? 0 : (7 - (totalSlots % 7));
+        for (let n = 1; n <= remaining; n++) {
+            const slot = grid.createDiv('kt-gcal-day kt-gcal-day-muted');
+            slot.setText(String(n));
+            slot.onclick = (e) => {
+                e.stopPropagation();
+                let m = this.viewMonth + 1;
+                let y = this.viewYear;
+                if (m === 13) { m = 1; y++; }
+                const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(n).padStart(2,'0')}`;
+                this.close();
+                this.onSave(dateStr, false);
+            };
+        }
+
+        // Footer: Hoje & Gasto Fixo
+        const ftr = pop.createDiv('kt-gcal-ftr');
+        const hojeLink = ftr.createEl('button', { cls: 'kt-gcal-link-btn', text: 'Hoje' });
+        hojeLink.onclick = (e) => {
+            e.stopPropagation();
+            const dateStr = `${todayYr}-${String(todayMon).padStart(2,'0')}-${String(todayDay).padStart(2,'0')}`;
+            this.close();
+            this.onSave(dateStr, false);
+        };
+
+        const fixoLink = ftr.createEl('button', { cls: 'kt-gcal-link-btn kt-gcal-fixo-link', text: 'Gasto Fixo' });
+        fixoLink.onclick = (e) => {
+            e.stopPropagation();
+            const dateStr = `${this.viewYear}-${String(this.viewMonth).padStart(2,'0')}-01`;
+            this.close();
+            this.onSave(dateStr, true);
+        };
+    }
+}
+
+// Backward compatibility alias
+const FinanceDatePickerModal = FinanceDatePickerPopover;
+
+class FinanceSplitModal extends obsidian.Modal {
+    constructor(app, plugin, item, curr, onSave) {
+        super(app);
+        this.app    = app;
+        this.plugin = plugin;
+        this.item   = item;
+        this.curr   = curr || 'R$';
+        this.onSave = onSave;
+
+        // Initialize structured split data
+        const initialSplit = item.splitData || {
+            isSplit: !!item.isSplit,
+            participants: [],
+            totalToCollect: 0
+        };
+
+        // If participants is empty but item had toCollect string, migrate it
+        if (initialSplit.participants.length === 0 && item.toCollect) {
+            const parts = item.toCollect.split(/,|\be\b|\+/i);
+            parts.forEach(p => {
+                const clean = p.trim();
+                if (!clean) return;
+                const matchVal = clean.match(/(\d+[\.,]?\d*)/);
+                const num = matchVal ? parseFloat(matchVal[1].replace(',', '.')) : 0;
+                const name = clean.replace(matchVal ? matchVal[0] : '', '').trim() || 'Pessoa';
+                initialSplit.participants.push({
+                    name: name.charAt(0).toUpperCase() + name.slice(1),
+                    amount: num,
+                    settled: false
+                });
+            });
+        }
+
+        this.splitData = JSON.parse(JSON.stringify(initialSplit));
+        if (!this.splitData.participants) this.splitData.participants = [];
+    }
+
+    onOpen() {
+        const { contentEl, item, curr } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: `👥 Cobrança & Divisão de Conta` });
+
+        const infoRow = contentEl.createDiv('kt-fin-split-info-row');
+        infoRow.style.padding = '10px 14px';
+        infoRow.style.background = 'var(--background-secondary)';
+        infoRow.style.borderRadius = '8px';
+        infoRow.style.margin = '10px 0 16px 0';
+        infoRow.style.display = 'flex';
+        infoRow.style.justifyContent = 'space-between';
+        infoRow.style.alignItems = 'center';
+
+        infoRow.createDiv({ text: `Despesa: ${item.description}`, cls: 'kt-fin-split-item-desc' });
+        const valSpan = infoRow.createSpan({ text: `Total: ${formatCurrency(item.value, curr)}`, cls: 'kt-fin-split-item-val' });
+        valSpan.style.fontWeight = '700';
+
+        // Equal Division Helper
+        const helperBox = contentEl.createDiv('kt-fin-equal-split-box');
+        helperBox.style.padding = '8px 12px';
+        helperBox.style.background = 'var(--background-primary)';
+        helperBox.style.border = '1px dashed var(--background-modifier-border)';
+        helperBox.style.borderRadius = '8px';
+        helperBox.style.marginBottom = '14px';
+        helperBox.style.display = 'flex';
+        helperBox.style.alignItems = 'center';
+        helperBox.style.justifyContent = 'space-between';
+        helperBox.style.gap = '10px';
+
+        helperBox.createSpan({ text: 'Divisão igualitária rápida:', cls: 'kt-fin-equal-lbl' });
+        
+        const helperRight = helperBox.createDiv();
+        helperRight.style.display = 'flex';
+        helperRight.style.gap = '6px';
+        helperRight.style.alignItems = 'center';
+
+        const countInput = helperRight.createEl('input', {
+            type: 'number',
+            attr: { min: '2', max: '20', value: '2' }
+        });
+        countInput.style.width = '55px';
+        countInput.style.textAlign = 'center';
+
+        const applyEqualBtn = helperRight.createEl('button', { text: 'Dividir', cls: 'kt-btn-sm' });
+        applyEqualBtn.onclick = () => {
+            const count = parseInt(countInput.value, 10);
+            if (isNaN(count) || count <= 1) {
+                new obsidian.Notice('⚠️ Digite 2 ou mais pessoas.');
+                return;
+            }
+            const eachShare = Math.round((item.value / count) * 100) / 100;
+            this.splitData.participants = [];
+            for (let i = 1; i < count; i++) {
+                this.splitData.participants.push({
+                    name: `Pessoa ${i}`,
+                    amount: eachShare,
+                    settled: false
+                });
+            }
+            this.splitData.isSplit = true;
+            this.onOpen();
+        };
+
+        // Participants List
+        contentEl.createEl('h4', { text: 'Pessoas a Cobrar', cls: 'kt-fin-section-subtitle' });
+        const listWrap = contentEl.createDiv('kt-fin-participants-list');
+        listWrap.style.display = 'flex';
+        listWrap.style.flexDirection = 'column';
+        listWrap.style.gap = '8px';
+        listWrap.style.maxHeight = '36vh';
+        listWrap.style.overflowY = 'auto';
+
+        const renderParticipants = () => {
+            listWrap.empty();
+            if (this.splitData.participants.length === 0) {
+                const emptyMsg = listWrap.createDiv({ text: 'Nenhuma pessoa adicionada para cobrança.' });
+                emptyMsg.style.color = 'var(--text-muted)';
+                emptyMsg.style.fontStyle = 'italic';
+                emptyMsg.style.padding = '8px 0';
+                return;
+            }
+
+            this.splitData.participants.forEach((p, idx) => {
+                const row = listWrap.createDiv('kt-fin-participant-row');
+                row.style.display = 'flex';
+                row.style.alignItems = 'center';
+                row.style.gap = '8px';
+                row.style.background = 'var(--background-secondary)';
+                row.style.padding = '6px 10px';
+                row.style.borderRadius = '6px';
+
+                // Name Input
+                const nameInput = row.createEl('input', {
+                    type: 'text',
+                    attr: {
+                        placeholder: 'Nome da pessoa',
+                        autocomplete: 'off',
+                        spellcheck: 'false'
+                    },
+                    value: p.name || ''
+                });
+                nameInput.style.flex = '1';
+                nameInput.addEventListener('input', (e) => {
+                    p.name = e.target.value;
+                });
+                nameInput.addEventListener('change', (e) => {
+                    if (e.target.value) {
+                        const cap = e.target.value.trim().charAt(0).toUpperCase() + e.target.value.trim().slice(1);
+                        p.name = cap;
+                        e.target.value = cap;
+                    }
+                });
+
+                // Amount Input
+                const amtInput = row.createEl('input', {
+                    type: 'text',
+                    attr: { placeholder: 'Valor (R$)' },
+                    value: p.amount != null ? String(p.amount) : ''
+                });
+                amtInput.style.width = '90px';
+                amtInput.style.fontWeight = '700';
+                amtInput.addEventListener('input', (e) => {
+                    p.amount = parseFinanceCurrencyInput(e.target.value);
+                    updateSummary();
+                });
+
+                // Settled Checkbox
+                const checkWrap = row.createDiv('kt-fin-settled-check-wrap');
+                checkWrap.style.display = 'flex';
+                checkWrap.style.alignItems = 'center';
+                checkWrap.style.gap = '4px';
+                checkWrap.title = 'Marcar se a pessoa já pagou/transferiu';
+
+                const cb = checkWrap.createEl('input', { type: 'checkbox' });
+                cb.checked = !!p.settled;
+                cb.addEventListener('change', (e) => {
+                    p.settled = e.target.checked;
+                    updateSummary();
+                });
+                checkWrap.createSpan({ text: 'Pago', cls: 'kt-fin-cb-label' });
+
+                // Delete Button
+                const delBtn = row.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+                delBtn.onclick = () => {
+                    this.splitData.participants.splice(idx, 1);
+                    renderParticipants();
+                    updateSummary();
+                };
+            });
+        };
+
+        renderParticipants();
+
+        // Add Person Button
+        const addPersonBtn = contentEl.createEl('button', {
+            text: '＋ Adicionar Pessoa',
+            cls: 'kt-btn-add-person'
+        });
+        addPersonBtn.style.marginTop = '10px';
+        addPersonBtn.onclick = () => {
+            this.splitData.participants.push({
+                name: '',
+                amount: 0,
+                settled: false
+            });
+            renderParticipants();
+            updateSummary();
+        };
+
+        // Summary Bar
+        const summaryBar = contentEl.createDiv('kt-fin-split-summary-bar');
+        summaryBar.style.marginTop = '16px';
+        summaryBar.style.padding = '10px 14px';
+        summaryBar.style.borderRadius = '8px';
+        summaryBar.style.background = 'var(--background-secondary)';
+        summaryBar.style.display = 'flex';
+        summaryBar.style.justifyContent = 'space-between';
+        summaryBar.style.alignItems = 'center';
+
+        const updateSummary = () => {
+            const totalOthers = this.splitData.participants.reduce((acc, p) => acc + (p.amount || 0), 0);
+            const pendingCollect = this.splitData.participants.filter(p => !p.settled).reduce((acc, p) => acc + (p.amount || 0), 0);
+            const myShare = Math.max(0, item.value - totalOthers);
+
+            summaryBar.empty();
+            const left = summaryBar.createDiv();
+            left.createDiv({ text: `Total a cobrar: ${formatCurrency(pendingCollect, curr)}`, cls: pendingCollect > 0 ? 'kt-diff-neg' : 'kt-diff-pos' });
+            left.createDiv({ text: `Sua parte: ${formatCurrency(myShare, curr)}`, cls: 'kt-fin-sub-meta' });
+
+            const isAllSettled = this.splitData.participants.length > 0 && pendingCollect === 0;
+            if (isAllSettled) {
+                summaryBar.createSpan({ text: '✓ Cobrança 100% quitada', cls: 'kt-diff-pos' });
+            }
+        };
+
+        updateSummary();
+
+        // Footer buttons
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.marginTop = '18px';
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+
+        const removeBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Remover Cobrança' });
+        removeBtn.onclick = () => {
+            this.close();
+            this.onSave(null);
+        };
+
+        const rightGroup = footer.createDiv('kt-modal-footer-right');
+        rightGroup.style.display = 'flex';
+        rightGroup.style.gap = '8px';
+
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: 'Salvar Cobrança' });
+        saveBtn.onclick = () => {
+            const validParticipants = this.splitData.participants.filter(p => p.name.trim() || p.amount > 0);
+            if (validParticipants.length === 0) {
+                this.close();
+                this.onSave(null);
+                return;
+            }
+
+            const totalToCollect = validParticipants.filter(p => !p.settled).reduce((acc, p) => acc + (p.amount || 0), 0);
+            const cleanSplitData = {
+                isSplit: true,
+                participants: validParticipants,
+                totalToCollect
+            };
+
+            this.close();
+            this.onSave(cleanSplitData);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceEntryModal extends obsidian.Modal {
+    constructor(app, plugin, mode, item, year, month, categories, onSave, onDelete) {
+        super(app);
+        this.app        = app;
+        this.plugin     = plugin;
+        this.mode       = mode || 'expense';
+        this.item       = item || null;
+        this.year       = year;
+        this.month      = month;
+        this.categories = categories || [];
+        this.onSave     = onSave;
+        this.onDelete   = onDelete;
+
+        const monthPad = String(month).padStart(2, '0');
+        const defaultDate = `${year}-${monthPad}-01`;
+
+        this.modeVal        = item ? (item.type || mode) : mode;
+        this.valueVal       = item ? (typeof item.value === 'number' ? item.value.toFixed(2).replace('.', ',') : String(item.value || '')) : '';
+        this.descVal        = item ? (item.description || '') : '';
+        this.catVal         = item ? (item.category || this.categories[0] || 'Outros') : (this.categories[0] || 'Outros');
+        this.dateVal        = item ? (item.date || defaultDate) : defaultDate;
+        this.isFixedVal     = item ? !!item.isFixed : false;
+        this.installmentVal = item ? (item.installment || '') : '';
+        this.splitDataVal   = item ? (item.splitData || null) : null;
+    }
+
+    onOpen() {
+        const { contentEl, item, year, month } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        const isEdit = !!item;
+        const monthPad = String(month).padStart(2, '0');
+        const defaultDate = `${year}-${monthPad}-01`;
+
+        contentEl.createEl('h2', { text: isEdit ? `Editar ${this.modeVal === 'income' ? 'Renda' : 'Despesa'}` : `Nova ${this.modeVal === 'income' ? 'Renda' : 'Despesa'}` });
+
+        // 1. Tipo (Despesa / Renda)
+        new obsidian.Setting(contentEl)
+            .setName('Tipo de Lançamento')
+            .addDropdown(d => {
+                d.addOption('expense', 'Despesa (Gasto / Saída)');
+                d.addOption('income', 'Renda (Ganho / Entrada)');
+                d.setValue(this.modeVal);
+                d.onChange(v => {
+                    this.modeVal = v;
+                    const catList = this.modeVal === 'income' 
+                        ? (this.plugin.settings.finances.incomeCategories || ['Pagamento', 'Outros'])
+                        : (this.plugin.settings.finances.categories || ['Outros']);
+                    this.categories = catList;
+                    this.catVal = catList[0] || 'Outros';
+                    this.onOpen();
+                });
+            });
+
+        // 2. Valor
+        new obsidian.Setting(contentEl)
+            .setName('Valor (R$)')
+            .addText(t => {
+                t.setPlaceholder('Ex: 400,00 ou 7.954,54')
+                 .setValue(this.valueVal)
+                 .onChange(v => this.valueVal = v);
+                t.inputEl.style.fontSize = '16px';
+                t.inputEl.style.fontWeight = '700';
+                setTimeout(() => t.inputEl.focus(), 30);
+            });
+
+        // 3. Descrição
+        new obsidian.Setting(contentEl)
+            .setName('Descrição')
+            .addText(t => {
+                t.setPlaceholder('Ex: Aluguel, Ifood, Impressora 3D...')
+                 .setValue(this.descVal)
+                 .onChange(v => this.descVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        // 4. Categoria
+        const catSetting = new obsidian.Setting(contentEl)
+            .setName('Categoria');
+        
+        catSetting.addDropdown(d => {
+            this.categories.forEach(c => d.addOption(c, c));
+            if (!this.categories.includes(this.catVal)) {
+                d.addOption(this.catVal, this.catVal);
+            }
+            d.setValue(this.catVal);
+            d.onChange(v => this.catVal = v);
+        });
+
+        // Botão para criar nova categoria
+        catSetting.addButton(b => {
+            b.setButtonText('+').setTooltip('Criar nova categoria').onClick(() => {
+                const newCat = prompt('Nome da nova categoria:');
+                if (newCat && newCat.trim()) {
+                    const clean = newCat.trim();
+                    if (this.modeVal === 'income') {
+                        if (!this.plugin.settings.finances.incomeCategories.includes(clean)) {
+                            this.plugin.settings.finances.incomeCategories.push(clean);
+                        }
+                    } else {
+                        if (!this.plugin.settings.finances.categories.includes(clean)) {
+                            this.plugin.settings.finances.categories.push(clean);
+                        }
+                    }
+                    this.plugin.saveSettings();
+                    this.categories.push(clean);
+                    this.catVal = clean;
+                    this.onOpen();
+                }
+            });
+        });
+
+        // 5. Data
+        new obsidian.Setting(contentEl)
+            .setName('Data')
+            .setDesc('Dia do gasto (ou deixe o padrão do mês)')
+            .addText(t => {
+                t.setValue(this.dateVal).onChange(v => this.dateVal = v.trim());
+                t.inputEl.style.width = '140px';
+            });
+
+        if (this.modeVal === 'expense') {
+            // 6. Parcela (opcional)
+            new obsidian.Setting(contentEl)
+                .setName('Parcela (Opcional)')
+                .setDesc('Ex: 1/3, 27/36 ou deixe vazio se for à vista')
+                .addText(t => {
+                    t.setPlaceholder('Ex: 1/3')
+                     .setValue(this.installmentVal)
+                     .onChange(v => this.installmentVal = v.trim());
+                    t.inputEl.style.width = '100px';
+                });
+
+            // 7. Gasto Fixo
+            new obsidian.Setting(contentEl)
+                .setName('Gasto Fixo Mensal')
+                .setDesc('Repete todo mês automaticamente (Aluguel, Internet, etc.)')
+                .addToggle(tg => {
+                    tg.setValue(this.isFixedVal).onChange(v => this.isFixedVal = v);
+                });
+
+            // 8. Cobrança / Split de Contas
+            const splitWrap = contentEl.createDiv('kt-fin-split-setting-wrap');
+            splitWrap.style.margin = '12px 0';
+            splitWrap.style.padding = '10px 14px';
+            splitWrap.style.background = 'var(--background-secondary)';
+            splitWrap.style.borderRadius = '8px';
+            splitWrap.style.display = 'flex';
+            splitWrap.style.justifyContent = 'space-between';
+            splitWrap.style.alignItems = 'center';
+
+            const splitInfo = splitWrap.createDiv();
+            splitInfo.createDiv({ text: '👥 Cobrança de Terceiros / Split', cls: 'kt-fin-split-title' });
+            
+            let splitMetaText = 'Nenhuma cobrança configurada';
+            if (this.splitDataVal && this.splitDataVal.participants?.length > 0) {
+                const pending = this.splitDataVal.participants.filter(p => !p.settled).reduce((acc, p) => acc + (p.amount || 0), 0);
+                splitMetaText = pending > 0 ? `Cobrar ${formatCurrency(pending, 'R$')} (${this.splitDataVal.participants.length} pessoas)` : '✓ Cobrança 100% quitada';
+            }
+            const splitMeta = splitInfo.createDiv({ text: splitMetaText, cls: 'kt-fin-split-meta-desc' });
+            if (this.splitDataVal && this.splitDataVal.participants?.some(p => !p.settled)) {
+                splitMeta.style.color = '#ef4444';
+                splitMeta.style.fontWeight = '600';
+            }
+
+            const splitBtn = splitWrap.createEl('button', {
+                text: this.splitDataVal ? 'Editar Cobrança' : 'Configurar Cobrança',
+                cls: 'kt-btn-split-cfg'
+            });
+            splitBtn.onclick = () => {
+                const tempItem = {
+                    value: parseFinanceCurrencyInput(this.valueVal),
+                    description: this.descVal || 'Despesa',
+                    splitData: this.splitDataVal
+                };
+                new FinanceSplitModal(this.app, this.plugin, tempItem, 'R$', (newSplit) => {
+                    this.splitDataVal = newSplit;
+                    this.onOpen();
+                }).open();
+            };
+        }
+
+        // Footer buttons
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.marginTop = '18px';
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+
+        const leftGroup = footer.createDiv('kt-modal-footer-left');
+        if (isEdit && this.onDelete) {
+            const delBtn = leftGroup.createEl('button', { cls: 'mod-warning', text: 'Excluir' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(item);
+            };
+        }
+
+        const rightGroup = footer.createDiv('kt-modal-footer-right');
+        rightGroup.style.display = 'flex';
+        rightGroup.style.gap = '8px';
+
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: isEdit ? 'Salvar Alterações' : 'Adicionar' });
+
+        const submit = () => {
+            const numVal = parseFinanceCurrencyInput(this.valueVal);
+            if (isNaN(numVal) || numVal <= 0) {
+                new obsidian.Notice('⚠️ Digite um valor numérico válido (ex: 400,00 ou 7.954,54)');
+                return;
+            }
+            if (!this.descVal.trim()) {
+                new obsidian.Notice('⚠️ Digite uma descrição para o lançamento');
+                return;
+            }
+
+            const isSplitActive = this.splitDataVal && this.splitDataVal.participants?.length > 0;
+
+            const cleanItem = {
+                id: item?.id || `fin-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                type: this.modeVal,
+                value: numVal,
+                description: this.descVal.trim(),
+                category: this.catVal,
+                date: this.dateVal.trim() || defaultDate,
+                installment: this.installmentVal ? this.installmentVal.replace(/[()]/g, '').trim() : '',
+                isFixed: this.isFixedVal,
+                isSplit: isSplitActive,
+                splitData: isSplitActive ? this.splitDataVal : null
+            };
+
+            this.close();
+            this.onSave(cleanItem);
+        };
+
+        saveBtn.onclick = submit;
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinancePlannedBudgetModal extends obsidian.Modal {
+    constructor(app, plugin, year, month, plannedExpenses, plannedIncome, expenseCats, incomeCats, onSave) {
+        super(app);
+        this.app             = app;
+        this.plugin          = plugin;
+        this.year            = year;
+        this.month           = month;
+        this.plannedExpenses = Object.assign({}, plannedExpenses);
+        this.plannedIncome   = Object.assign({}, plannedIncome);
+        this.expenseCats     = expenseCats || [];
+        this.incomeCats      = incomeCats  || [];
+        this.onSave          = onSave;
+    }
+
+    onOpen() {
+        const { contentEl, year, month } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '640px';
+        this.modalEl.style.maxWidth = '94vw';
+        this.modalEl.style.maxHeight = '88vh';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+        const monthName = monthNames[month - 1];
+
+        contentEl.createEl('h2', { text: `Metas & Orçamento Planejado • ${monthName}/${year}` });
+
+        const scrollWrap = contentEl.createDiv('kt-fin-budget-modal-scroll');
+        scrollWrap.style.maxHeight = '56vh';
+        scrollWrap.style.overflowY = 'auto';
+        scrollWrap.style.paddingRight = '6px';
+
+        // 1. Despesas Planejadas por Categoria
+        scrollWrap.createEl('h3', { text: 'Despesas Planejadas (Orçamento Máximo por Categoria)' });
+        this.expenseCats.forEach(cat => {
+            const currentVal = this.plannedExpenses[cat] != null ? String(this.plannedExpenses[cat]) : '0';
+            new obsidian.Setting(scrollWrap)
+                .setName(cat)
+                .addText(t => {
+                    t.setPlaceholder('R$ 0,00')
+                     .setValue(currentVal === '0' ? '' : currentVal)
+                     .onChange(v => {
+                         this.plannedExpenses[cat] = parseFinanceCurrencyInput(v);
+                     });
+                    t.inputEl.style.width = '120px';
+                });
+        });
+
+        // 2. Renda Planejada por Categoria
+        scrollWrap.createEl('h3', { text: 'Renda Planejada (Previsão de Entradas)' });
+        this.incomeCats.forEach(cat => {
+            const currentVal = this.plannedIncome[cat] != null ? String(this.plannedIncome[cat]) : '0';
+            new obsidian.Setting(scrollWrap)
+                .setName(cat)
+                .addText(t => {
+                    t.setPlaceholder('R$ 0,00')
+                     .setValue(currentVal === '0' ? '' : currentVal)
+                     .onChange(v => {
+                         this.plannedIncome[cat] = parseFinanceCurrencyInput(v);
+                     });
+                    t.inputEl.style.width = '120px';
+                });
+        });
+
+        // Footer buttons
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.marginTop = '18px';
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+
+        const applyAllBtn = footer.createEl('button', {
+            text: `Aplicar para todo o ano de ${year}`,
+            cls: 'kt-btn-apply-all'
+        });
+        applyAllBtn.title = `Copia essas metas de orçamento para todos os 12 meses de ${year}`;
+        applyAllBtn.onclick = () => {
+            this.close();
+            this.onSave(this.plannedExpenses, this.plannedIncome, true);
+        };
+
+        const rightGroup = footer.createDiv('kt-modal-footer-right');
+        rightGroup.style.display = 'flex';
+        rightGroup.style.gap = '8px';
+
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: 'Salvar Mês' });
+        saveBtn.onclick = () => {
+            this.close();
+            this.onSave(this.plannedExpenses, this.plannedIncome, false);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceInitialBalanceModal extends obsidian.Modal {
+    constructor(app, currentVal, monthName, year, onSave) {
+        super(app);
+        this.app        = app;
+        this.currentVal = currentVal;
+        this.monthName  = monthName;
+        this.year       = year;
+        this.onSave     = onSave;
+    }
+
+    onOpen() {
+        const { contentEl, currentVal, monthName, year } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '420px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: `Saldo Inicial • ${monthName}/${year}` });
+
+        let valStr = currentVal != null ? String(currentVal) : '';
+
+        new obsidian.Setting(contentEl)
+            .setName('Saldo Inicial (R$)')
+            .setDesc('Saldo em conta no primeiro dia do mês')
+            .addText(t => {
+                t.setValue(valStr)
+                 .setPlaceholder('Ex: 29.102,00')
+                 .onChange(v => valStr = v);
+                t.inputEl.style.fontSize = '15px';
+                t.inputEl.style.fontWeight = '700';
+                setTimeout(() => t.inputEl.focus(), 30);
+            });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.marginTop = '18px';
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '8px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Salvar Saldo' });
+        saveBtn.onclick = () => {
+            const num = parseFinanceCurrencyInput(valStr);
+            this.close();
+            this.onSave(num);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceImportModal extends obsidian.Modal {
+    constructor(app, plugin, targetYear, targetMonth, onImportDone) {
+        super(app);
+        this.app          = app;
+        this.plugin       = plugin;
+        this.targetYear   = targetYear;
+        this.targetMonth  = targetMonth;
+        this.onImportDone = onImportDone;
+    }
+
+    onOpen() {
+        const { contentEl, targetYear, targetMonth } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '680px';
+        this.modalEl.style.maxWidth = '94vw';
+        this.modalEl.style.maxHeight = '90vh';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const monthName = getFinanceMonthName(targetMonth);
+        contentEl.createEl('h2', { text: `📥 Importar Planilha de Gastos (${monthName}/${targetYear})` });
+
+        const desc = contentEl.createEl('p', { cls: 'kt-modal-desc' });
+        desc.setText(`Os dados serão importados exclusivamente para o mês selecionado (${String(targetMonth).padStart(2,'0')}/${targetYear}), garantindo isolamento total sem alterar outros meses.`);
+
+        // File upload input supporting multiple files
+        const fileRow = contentEl.createDiv('kt-fin-import-file-row');
+        fileRow.style.margin = '10px 0';
+        fileRow.style.display = 'flex';
+        fileRow.style.flexDirection = 'column';
+        fileRow.style.gap = '6px';
+
+        const fileInputWrap = fileRow.createDiv();
+        fileInputWrap.style.display = 'flex';
+        fileInputWrap.style.alignItems = 'center';
+        fileInputWrap.style.gap = '10px';
+
+        const fileInput = fileInputWrap.createEl('input', {
+            type: 'file',
+            attr: { accept: '.csv,.tsv,.txt', multiple: 'multiple' }
+        });
+
+        const fileStatus = fileRow.createDiv('kt-fin-import-file-status');
+        fileStatus.style.fontSize = '12px';
+        fileStatus.style.color = 'var(--text-muted)';
+        fileStatus.style.fontWeight = '500';
+
+        // Textarea for pasting
+        const textarea = contentEl.createEl('textarea', {
+            cls: 'kt-fin-import-textarea',
+            attr: {
+                placeholder: `Cole aqui os dados de ${monthName}/${targetYear} (Ctrl+V) ou selecione arquivos CSV acima...\nExemplo:\n${monthName.toLowerCase()}\tR$400,00\tPlano de saúde Caio\tSaúde\n(1/3)\tR$1.336,67\tImpressora 3D\tLazer\n06/${String(targetMonth).padStart(2,'0')}/${targetYear}\tR$282,19\tIfood ( 60 clara 60 julia lage)\tLazer`,
+                rows: 10
+            }
+        });
+        textarea.style.width = '100%';
+        textarea.style.fontFamily = 'monospace';
+        textarea.style.fontSize = '12px';
+
+        fileInput.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files || []);
+            if (files.length === 0) return;
+
+            if (files.length === 1) {
+                const text = await files[0].text();
+                textarea.value = text;
+                fileStatus.setText(`📄 1 arquivo selecionado: ${files[0].name}`);
+            } else {
+                const fileChunks = [];
+                for (const f of files) {
+                    const t = await f.text();
+                    fileChunks.push(t);
+                }
+                textarea.value = fileChunks.join('\n\n');
+                fileStatus.setText(`📁 ${files.length} arquivos CSV selecionados`);
+            }
+        });
+
+        const infoBox = contentEl.createDiv('kt-fin-import-info-badge');
+        infoBox.style.marginTop = '10px';
+        infoBox.style.padding = '8px 12px';
+        infoBox.style.background = 'var(--background-secondary)';
+        infoBox.style.borderRadius = '6px';
+        infoBox.style.fontSize = '12px';
+        infoBox.style.color = 'var(--text-muted)';
+        infoBox.setText(`📌 Destino bloqueado: ${monthName}/${targetYear} (${String(targetMonth).padStart(2,'0')}/${targetYear}). Nenhuma entrada será enviada para outros meses.`);
+
+        // Footer buttons
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.marginTop = '16px';
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '8px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const parseBtn = footer.createEl('button', { cls: 'mod-cta', text: `Importar para ${monthName}/${targetYear}` });
+        parseBtn.onclick = () => {
+            const rawText = textarea.value.trim();
+            if (!rawText) {
+                new obsidian.Notice('⚠️ Cole os dados ou selecione arquivos CSV antes de continuar.');
+                return;
+            }
+
+            const res = this.parseAndSaveData(rawText, 'current');
+            this.close();
+            if (this.onImportDone) this.onImportDone(res);
+        };
+    }
+
+    parseAndSaveData(rawText, mode) {
+        const lines = rawText.split('\n');
+        const monthsData = this.plugin.settings.finances.months;
+        const currentMonthKey = `${this.targetYear}-${String(this.targetMonth).padStart(2, '0')}`;
+
+        // Save deep clone snapshot before modifying data for Undo functionality
+        const snapshotBefore = JSON.parse(JSON.stringify(monthsData));
+
+        const monthNameMap = {
+            'janeiro': 1, 'jan': 1, 'fevereiro': 2, 'fev': 2, 'março': 3, 'marco': 3, 'mar': 3,
+            'abril': 4, 'abr': 4, 'maio': 5, 'mai': 5, 'junho': 6, 'jun': 6,
+            'julho': 7, 'jul': 7, 'agosto': 8, 'ago': 8, 'setembro': 9, 'set': 9,
+            'outubro': 10, 'out': 10, 'novembro': 11, 'nov': 11, 'dezembro': 12, 'dez': 12
+        };
+
+        let activeYear = this.targetYear;
+        let activeMonth = this.targetMonth;
+        let lastSeenDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-01`;
+
+        const tokenizeLine = (text) => {
+            const isTabDelimited = text.includes('\t');
+            const result = [];
+            let cur = '';
+            let inQuotes = false;
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (char === '"' || char === "'") {
+                    if (inQuotes && text[i+1] === char) {
+                        cur += char;
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (isTabDelimited) {
+                    if (char === '\t' && !inQuotes) {
+                        result.push(cur.trim());
+                        cur = '';
+                    } else {
+                        cur += char;
+                    }
+                } else {
+                    if ((char === ',' || char === ';') && !inQuotes) {
+                        result.push(cur.trim());
+                        cur = '';
+                    } else {
+                        cur += char;
+                    }
+                }
+            }
+            result.push(cur.trim());
+            return result;
+        };
+
+        let importedCount = 0;
+        let duplicateCount = 0;
+
+        // Build inventory of existing items per month key to allow legitimate duplicate transactions on the same day
+        const existingInventory = {};
+        Object.keys(monthsData).forEach(mKey => {
+            existingInventory[mKey] = { expenses: {}, income: {} };
+            const m = monthsData[mKey];
+            if (m && Array.isArray(m.expenses)) {
+                m.expenses.forEach(e => {
+                    const k = `${(e.description || '').trim().toLowerCase()}|||${(e.value || 0).toFixed(2)}|||${e.date || ''}|||${e.installment || ''}`;
+                    existingInventory[mKey].expenses[k] = (existingInventory[mKey].expenses[k] || 0) + 1;
+                });
+            }
+            if (m && Array.isArray(m.income)) {
+                m.income.forEach(i => {
+                    const k = `${(i.description || '').trim().toLowerCase()}|||${(i.value || 0).toFixed(2)}|||${i.date || ''}`;
+                    existingInventory[mKey].income[k] = (existingInventory[mKey].income[k] || 0) + 1;
+                });
+            }
+        });
+
+        const parseSingleItem = (rawDate, rawVal, rawDesc, rawCat, forcedType = null) => {
+            if (!rawVal || !rawDesc) return null;
+
+            const isSummaryKeyword = (str) => {
+                if (!str) return false;
+                const s = str.trim().toLowerCase();
+                return s === 'total' || s === 'subtotal' || s === 'final' || s === 'saldo' ||
+                       s === 'saldo inicial' || s === 'saldo final' || s === 'diferença' ||
+                       s === 'diferenca' || s === 'planejado' || s === 'real' || s === 'resumo' ||
+                       s === 'descrição' || s === 'descricao' || s === 'valor' || s === 'data';
+            };
+
+            if (isSummaryKeyword(rawDesc) || isSummaryKeyword(rawDate) || isSummaryKeyword(rawCat)) return null;
+
+            // Check if rawVal has split comments e.g. "325 ( 63 - Julia / 61 + 61 Ana e tuts)"
+            const valSplitMatch = String(rawVal).match(/\((.*?)\)/);
+            if (valSplitMatch) {
+                rawDesc = `${rawDesc} ${valSplitMatch[0]}`.trim();
+            }
+
+            const numVal = parseFinanceCurrencyInput(rawVal);
+            if (isNaN(numVal) || numVal <= 0) return null;
+
+            let isFixed = false;
+            let installment = '';
+            let finalDateStr = lastSeenDateStr;
+            let targetKey = currentMonthKey;
+
+            const trimmedDate = (rawDate || '').trim();
+            const lowerDate = trimmedDate.toLowerCase();
+
+            if (trimmedDate) {
+                // 1. Check if rawDate is a Month Name (e.g. 'janeiro', 'julho', 'abril') -> Gasto Fixo
+                let isMonthName = false;
+                for (const [mName, mNum] of Object.entries(monthNameMap)) {
+                    if (lowerDate.includes(mName)) {
+                        isMonthName = true;
+                        isFixed = true;
+                        finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-01`;
+                        break;
+                    }
+                }
+
+                if (!isMonthName) {
+                    // 2. Check if rawDate is an Installment: (21/36), (2/3), (3/6), (2/5)
+                    const isParenthesized = /^\(\d+\/\d+\)$/.test(trimmedDate);
+                    const instMatch = trimmedDate.match(/^\(?(\d{1,2})[\/\-](\d{1,2})\)?$/);
+
+                    if (isParenthesized && instMatch) {
+                        // Explicitly formatted as an installment e.g. (21/36) or (3/6)
+                        installment = `${instMatch[1]}/${instMatch[2]}`;
+                        finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-01`;
+                    } else if (instMatch) {
+                        const p1Str = instMatch[1];
+                        const p2Str = instMatch[2];
+                        const p1 = parseInt(p1Str, 10);
+                        const p2 = parseInt(p2Str, 10);
+
+                        // If it has full year: DD/MM/YYYY or DD-MM-YYYY
+                        const ddmmyyyy = trimmedDate.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+                        if (ddmmyyyy) {
+                            const day = String(ddmmyyyy[1]).padStart(2, '0');
+                            finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-${day}`;
+                            lastSeenDateStr = finalDateStr;
+                        } else if (p1 > 12 && p2 >= 1 && p2 <= 12) {
+                            // "23/01" -> Day 23
+                            const day = String(p1).padStart(2, '0');
+                            finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-${day}`;
+                            lastSeenDateStr = finalDateStr;
+                        } else if (p1Str.startsWith('0') && p1 >= 1 && p1 <= 31 && p2 >= 1 && p2 <= 12) {
+                            // "03/01" -> Day 03
+                            const day = String(p1).padStart(2, '0');
+                            finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-${day}`;
+                            lastSeenDateStr = finalDateStr;
+                        } else if (p1 <= p2 && p2 > 1) {
+                            // "2/3", "3/6", "2/5" -> Installment!
+                            installment = `${p1}/${p2}`;
+                            finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-01`;
+                        } else {
+                            // Default day
+                            const day = String(p1).padStart(2, '0');
+                            finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-${day}`;
+                            lastSeenDateStr = finalDateStr;
+                        }
+                    } else {
+                        // Full date check DD/MM/YYYY
+                        const ddmmyyyy = trimmedDate.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+                        if (ddmmyyyy) {
+                            const day = String(ddmmyyyy[1]).padStart(2, '0');
+                            finalDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-${day}`;
+                            lastSeenDateStr = finalDateStr;
+                        }
+                    }
+                }
+            } else {
+                // Empty date cell -> Inherit lastSeenDateStr from preceding transaction of the same day!
+                finalDateStr = lastSeenDateStr;
+            }
+
+            // Also check if installment is inside description text e.g. "TOKSTOK 1/3" or "Carro (21/36)"
+            if (!installment) {
+                const descInstMatch = rawDesc.match(/\(?(\d+\/\d+)\)?/);
+                if (descInstMatch) {
+                    const parts = descInstMatch[1].split('/');
+                    const dp1 = parseInt(parts[0], 10);
+                    const dp2 = parseInt(parts[1], 10);
+                    if (dp1 <= dp2 || dp2 > 12) {
+                        installment = descInstMatch[1];
+                        rawDesc = rawDesc.replace(descInstMatch[0], '').trim();
+                    }
+                }
+            }
+
+            // Detect split / toCollect (parenthesis with names or numbers)
+            let isSplit = false;
+            let splitData = null;
+            const splitMatch = rawDesc.match(/\((.*?clara.*?|.*?julia.*?|.*?pagu.*?|\d+\s+[a-zA-Z]+.*?|[a-zA-Z]+\s+\d+.*?)\)/i);
+            if (splitMatch) {
+                isSplit = true;
+                const splitText = splitMatch[1].trim();
+                rawDesc = rawDesc.replace(splitMatch[0], '').trim();
+
+                const participants = [];
+                const chunks = splitText.split(/,|\be\b|\+/i);
+                chunks.forEach(chunk => {
+                    const cTrim = chunk.trim();
+                    if (!cTrim) return;
+
+                    const pairRegex = /(\d+[\.,]?\d*)\s*[-:]?\s*([a-zA-Z\s]+?)(?=\s+\d+|$)|([a-zA-Z\s]+?)\s*[-:]?\s*(\d+[\.,]?\d*)/g;
+                    let match;
+                    let foundAny = false;
+                    while ((match = pairRegex.exec(cTrim)) !== null) {
+                        foundAny = true;
+                        let amt = 0;
+                        let name = 'Pessoa';
+                        if (match[1] && match[2]) {
+                            amt = parseFinanceCurrencyInput(match[1]);
+                            name = match[2].trim();
+                        } else if (match[3] && match[4]) {
+                            amt = parseFinanceCurrencyInput(match[4]);
+                            name = match[3].trim();
+                        }
+                        if (name && !isNaN(amt) && amt > 0) {
+                            participants.push({
+                                name: name.charAt(0).toUpperCase() + name.slice(1),
+                                amount: amt,
+                                settled: false
+                            });
+                        }
+                    }
+
+                    if (!foundAny) {
+                        const matchVal = cTrim.match(/(\d+[\.,]?\d*)/);
+                        const num = matchVal ? parseFinanceCurrencyInput(matchVal[1]) : 0;
+                        const name = cTrim.replace(matchVal ? matchVal[0] : '', '').replace(/[-:]/g, '').trim() || 'Pessoa';
+                        if (num > 0 || name !== 'Pessoa') {
+                            participants.push({
+                                name: name.charAt(0).toUpperCase() + name.slice(1),
+                                amount: num,
+                                settled: false
+                            });
+                        }
+                    }
+                });
+
+                const totalToCollect = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
+                splitData = {
+                    isSplit: true,
+                    participants,
+                    totalToCollect
+                };
+            }
+
+            const incomeCats = this.plugin.settings.finances.incomeCategories || ['Pagamento', 'Poupança', 'Bônus', 'Juros', 'Outros'];
+            const isIncome = forcedType === 'income' || (forcedType !== 'expense' && (incomeCats.some(ic => ic.toLowerCase() === rawCat.toLowerCase()) || rawDesc.toLowerCase().includes('pagamento') || rawDesc.toLowerCase().includes('salario')));
+
+            if (mode === 'current') {
+                targetKey = currentMonthKey;
+            }
+
+            return {
+                targetKey,
+                item: {
+                    id: `fin-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                    type: isIncome ? 'income' : 'expense',
+                    value: numVal,
+                    description: rawDesc.replace(/^["']|["']$/g, '').trim(),
+                    category: rawCat.replace(/^["']|["']$/g, '').trim() || (isIncome ? 'Pagamento' : 'Outros'),
+                    date: finalDateStr,
+                    installment,
+                    isFixed,
+                    isSplit,
+                    splitData
+                }
+            };
+        };
+
+        lines.forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+
+            // Check for file separator header
+            const fileHdrMatch = trimmed.match(/^#\s*---\s*ARQUIVO:\s*(.*?)\s*---$/i);
+            if (fileHdrMatch) {
+                const fname = fileHdrMatch[1].toLowerCase();
+                const yMatch = fname.match(/\b(202\d)\b/);
+                if (yMatch) activeYear = parseInt(yMatch[1], 10);
+
+                for (const [mName, mNum] of Object.entries(monthNameMap)) {
+                    if (fname.includes(mName)) {
+                        activeMonth = mNum;
+                        break;
+                    }
+                }
+                lastSeenDateStr = `${activeYear}-${String(activeMonth).padStart(2, '0')}-01`;
+                return;
+            }
+
+            if (trimmed.startsWith('#')) return;
+
+            // Tokenize CSV row keeping all columns
+            const row = tokenizeLine(line);
+            if (row.length === 0) return;
+
+            // Helper to add item with inventory-based deduplication
+            const tryAddItem = (res) => {
+                if (!res || !res.item) return;
+                const tKey = res.targetKey;
+                if (!monthsData[tKey]) {
+                    monthsData[tKey] = { initialBalance: null, plannedExpenses: {}, plannedIncome: {}, expenses: [], income: [] };
+                }
+                if (!existingInventory[tKey]) {
+                    existingInventory[tKey] = { expenses: {}, income: {} };
+                }
+
+                const listType = res.item.type === 'income' ? 'income' : 'expenses';
+                if (!monthsData[tKey][listType]) monthsData[tKey][listType] = [];
+
+                const itemKey = `${(res.item.description || '').trim().toLowerCase()}|||${(res.item.value || 0).toFixed(2)}|||${res.item.date || ''}|||${res.item.installment || ''}`;
+                const remainingDuplicates = existingInventory[tKey][listType][itemKey] || 0;
+
+                if (remainingDuplicates > 0) {
+                    // Match found in existing database -> skip duplicate!
+                    existingInventory[tKey][listType][itemKey]--;
+                    duplicateCount++;
+                } else {
+                    // New item -> add to list!
+                    monthsData[tKey][listType].push(res.item);
+                    importedCount++;
+                }
+            };
+
+            // Detect column layout:
+            if (row.length >= 5) {
+                const isVal1 = /^R?\$?\s*\d+/i.test(row[1]);
+                const isVal2 = /^R?\$?\s*\d+/i.test(row[2]);
+
+                if (isVal2) {
+                    // Google Sheets 10-column layout: [empty, date, val, desc, cat, empty, date_inc, val_inc, desc_inc, cat_inc]
+                    const expRes = parseSingleItem(row[1], row[2], row[3], row[4] || 'Outros', 'expense');
+                    tryAddItem(expRes);
+
+                    if (row.length >= 9 && row[7]) {
+                        const incRes = parseSingleItem(row[6], row[7], row[8], row[9] || 'Pagamento', 'income');
+                        tryAddItem(incRes);
+                    }
+                } else if (isVal1) {
+                    // 5-column layout: [date, val, desc, cat, ...]
+                    const expRes = parseSingleItem(row[0], row[1], row[2], row[3] || 'Outros', 'expense');
+                    tryAddItem(expRes);
+                }
+            } else if (row.length >= 2) {
+                // Simple 2..4 column layout
+                const isVal0 = /^R?\$?\s*\d+/i.test(row[0]);
+                const isVal1 = /^R?\$?\s*\d+/i.test(row[1]);
+
+                let rDate = '', rVal = '', rDesc = '', rCat = '';
+                if (row.length === 4) {
+                    if (isVal1 || !isVal0) {
+                        rDate = row[0]; rVal = row[1]; rDesc = row[2]; rCat = row[3];
+                    } else {
+                        rVal = row[0]; rDesc = row[1]; rCat = row[2];
+                    }
+                } else if (row.length === 3) {
+                    if (isVal1) {
+                        rDate = row[0]; rVal = row[1]; rDesc = row[2];
+                    } else if (isVal0) {
+                        rVal = row[0]; rDesc = row[1]; rCat = row[2];
+                    } else {
+                        rDate = row[0]; rDesc = row[1]; rVal = row[2];
+                    }
+                } else if (row.length === 2) {
+                    if (isVal0) {
+                        rVal = row[0]; rDesc = row[1];
+                    } else {
+                        rDesc = row[0]; rVal = row[1];
+                    }
+                }
+                const res = parseSingleItem(rDate, rVal, rDesc, rCat);
+                tryAddItem(res);
+            }
+        });
+
+        this.plugin.saveSettings();
+        return { importedCount, duplicateCount, snapshotBefore };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceConfirmModal extends obsidian.Modal {
+    constructor(app, title, message, onConfirm) {
+        super(app);
+        this.title = title;
+        this.message = message;
+        this.onConfirm = onConfirm;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '440px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.title });
+        const p = contentEl.createEl('p', { cls: 'kt-modal-desc' });
+        p.setText(this.message);
+        p.style.lineHeight = '1.5';
+        p.style.margin = '12px 0 18px 0';
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '10px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const confirmBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Confirmar e Apagar' });
+        confirmBtn.onclick = () => {
+            this.close();
+            this.onConfirm();
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
 // TIME BLOCK MODAL
 // ================================================================
 
@@ -5218,6 +6820,7 @@ kanban-plugin: basic
             { id: 'projects',  name: 'Projetos',     icon: '💼' },
             { id: 'habits',    name: 'Hábitos',      icon: '✨' },
             { id: 'postits',   name: 'Post-its',     icon: '📌' },
+            { id: 'finances',  name: 'Finanças',     icon: '💳' },
         ];
 
         tabs.forEach(tabKey => {
@@ -5392,6 +6995,8 @@ kanban-plugin: basic
             this.renderHabitsView(container);
         } else if (viewMode === 'postits') {
             this.renderPostItsView(container);
+        } else if (viewMode === 'finances') {
+            this.renderFinancesView(container);
         } else {
             this.renderGantt(container);
         }
@@ -5419,8 +7024,16 @@ kanban-plugin: basic
             this.savedGanttScrollLeft = prevGanttScroll.scrollLeft;
             this.savedGanttScrollTop = prevGanttScroll.scrollTop;
         }
-        if (this.viewMode === 'projects' || this.viewMode === 'habits' || this.viewMode === 'postits') {
+        if (this.viewMode === 'projects' || this.viewMode === 'habits' || this.viewMode === 'postits' || this.viewMode === 'finances') {
             this.savedPageScrollTop = wrap.scrollTop;
+        }
+        const prevFinTablesScroll = wrap.querySelector('.kt-fin-tables-scroll');
+        if (prevFinTablesScroll) {
+            this.savedFinancesTablesScrollTop = prevFinTablesScroll.scrollTop;
+        }
+        const prevFinRightScroll = wrap.querySelector('.kt-fin-right-col');
+        if (prevFinRightScroll) {
+            this.savedFinancesRightColScrollTop = prevFinRightScroll.scrollTop;
         }
 
         wrap.empty();
@@ -5518,6 +7131,7 @@ kanban-plugin: basic
         const projectsTab = tabs.createEl('button', { cls: 'kt-tab', text: 'Projetos' });
         const habitsTab   = tabs.createEl('button', { cls: 'kt-tab', text: 'Hábitos' });
         const postItsTab  = tabs.createEl('button', { cls: 'kt-tab', text: 'Post-its' });
+        const financesTab = tabs.createEl('button', { cls: 'kt-tab', text: 'Finanças' });
 
         if (this.viewMode === 'gantt')     ganttTab.addClass('active');
         if (this.viewMode === 'timeblock') timeTab.addClass('active');
@@ -5525,6 +7139,7 @@ kanban-plugin: basic
         if (this.viewMode === 'projects')  projectsTab.addClass('active');
         if (this.viewMode === 'habits')    habitsTab.addClass('active');
         if (this.viewMode === 'postits')   postItsTab.addClass('active');
+        if (this.viewMode === 'finances')  financesTab.addClass('active');
 
         // Make top tabs draggable into docking layout
         const makeTopTabDraggable = (btn, viewId) => {
@@ -5548,6 +7163,7 @@ kanban-plugin: basic
         makeTopTabDraggable(projectsTab, 'projects');
         makeTopTabDraggable(habitsTab, 'habits');
         makeTopTabDraggable(postItsTab, 'postits');
+        makeTopTabDraggable(financesTab, 'finances');
 
         const switchMainView = async (vMode) => {
             this.viewMode = vMode;
@@ -5593,6 +7209,7 @@ kanban-plugin: basic
             }
         };
         postItsTab.onclick  = () => switchMainView('postits');
+        financesTab.onclick = () => switchMainView('finances');
 
         // Navigation (for Gantt, Timeblocking & Habits)
         const showNav = this.hasActiveDockView('gantt') || this.hasActiveDockView('timeblock') || this.hasActiveDockView('habits');
@@ -9266,6 +10883,1666 @@ kanban-plugin: basic
     }
 
     // ----------------------------------------------------------
+    // FINANCES (CONTROLE FINANCEIRO & ORÇAMENTO MENSAL)
+    // ----------------------------------------------------------
+
+    getFinancesMonthData(year, month) {
+        const fin = this.plugin.settings.finances;
+        const key = `${year}-${String(month).padStart(2, '0')}`;
+        if (!fin.months[key]) {
+            fin.months[key] = {
+                initialBalance: null,
+                plannedExpenses: {},
+                plannedIncome: {},
+                expenses: [],
+                income: []
+            };
+        }
+        return fin.months[key];
+    }
+
+    getInheritedInitialBalance(year, month) {
+        const fin = this.plugin.settings.finances;
+        const key = `${year}-${String(month).padStart(2, '0')}`;
+        const currentData = fin.months[key];
+        if (currentData && currentData.initialBalance != null) {
+            return currentData.initialBalance;
+        }
+
+        // Calculate from previous month
+        let prevYear = year;
+        let prevMonth = month - 1;
+        if (prevMonth < 1) {
+            prevMonth = 12;
+            prevYear = year - 1;
+        }
+        const prevKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+        const prevData = fin.months[prevKey];
+        if (prevData) {
+            const prevInitial = this.getInheritedInitialBalance(prevYear, prevMonth);
+            const prevInc = (prevData.income || []).reduce((acc, i) => acc + (i.value || 0), 0);
+            const prevExp = (prevData.expenses || []).reduce((acc, e) => acc + (e.value || 0), 0);
+            return prevInitial + prevInc - prevExp;
+        }
+
+        return 0;
+    }
+
+    reconcileFinancesMonths() {
+        const fin = this.plugin.settings.finances;
+        if (!fin || !fin.months) return;
+
+        // Ensure month arrays are clean and valid without automatically moving items between months
+        Object.keys(fin.months).forEach(monthKey => {
+            const monthData = fin.months[monthKey];
+            if (!monthData) return;
+
+            if (Array.isArray(monthData.expenses)) {
+                monthData.expenses = monthData.expenses.filter(exp => exp && typeof exp.value === 'number' && !isNaN(exp.value));
+            }
+            if (Array.isArray(monthData.income)) {
+                monthData.income = monthData.income.filter(inc => inc && typeof inc.value === 'number' && !isNaN(inc.value));
+            }
+        });
+    }
+
+    renderFinancesView(container) {
+        const fin = this.plugin.settings.finances;
+        if (!fin) return;
+
+        this.reconcileFinancesMonths();
+
+        const curr = fin.currency || 'R$';
+        const now = new Date();
+        const selYear = fin.selectedYear || now.getFullYear();
+        const selMonth = fin.selectedMonth || (now.getMonth() + 1);
+        const monthKey = `${selYear}-${String(selMonth).padStart(2, '0')}`;
+        const monthData = this.getFinancesMonthData(selYear, selMonth);
+
+        const finContainer = container.createDiv('kt-finances-container');
+
+        // 1. Top Header Bar (Year, Months Navigation, Actions)
+        this.renderFinancesHeader(finContainer, selYear, selMonth, monthData, curr);
+
+        // 2. Calculations
+        const initialBal = this.getInheritedInitialBalance(selYear, selMonth);
+        const totalExpReal = (monthData.expenses || []).reduce((acc, e) => acc + (e.value || 0), 0);
+        const totalIncReal = (monthData.income || []).reduce((acc, i) => acc + (i.value || 0), 0);
+        const finalBal = initialBal + totalIncReal - totalExpReal;
+        const monthSavings = totalIncReal - totalExpReal;
+        const savingsPct = initialBal > 0 ? ((monthSavings / initialBal) * 100).toFixed(1) : 0;
+
+        // 3. Two-Column Split Layout
+        const splitLayout = finContainer.createDiv('kt-fin-split-layout');
+
+        // Left Column: Despesas & Renda Tables
+        const leftCol = splitLayout.createDiv('kt-fin-left-col');
+        
+        // Sub-tabs switcher on left column (Despesas / Renda / Visão Geral)
+        if (!this.finLeftSubTab) this.finLeftSubTab = 'all';
+
+        const subTabWrap = leftCol.createDiv('kt-fin-subtab-bar');
+        const subTabLeft = subTabWrap.createDiv('kt-fin-subtab-left');
+
+        const tabs = [
+            { id: 'all',      label: 'Visão Completa (Ambos)' },
+            { id: 'income',   label: `Renda (${formatCurrency(totalIncReal, curr)})`, count: (monthData.income || []).length },
+            { id: 'expenses', label: `Despesas (${formatCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length }
+        ];
+
+        tabs.forEach(t => {
+            const btn = subTabLeft.createEl('button', {
+                cls: `kt-fin-subtab-btn ${this.finLeftSubTab === t.id ? 'is-active' : ''}`,
+                text: t.label
+            });
+            btn.onclick = () => {
+                this.finLeftSubTab = t.id;
+                this.render();
+            };
+        });
+
+        // Search Input Box
+        const searchBox = subTabWrap.createDiv('kt-fin-search-box');
+        searchBox.createSpan({ cls: 'kt-fin-search-icon', text: '🔍' });
+
+        const searchInput = searchBox.createEl('input', {
+            type: 'text',
+            cls: 'kt-fin-search-input',
+            attr: {
+                placeholder: 'Buscar descrição ou valor...',
+                value: this.financesSearchQuery || ''
+            }
+        });
+
+        let clearBtn = null;
+        const updateClearBtn = () => {
+            if (this.financesSearchQuery && !clearBtn) {
+                clearBtn = searchBox.createEl('button', { cls: 'kt-fin-search-clear', text: '✕' });
+                clearBtn.title = 'Limpar busca';
+                clearBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.financesSearchQuery = '';
+                    searchInput.value = '';
+                    this.filterFinancesTables(tablesContainer, '');
+                    updateClearBtn();
+                };
+            } else if (!this.financesSearchQuery && clearBtn) {
+                clearBtn.remove();
+                clearBtn = null;
+            }
+        };
+        updateClearBtn();
+
+        searchInput.oninput = (e) => {
+            const val = e.target.value;
+            this.financesSearchQuery = val;
+            this.filterFinancesTables(tablesContainer, val);
+            updateClearBtn();
+        };
+
+        const tablesContainer = leftCol.createDiv('kt-fin-tables-scroll');
+
+        // Scroll preservation listeners
+        tablesContainer.addEventListener('scroll', () => {
+            this.savedFinancesTablesScrollTop = tablesContainer.scrollTop;
+        });
+
+        // Click on background of tables container deselects row
+        tablesContainer.addEventListener('click', (e) => {
+            if (!e.target.closest('.kt-fin-table tbody tr') && !e.target.closest('.kt-fin-act-btn') && !e.target.closest('.kt-fin-more-dropdown') && !e.target.closest('.modal')) {
+                this.financesSelectedItemId = null;
+                const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
+                allTrs.forEach(row => row.removeClass('is-selected'));
+            }
+        });
+
+        // Keyboard navigation: press 'F' to center viewport on selected expense/income
+        if (!this.financesKeyHandlerAttached) {
+            this.financesKeyHandlerAttached = true;
+            this.registerDomEvent(window, 'keydown', (e) => {
+                if (this.currentViewMode !== 'finances') return;
+                const activeEl = document.activeElement;
+                if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+                    return;
+                }
+                if (e.key === 'f' || e.key === 'F') {
+                    if (this.financesSelectedItemId) {
+                        e.preventDefault();
+                        this.focusFinancesSelectedItem(this.financesSelectedItemId, true);
+                    }
+                } else if (e.key === 'Escape') {
+                    if (this.financesSelectedItemId) {
+                        this.financesSelectedItemId = null;
+                        const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
+                        allTrs.forEach(row => row.removeClass('is-selected'));
+                    }
+                }
+            });
+        }
+
+        if (this.finLeftSubTab === 'all') {
+            // Renda por cima, depois despesas
+            this.renderFinancesIncomeTable(tablesContainer, selYear, selMonth, monthData, curr);
+            this.renderFinancesExpensesTable(tablesContainer, selYear, selMonth, monthData, curr);
+        } else if (this.finLeftSubTab === 'income') {
+            this.renderFinancesIncomeTable(tablesContainer, selYear, selMonth, monthData, curr);
+        } else if (this.finLeftSubTab === 'expenses') {
+            this.renderFinancesExpensesTable(tablesContainer, selYear, selMonth, monthData, curr);
+        }
+
+        // Apply search filter if query exists
+        if (this.financesSearchQuery) {
+            this.filterFinancesTables(tablesContainer, this.financesSearchQuery);
+        }
+
+        // Restore scroll position after table render
+        if (this.pendingFinancesScrollToItemId) {
+            const focusId = this.pendingFinancesScrollToItemId;
+            this.pendingFinancesScrollToItemId = null;
+            setTimeout(() => {
+                this.focusFinancesSelectedItem(focusId, true);
+            }, 60);
+        } else if (this.savedFinancesTablesScrollTop != null && this.savedFinancesTablesScrollTop > 0) {
+            tablesContainer.scrollTop = this.savedFinancesTablesScrollTop;
+            requestAnimationFrame(() => {
+                if (tablesContainer) tablesContainer.scrollTop = this.savedFinancesTablesScrollTop;
+            });
+        }
+
+        // Right Column: Balanço Mensal & Orçamento (Dashboard)
+        const rightCol = splitLayout.createDiv('kt-fin-right-col');
+        rightCol.addEventListener('scroll', () => {
+            this.savedFinancesRightColScrollTop = rightCol.scrollTop;
+        });
+
+        this.renderFinancesBudgetSummary(rightCol, selYear, selMonth, monthData, curr, initialBal, finalBal, monthSavings, savingsPct, totalExpReal, totalIncReal);
+
+        if (this.savedFinancesRightColScrollTop != null && this.savedFinancesRightColScrollTop > 0) {
+            rightCol.scrollTop = this.savedFinancesRightColScrollTop;
+            requestAnimationFrame(() => {
+                if (rightCol) rightCol.scrollTop = this.savedFinancesRightColScrollTop;
+            });
+        }
+    }
+
+    renderFinancesHeader(parent, year, month, monthData, curr) {
+        const fin = this.plugin.settings.finances;
+        const header = parent.createDiv('kt-fin-header-bar');
+
+        // Year Selector Group
+        const yearGroup = header.createDiv('kt-fin-year-group');
+        
+        const prevYearBtn = yearGroup.createEl('button', { cls: 'kt-fin-nav-btn', text: '‹' });
+        prevYearBtn.title = 'Ano anterior';
+        prevYearBtn.onclick = async () => {
+            fin.selectedYear = year - 1;
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        const yearLabel = yearGroup.createSpan({ cls: 'kt-fin-year-label', text: String(year) });
+
+        const nextYearBtn = yearGroup.createEl('button', { cls: 'kt-fin-nav-btn', text: '›' });
+        nextYearBtn.title = 'Próximo ano';
+        nextYearBtn.onclick = async () => {
+            fin.selectedYear = year + 1;
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        // Month Selector Bar (Jan .. Dez)
+        const monthBar = header.createDiv('kt-fin-month-bar');
+        const monthAbbrs = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+        const now = new Date();
+
+        monthAbbrs.forEach((abbr, idx) => {
+            const mNum = idx + 1;
+            const isCurrentMonth = (mNum === (now.getMonth() + 1) && year === now.getFullYear());
+            const isSelected = (mNum === month);
+
+            const mBtn = monthBar.createEl('button', {
+                cls: `kt-fin-month-btn ${isSelected ? 'is-selected' : ''} ${isCurrentMonth ? 'is-current' : ''}`,
+                text: isCurrentMonth ? `${abbr} •` : abbr
+            });
+
+            mBtn.onclick = async () => {
+                if (fin.selectedMonth !== mNum) {
+                    fin.selectedMonth = mNum;
+                    await this.plugin.saveSettings();
+                    this.render();
+                }
+            };
+        });
+
+        // Actions Group
+        const actionsGroup = header.createDiv('kt-fin-actions-group');
+        actionsGroup.style.position = 'relative';
+
+        // Import Button
+        const importBtn = actionsGroup.createEl('button', {
+            cls: 'kt-fin-act-btn mod-cta',
+            text: '📥 Importar Planilha'
+        });
+        importBtn.title = 'Colar dados do Google Sheets ou carregar arquivos CSV';
+        importBtn.onclick = () => {
+            new FinanceImportModal(this.app, this.plugin, year, month, (res) => {
+                this.showUndoImportToast(res);
+                this.render();
+            }).open();
+        };
+
+        // 3-Dots More Options Menu Button (⋯)
+        const moreBtn = actionsGroup.createEl('button', {
+            cls: 'kt-fin-act-btn kt-fin-more-btn',
+            text: '⋯'
+        });
+        moreBtn.title = 'Mais opções (Limpar planilha, remover duplicados, exportar...)';
+
+        moreBtn.onclick = (e) => {
+            e.stopPropagation();
+            const existingMenu = actionsGroup.querySelector('.kt-fin-more-dropdown');
+            if (existingMenu) {
+                existingMenu.remove();
+                return;
+            }
+
+            const menu = actionsGroup.createDiv('kt-fin-more-dropdown');
+
+            // 1. Remover Duplicados
+            const dedupeBtn = menu.createEl('button', {
+                cls: 'kt-fin-more-item',
+                text: '🧹 Remover Lançamentos Duplicados'
+            });
+            dedupeBtn.onclick = () => {
+                menu.remove();
+                this.removeFinanceDuplicates(year, month);
+            };
+
+            // 2. Copiar Fixos e Parcelas do Mês Anterior
+            const copyFixBtn = menu.createEl('button', {
+                cls: 'kt-fin-more-item',
+                text: '📋 Buscar Fixos e Parcelas do Mês Anterior'
+            });
+            copyFixBtn.onclick = async () => {
+                menu.remove();
+                const res = await this.copyFixedExpensesFromPreviousMonth(year, month);
+                if (res.totalAdded > 0) {
+                    let msg = '✓ ';
+                    if (res.fixedCount > 0 && res.instCount > 0) {
+                        msg += `${res.fixedCount} gastos fixos e ${res.instCount} parcelas atualizadas copiados do mês anterior!`;
+                    } else if (res.fixedCount > 0) {
+                        msg += `${res.fixedCount} gastos fixos copiados do mês anterior!`;
+                    } else {
+                        msg += `${res.instCount} parcelas atualizadas copiadas do mês anterior!`;
+                    }
+                    new obsidian.Notice(msg);
+                    this.render();
+                } else {
+                    new obsidian.Notice('Nenhum novo gasto fixo ou parcela pendente para copiar.');
+                }
+            };
+
+            // 3. Exportar CSV
+            const exportBtn = menu.createEl('button', {
+                cls: 'kt-fin-more-item',
+                text: '📤 Exportar CSV deste Mês'
+            });
+            exportBtn.onclick = () => {
+                menu.remove();
+                this.exportFinancesCSV(year, month, monthData);
+            };
+
+            menu.createDiv('kt-fin-more-divider');
+
+            // 4. Limpar Mês Atual
+            const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+            const clearMonthBtn = menu.createEl('button', {
+                cls: 'kt-fin-more-item mod-danger',
+                text: `🗑️ Apagar Planilha de ${monthNames[month - 1]}/${year}`
+            });
+            clearMonthBtn.onclick = () => {
+                menu.remove();
+                this.clearFinancesMonth(year, month);
+            };
+
+            // 5. Limpar Todo o Ano
+            const clearYearBtn = menu.createEl('button', {
+                cls: 'kt-fin-more-item mod-danger',
+                text: `⚠️ Apagar Todos os Meses de ${year}`
+            });
+            clearYearBtn.onclick = () => {
+                menu.remove();
+                this.clearFinancesYear(year);
+            };
+
+            const closeMenuHandler = (docEvt) => {
+                if (!menu.contains(docEvt.target) && docEvt.target !== moreBtn) {
+                    menu.remove();
+                    document.removeEventListener('click', closeMenuHandler);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeMenuHandler), 10);
+        };
+    }
+
+    showUndoImportToast(importResult) {
+        if (!importResult || (importResult.importedCount === 0 && importResult.duplicateCount === 0)) return;
+
+        // Remove existing toast if any
+        if (this.currentUndoToastEl) {
+            this.currentUndoToastEl.remove();
+            this.currentUndoToastEl = null;
+            if (this.undoToastTimer) clearInterval(this.undoToastTimer);
+        }
+
+        const toast = document.body.createDiv('kt-fin-undo-toast');
+        this.currentUndoToastEl = toast;
+
+        const body = toast.createDiv('kt-fin-undo-toast-body');
+        const textWrap = body.createDiv('kt-fin-undo-toast-text');
+        
+        let msg = `📥 <strong>${importResult.importedCount} novos registros importados.</strong>`;
+        if (importResult.duplicateCount > 0) {
+            msg += `<br><span style="color:var(--text-muted);font-size:11.5px;">(${importResult.duplicateCount} duplicados ignorados)</span>`;
+        }
+        textWrap.innerHTML = msg;
+
+        const actions = body.createDiv('kt-fin-undo-toast-actions');
+        let timeLeft = 30;
+
+        const undoBtn = actions.createEl('button', {
+            cls: 'kt-fin-undo-btn',
+            text: `↩ Desfazer (${timeLeft}s)`
+        });
+
+        const closeBtn = actions.createEl('button', {
+            cls: 'kt-fin-undo-close-btn',
+            text: '✕'
+        });
+
+        const progressWrap = toast.createDiv('kt-fin-undo-progress-wrap');
+        const progressBar = progressWrap.createDiv('kt-fin-undo-progress-bar');
+
+        const disposeToast = () => {
+            if (this.undoToastTimer) clearInterval(this.undoToastTimer);
+            if (toast && toast.parentNode) toast.remove();
+            if (this.currentUndoToastEl === toast) this.currentUndoToastEl = null;
+        };
+
+        closeBtn.onclick = disposeToast;
+
+        undoBtn.onclick = async () => {
+            disposeToast();
+            if (importResult.snapshotBefore) {
+                this.plugin.settings.finances.months = importResult.snapshotBefore;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Importação desfeita com sucesso! A planilha foi restaurada.');
+            }
+        };
+
+        const totalMs = 30000;
+        const start = Date.now();
+
+        this.undoToastTimer = setInterval(() => {
+            const elapsed = Date.now() - start;
+            const remainingSec = Math.max(0, Math.ceil((totalMs - elapsed) / 1000));
+            undoBtn.setText(`↩ Desfazer (${remainingSec}s)`);
+            const pct = Math.max(0, 100 - (elapsed / totalMs) * 100);
+            progressBar.style.width = `${pct}%`;
+
+            if (elapsed >= totalMs) {
+                disposeToast();
+            }
+        }, 200);
+    }
+
+    removeFinanceDuplicates(year, month) {
+        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+        const monthData = this.plugin.settings.finances.months?.[monthKey];
+        if (!monthData) {
+            new obsidian.Notice('Nenhum dado encontrado neste mês.');
+            return;
+        }
+
+        let removedCount = 0;
+
+        const dedupeList = (list) => {
+            if (!Array.isArray(list)) return [];
+            const seen = new Set();
+            const unique = [];
+
+            list.forEach(item => {
+                const key = `${(item.type || 'expense')}|||${(item.description || '').trim().toLowerCase()}|||${(item.value || 0).toFixed(2)}|||${item.date || ''}|||${item.installment || ''}|||${!!item.isFixed}`;
+                if (seen.has(key)) {
+                    removedCount++;
+                } else {
+                    seen.add(key);
+                    unique.push(item);
+                }
+            });
+            return unique;
+        };
+
+        monthData.expenses = dedupeList(monthData.expenses);
+        monthData.income = dedupeList(monthData.income);
+
+        if (removedCount > 0) {
+            this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ ${removedCount} lançamentos duplicados foram removidos deste mês!`);
+        } else {
+            new obsidian.Notice('Nenhum lançamento duplicado foi encontrado neste mês.');
+        }
+    }
+
+    clearFinancesMonth(year, month) {
+        const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+        const mName = monthNames[month - 1];
+
+        const confirmModal = new FinanceConfirmModal(
+            this.app,
+            `🗑️ Apagar Lançamentos de ${mName}/${year}`,
+            `Tem certeza que deseja apagar TODOS os lançamentos (despesas e rendas) do mês de ${mName}/${year}? Esta ação não pode ser desfeita.`,
+            async () => {
+                const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+                if (this.plugin.settings.finances.months?.[monthKey]) {
+                    this.plugin.settings.finances.months[monthKey].expenses = [];
+                    this.plugin.settings.finances.months[monthKey].income = [];
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`✓ Todos os lançamentos de ${mName}/${year} foram apagados.`);
+                }
+            }
+        );
+        confirmModal.open();
+    }
+
+    clearFinancesYear(year) {
+        const confirmModal = new FinanceConfirmModal(
+            this.app,
+            `⚠️ Apagar Todo o Ano de ${year}`,
+            `Tem certeza que deseja apagar TODOS os lançamentos de todos os 12 meses do ano de ${year}? Esta ação não pode ser desfeita.`,
+            async () => {
+                let clearedCount = 0;
+                for (let m = 1; m <= 12; m++) {
+                    const monthKey = `${year}-${String(m).padStart(2, '0')}`;
+                    if (this.plugin.settings.finances.months?.[monthKey]) {
+                        this.plugin.settings.finances.months[monthKey].expenses = [];
+                        this.plugin.settings.finances.months[monthKey].income = [];
+                        clearedCount++;
+                    }
+                }
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Planilha de ${year} completamente zerada.`);
+            }
+        );
+        confirmModal.open();
+    }
+
+    renderFinancesExpensesTable(parent, year, month, monthData, curr) {
+        const fin = this.plugin.settings.finances;
+        const section = parent.createDiv('kt-fin-section');
+
+        const secHdr = section.createDiv('kt-fin-section-hdr');
+        secHdr.createEl('h3', { text: 'Despesas' });
+
+        const addExpBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn mod-cta', text: '＋ Nova Despesa' });
+        addExpBtn.onclick = () => {
+            new FinanceEntryModal(
+                this.app,
+                this.plugin,
+                'expense',
+                null,
+                year,
+                month,
+                fin.categories,
+                async (newItem) => {
+                    if (!monthData.expenses) monthData.expenses = [];
+                    monthData.expenses.push(newItem);
+                    this.reconcileFinancesMonths();
+                    await this.plugin.saveSettings();
+                    this.pendingFinancesScrollToItemId = newItem.id;
+                    this.financesSelectedItemId = newItem.id;
+                    this.render();
+                }
+            ).open();
+        };
+
+        const tableWrap = section.createDiv('kt-fin-table-wrap');
+        const table = tableWrap.createEl('table', { cls: 'kt-fin-table' });
+
+        const thead = table.createEl('thead');
+        const thr = thead.createEl('tr');
+        thr.createEl('th', { text: 'Data' });
+        thr.createEl('th', { text: 'Valor' });
+        thr.createEl('th', { text: 'Descrição' });
+        thr.createEl('th', { text: 'Categoria' });
+        thr.createEl('th', { text: 'Ações', cls: 'kt-th-actions' });
+
+        const tbody = table.createEl('tbody');
+        const expenses = monthData.expenses || [];
+
+        if (expenses.length === 0) {
+            const emptyTr = tbody.createEl('tr');
+            const td = emptyTr.createEl('td', { cls: 'kt-td-empty', attr: { colspan: '5' } });
+            td.setText('Nenhuma despesa registrada neste mês. Clique em "+ Nova Despesa" ou importe sua planilha.');
+            return;
+        }
+
+        // Sort expenses: fixed first, then by date ascending
+        const sorted = expenses.slice().sort((a, b) => {
+            if (a.isFixed && !b.isFixed) return -1;
+            if (!a.isFixed && b.isFixed) return 1;
+            const dateA = a.date || '';
+            const dateB = b.date || '';
+            return dateA.localeCompare(dateB);
+        });
+
+        sorted.forEach(exp => {
+            const hasPendingSplit = exp.splitData && exp.splitData.participants?.some(p => !p.settled);
+            const isSelected = this.financesSelectedItemId === exp.id;
+            const tr = tbody.createEl('tr', { cls: `${hasPendingSplit ? 'kt-row-split' : ''} ${isSelected ? 'is-selected' : ''}` });
+            tr.setAttribute('data-item-id', exp.id);
+
+            // Selection on click
+            tr.onclick = (e) => {
+                this.financesSelectedItemId = exp.id;
+                const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
+                allTrs.forEach(row => row.removeClass('is-selected'));
+                tr.addClass('is-selected');
+            };
+
+            // Right-click context menu (Copiar para o mês seguinte)
+            tr.oncontextmenu = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const menu = new obsidian.Menu();
+
+                menu.addItem(mItem => {
+                    mItem.setTitle('📋 Copiar para o mês seguinte')
+                         .setIcon('copy')
+                         .onClick(async () => {
+                             await this.copyFinanceItemToNextMonth(exp, year, month, 'expense');
+                         });
+                });
+
+                menu.addSeparator();
+
+                menu.addItem(mItem => {
+                    mItem.setTitle('✎ Editar despesa')
+                         .setIcon('pencil')
+                         .onClick(() => {
+                             editBtn.click();
+                         });
+                });
+
+                menu.addItem(mItem => {
+                    mItem.setTitle('✕ Excluir despesa')
+                         .setIcon('trash')
+                         .onClick(() => {
+                             delBtn.click();
+                         });
+                });
+
+                menu.showAtMouseEvent(e);
+            };
+
+            // Attach search text metadata to tr
+            const splitNames = (exp.splitData?.participants || []).map(p => (p.name || '')).join(' ');
+            const searchIndex = `${exp.description || ''} ${exp.category || ''} ${exp.installment || ''} ${exp.date || ''} ${exp.value || ''} ${formatCurrency(exp.value || 0, curr)} ${splitNames}`.toLowerCase();
+            tr.setAttribute('data-search-text', searchIndex);
+
+            // 1. Data / Parcela (Interativo com clique)
+            const tdDate = tr.createEl('td', { cls: 'kt-td-date' });
+            if (exp.installment) {
+                const pill = tdDate.createSpan({ cls: 'kt-fin-installment-pill kt-pill-interactive', text: `(${exp.installment})` });
+                pill.title = 'Clique para avançar ou alterar parcelas';
+                pill.onclick = (e) => {
+                    e.stopPropagation();
+                    new FinanceInstallmentPopover(pill, exp.installment, async (newInst) => {
+                        exp.installment = newInst;
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+            } else if (exp.isFixed) {
+                const mNames = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+                const pill = tdDate.createSpan({ cls: 'kt-fin-fixed-pill kt-pill-interactive', text: mNames[month - 1] });
+                pill.title = 'Gasto Fixo Mensal • Clique para alterar a data';
+                pill.onclick = (e) => {
+                    e.stopPropagation();
+                    new FinanceDatePickerPopover(pill, exp.date, year, month, async (newDate, isFixed) => {
+                        exp.date = newDate;
+                        exp.isFixed = isFixed;
+                        this.reconcileFinancesMonths();
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+            } else if (exp.date) {
+                const parts = exp.date.split('-');
+                const dateText = parts.length === 3 ? `${parts[2]}/${parts[1]}` : exp.date;
+                const pill = tdDate.createSpan({ cls: 'kt-fin-date-pill kt-pill-interactive', text: dateText });
+                pill.title = 'Clique para escolher outro dia no calendário';
+                pill.onclick = (e) => {
+                    e.stopPropagation();
+                    new FinanceDatePickerPopover(pill, exp.date, year, month, async (newDate, isFixed) => {
+                        exp.date = newDate;
+                        exp.isFixed = isFixed;
+                        this.reconcileFinancesMonths();
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+            } else {
+                tdDate.setText('-');
+            }
+
+            // 2. Valor
+            const tdVal = tr.createEl('td', { cls: `kt-td-val ${hasPendingSplit ? 'kt-val-split' : ''}` });
+            tdVal.setText(formatCurrency(exp.value, curr));
+
+            // 3. Descrição (Desacoplada com badge de Cobrança)
+            const tdDesc = tr.createEl('td', { cls: `kt-td-desc ${hasPendingSplit ? 'kt-desc-split' : ''}` });
+            tdDesc.createSpan({ text: exp.description, cls: 'kt-fin-desc-text' });
+
+            if (exp.splitData && exp.splitData.participants?.length > 0) {
+                const pending = exp.splitData.participants.filter(p => !p.settled).reduce((acc, p) => acc + (p.amount || 0), 0);
+                const isPending = pending > 0;
+                const badge = tdDesc.createSpan({ cls: `kt-fin-split-badge ${isPending ? 'is-pending' : 'is-settled'}` });
+                
+                if (isPending) {
+                    const partsSummary = exp.splitData.participants.map(p => `${p.name || 'Pessoa'}: ${formatCurrency(p.amount, curr)}${p.settled ? ' (✓)' : ''}`).join(' • ');
+                    badge.setText(` • 👥 Cobrar: ${formatCurrency(pending, curr)} (${partsSummary})`);
+                } else {
+                    badge.setText(' • ✓ Cobrança quitada');
+                }
+                
+                badge.title = 'Clique para gerenciar cobranças e marcar como recebido';
+                badge.onclick = (e) => {
+                    e.stopPropagation();
+                    new FinanceSplitModal(this.app, this.plugin, exp, curr, async (newSplit) => {
+                        exp.splitData = newSplit;
+                        exp.isSplit = !!(newSplit && newSplit.participants?.length > 0);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+            } else if (exp.toCollect) {
+                const badge = tdDesc.createSpan({ cls: 'kt-fin-split-badge is-pending', text: ` • Cobrar: ${exp.toCollect}` });
+                badge.title = 'Clique para configurar cobrança estruturada';
+                badge.onclick = (e) => {
+                    e.stopPropagation();
+                    new FinanceSplitModal(this.app, this.plugin, exp, curr, async (newSplit) => {
+                        exp.splitData = newSplit;
+                        exp.isSplit = !!(newSplit && newSplit.participants?.length > 0);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+            }
+
+            if (exp.isFixed) {
+                tdDesc.createSpan({ cls: 'kt-fin-fixed-badge', text: ' (Fixo)' });
+            }
+
+            // 4. Categoria
+            const tdCat = tr.createEl('td', { cls: 'kt-td-cat' });
+            tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: exp.category || 'Outros' });
+
+            // 5. Ações (Editar & Excluir)
+            const tdAct = tr.createEl('td', { cls: 'kt-td-actions' });
+            
+            const editBtn = tdAct.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+            editBtn.title = 'Editar despesa';
+            editBtn.onclick = () => {
+                new FinanceEntryModal(
+                    this.app,
+                    this.plugin,
+                    'expense',
+                    exp,
+                    year,
+                    month,
+                    fin.categories,
+                    async (updated) => {
+                        this.pendingFinancesScrollToItemId = null;
+                        const idx = monthData.expenses.findIndex(x => x.id === exp.id);
+                        if (idx !== -1) monthData.expenses[idx] = updated;
+                        this.reconcileFinancesMonths();
+                        await this.plugin.saveSettings();
+                        this.render();
+                    },
+                    async () => {
+                        if (this.financesSelectedItemId === exp.id) {
+                            this.financesSelectedItemId = null;
+                        }
+                        this.pendingFinancesScrollToItemId = null;
+                        monthData.expenses = monthData.expenses.filter(x => x.id !== exp.id);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }
+                ).open();
+            };
+
+            const delBtn = tdAct.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.title = 'Excluir despesa';
+            delBtn.onclick = async () => {
+                if (this.financesSelectedItemId === exp.id) {
+                    this.financesSelectedItemId = null;
+                }
+                this.pendingFinancesScrollToItemId = null;
+                monthData.expenses = monthData.expenses.filter(x => x.id !== exp.id);
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+    }
+
+    renderFinancesIncomeTable(parent, year, month, monthData, curr) {
+        const fin = this.plugin.settings.finances;
+        const section = parent.createDiv('kt-fin-section');
+
+        const secHdr = section.createDiv('kt-fin-section-hdr');
+        secHdr.createEl('h3', { text: 'Renda' });
+
+        const addIncBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn mod-cta', text: '＋ Nova Renda' });
+        addIncBtn.onclick = () => {
+            new FinanceEntryModal(
+                this.app,
+                this.plugin,
+                'income',
+                null,
+                year,
+                month,
+                fin.incomeCategories,
+                async (newItem) => {
+                    if (!monthData.income) monthData.income = [];
+                    monthData.income.push(newItem);
+                    this.reconcileFinancesMonths();
+                    await this.plugin.saveSettings();
+                    this.pendingFinancesScrollToItemId = newItem.id;
+                    this.financesSelectedItemId = newItem.id;
+                    this.render();
+                }
+            ).open();
+        };
+
+        const tableWrap = section.createDiv('kt-fin-table-wrap');
+        const table = tableWrap.createEl('table', { cls: 'kt-fin-table' });
+
+        const thead = table.createEl('thead');
+        const thr = thead.createEl('tr');
+        thr.createEl('th', { text: 'Data' });
+        thr.createEl('th', { text: 'Valor' });
+        thr.createEl('th', { text: 'Descrição' });
+        thr.createEl('th', { text: 'Categoria' });
+        thr.createEl('th', { text: 'Ações', cls: 'kt-th-actions' });
+
+        const tbody = table.createEl('tbody');
+        const incomeList = monthData.income || [];
+
+        if (incomeList.length === 0) {
+            const emptyTr = tbody.createEl('tr');
+            const td = emptyTr.createEl('td', { cls: 'kt-td-empty', attr: { colspan: '5' } });
+            td.setText('Nenhuma renda registrada neste mês.');
+            return;
+        }
+
+        incomeList.forEach(inc => {
+            const isSelected = this.financesSelectedItemId === inc.id;
+            const tr = tbody.createEl('tr', { cls: isSelected ? 'is-selected' : '' });
+            tr.setAttribute('data-item-id', inc.id);
+
+            // Selection on click
+            tr.onclick = (e) => {
+                this.financesSelectedItemId = inc.id;
+                const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
+                allTrs.forEach(row => row.removeClass('is-selected'));
+                tr.addClass('is-selected');
+            };
+
+            // Right-click context menu (Copiar para o mês seguinte)
+            tr.oncontextmenu = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const menu = new obsidian.Menu();
+
+                menu.addItem(mItem => {
+                    mItem.setTitle('📋 Copiar para o mês seguinte')
+                         .setIcon('copy')
+                         .onClick(async () => {
+                             await this.copyFinanceItemToNextMonth(inc, year, month, 'income');
+                         });
+                });
+
+                menu.addSeparator();
+
+                menu.addItem(mItem => {
+                    mItem.setTitle('✎ Editar renda')
+                         .setIcon('pencil')
+                         .onClick(() => {
+                             editBtn.click();
+                         });
+                });
+
+                menu.addItem(mItem => {
+                    mItem.setTitle('✕ Excluir renda')
+                         .setIcon('trash')
+                         .onClick(() => {
+                             delBtn.click();
+                         });
+                });
+
+                menu.showAtMouseEvent(e);
+            };
+
+            // Attach search text metadata to tr
+            const searchIndex = `${inc.description || ''} ${inc.category || ''} ${inc.date || ''} ${inc.value || ''} ${formatCurrency(inc.value || 0, curr)}`.toLowerCase();
+            tr.setAttribute('data-search-text', searchIndex);
+
+            // 1. Data (Interativo com clique)
+            const tdDate = tr.createEl('td', { cls: 'kt-td-date' });
+            if (inc.date) {
+                const parts = inc.date.split('-');
+                const dateText = parts.length === 3 ? `${parts[2]}/${parts[1]}` : inc.date;
+                const pill = tdDate.createSpan({ cls: 'kt-fin-date-pill kt-pill-interactive', text: dateText });
+                pill.title = 'Clique para escolher outro dia no calendário';
+                pill.onclick = (e) => {
+                    e.stopPropagation();
+                    new FinanceDatePickerPopover(pill, inc.date, year, month, async (newDate) => {
+                        inc.date = newDate;
+                        this.reconcileFinancesMonths();
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+            } else {
+                tdDate.setText('-');
+            }
+
+            // 2. Valor
+            const tdVal = tr.createEl('td', { cls: 'kt-td-val kt-val-green' });
+            tdVal.setText(formatCurrency(inc.value, curr));
+
+            // 3. Descrição
+            const tdDesc = tr.createEl('td', { cls: 'kt-td-desc' });
+            tdDesc.setText(inc.description);
+
+            // 4. Categoria
+            const tdCat = tr.createEl('td', { cls: 'kt-td-cat' });
+            tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: inc.category || 'Pagamento' });
+
+            // 5. Ações
+            const tdAct = tr.createEl('td', { cls: 'kt-td-actions' });
+            
+            const editBtn = tdAct.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+            editBtn.title = 'Editar renda';
+            editBtn.onclick = () => {
+                new FinanceEntryModal(
+                    this.app,
+                    this.plugin,
+                    'income',
+                    inc,
+                    year,
+                    month,
+                    fin.incomeCategories,
+                    async (updated) => {
+                        this.pendingFinancesScrollToItemId = null;
+                        const idx = monthData.income.findIndex(x => x.id === inc.id);
+                        if (idx !== -1) monthData.income[idx] = updated;
+                        this.reconcileFinancesMonths();
+                        await this.plugin.saveSettings();
+                        this.render();
+                    },
+                    async () => {
+                        if (this.financesSelectedItemId === inc.id) {
+                            this.financesSelectedItemId = null;
+                        }
+                        this.pendingFinancesScrollToItemId = null;
+                        monthData.income = monthData.income.filter(x => x.id !== inc.id);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }
+                ).open();
+            };
+
+            const delBtn = tdAct.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.title = 'Excluir renda';
+            delBtn.onclick = async () => {
+                if (this.financesSelectedItemId === inc.id) {
+                    this.financesSelectedItemId = null;
+                }
+                this.pendingFinancesScrollToItemId = null;
+                monthData.income = monthData.income.filter(x => x.id !== inc.id);
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+    }
+
+    async copyFinanceItemToNextMonth(item, currentYear, currentMonth, type = 'expense') {
+        let nextYear = currentYear;
+        let nextMonth = currentMonth + 1;
+        if (nextMonth > 12) {
+            nextMonth = 1;
+            nextYear += 1;
+        }
+
+        const nextMonthKey = `${nextYear}-${String(nextMonth).padStart(2, '0')}`;
+        if (!this.plugin.settings.finances.months[nextMonthKey]) {
+            this.plugin.settings.finances.months[nextMonthKey] = {
+                plannedBudget: {},
+                plannedIncome: {},
+                expenses: [],
+                income: []
+            };
+        }
+        const nextMonthData = this.plugin.settings.finances.months[nextMonthKey];
+        if (!nextMonthData.expenses) nextMonthData.expenses = [];
+        if (!nextMonthData.income) nextMonthData.income = [];
+
+        // 1. Calculate next date (same day of month, clamped to days in next month)
+        let nextDateStr = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        if (item.date) {
+            const parts = item.date.split('-');
+            if (parts.length === 3) {
+                const origDay = parseInt(parts[2], 10) || 1;
+                const daysInNextMonth = new Date(nextYear, nextMonth, 0).getDate();
+                const clampedDay = Math.min(origDay, daysInNextMonth);
+                nextDateStr = `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
+            }
+        }
+
+        // 2. Calculate next installment if active
+        let nextInstStr = '';
+        let nextDesc = item.description || '';
+
+        // Check if installment is in item.installment or in description e.g. "TOKSTOK 1/3" or "Carro (21/36)"
+        let instStr = (item.installment || '').trim();
+        let descMatch = nextDesc.match(/(?:\(?\s*(\d{1,3})\s*\/\s*(\d{1,3})\s*\)?)/);
+
+        if (instStr) {
+            const m = instStr.replace(/[()]/g, '').match(/^(\d+)\/(\d+)$/);
+            if (m) {
+                const cur = parseInt(m[1], 10);
+                const tot = parseInt(m[2], 10);
+                nextInstStr = `${cur + 1}/${tot}`;
+            } else {
+                nextInstStr = instStr;
+            }
+        } else if (descMatch) {
+            const cur = parseInt(descMatch[1], 10);
+            const tot = parseInt(descMatch[2], 10);
+            const nextInst = `${cur + 1}/${tot}`;
+            nextDesc = nextDesc.replace(descMatch[0], `(${nextInst})`).trim();
+            nextInstStr = nextInst;
+        }
+
+        // 3. Clone split / cobrança data with settled reset to false
+        let nextSplitData = null;
+        if (item.splitData && Array.isArray(item.splitData.participants) && item.splitData.participants.length > 0) {
+            nextSplitData = {
+                isSplit: true,
+                participants: item.splitData.participants.map(p => ({
+                    name: p.name || 'Pessoa',
+                    amount: p.amount || 0,
+                    settled: false // Reset payment status for new month
+                })),
+                totalToCollect: item.splitData.participants.reduce((acc, p) => acc + (p.amount || 0), 0)
+            };
+        }
+
+        // 4. Create cloned item
+        const newItem = {
+            id: `fin-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            type: item.type || type,
+            value: item.value || 0,
+            description: nextDesc,
+            category: item.category || (type === 'income' ? 'Pagamento' : 'Outros'),
+            date: nextDateStr,
+            installment: nextInstStr,
+            isFixed: !!item.isFixed,
+            isSplit: !!(nextSplitData && nextSplitData.participants?.length > 0),
+            splitData: nextSplitData,
+            toCollect: item.toCollect || ''
+        };
+
+        if (type === 'income') {
+            nextMonthData.income.push(newItem);
+        } else {
+            nextMonthData.expenses.push(newItem);
+        }
+
+        await this.plugin.saveSettings();
+
+        const mNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+        const targetMonthName = mNames[nextMonth - 1] || `Mês ${nextMonth}`;
+        const instBadge = nextInstStr ? ` [Parcela: (${nextInstStr})]` : '';
+        new obsidian.Notice(`✓ "${newItem.description}" copiado para ${targetMonthName}/${nextYear}${instBadge}!`);
+    }
+
+    focusFinancesSelectedItem(itemId, flash = true) {
+        if (!itemId) return;
+        const tr = this.containerEl.querySelector(`tr[data-item-id="${itemId}"]`);
+        if (tr) {
+            tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (flash) {
+                tr.removeClass('kt-row-flash');
+                void tr.offsetWidth; // trigger reflow
+                tr.addClass('kt-row-flash');
+                setTimeout(() => tr.removeClass('kt-row-flash'), 1000);
+            }
+        }
+    }
+
+    filterFinancesTables(tablesContainer, rawQuery) {
+        if (!tablesContainer) return;
+        const q = (rawQuery || '').toLowerCase().trim();
+
+        const sections = tablesContainer.querySelectorAll('.kt-fin-section');
+        sections.forEach(sec => {
+            const rows = sec.querySelectorAll('tbody tr:not(.kt-tr-empty)');
+            let visibleCount = 0;
+
+            rows.forEach(tr => {
+                const text = tr.getAttribute('data-search-text') || '';
+                if (!q || text.includes(q)) {
+                    tr.style.display = '';
+                    visibleCount++;
+                } else {
+                    tr.style.display = 'none';
+                }
+            });
+
+            // Handle empty state row if all rows are filtered out
+            let emptyTr = sec.querySelector('.kt-tr-empty-search');
+            if (rows.length > 0 && visibleCount === 0 && q) {
+                if (!emptyTr) {
+                    const tbody = sec.querySelector('tbody');
+                    if (tbody) {
+                        emptyTr = tbody.createEl('tr', { cls: 'kt-tr-empty kt-tr-empty-search' });
+                        const td = emptyTr.createEl('td', { cls: 'kt-td-empty', attr: { colspan: '5' } });
+                        td.setText(`Nenhum lançamento encontrado para "${rawQuery}".`);
+                    }
+                } else {
+                    emptyTr.style.display = '';
+                    const td = emptyTr.querySelector('td');
+                    if (td) td.setText(`Nenhum lançamento encontrado para "${rawQuery}".`);
+                }
+            } else if (emptyTr) {
+                emptyTr.style.display = 'none';
+            }
+        });
+    }
+
+    renderFinancesBudgetSummary(parent, year, month, monthData, curr, initialBal, finalBal, monthSavings, savingsPct, totalExpReal, totalIncReal) {
+        const fin = this.plugin.settings.finances;
+        const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+        const monthName = monthNames[month - 1];
+
+        const summaryCard = parent.createDiv('kt-fin-budget-card');
+
+        // Header with Edit Budget Button
+        const cardHdr = summaryCard.createDiv('kt-fin-budget-hdr');
+        cardHdr.createEl('h3', { text: `Orçamento Mensal • ${monthName}` });
+
+        const editBudgetBtn = cardHdr.createEl('button', { cls: 'kt-fin-edit-budget-btn', text: '✎ Metas Planejadas' });
+        editBudgetBtn.title = 'Editar valores planejados por categoria';
+        editBudgetBtn.onclick = () => {
+            new FinancePlannedBudgetModal(
+                this.app,
+                this.plugin,
+                year,
+                month,
+                monthData.plannedExpenses || {},
+                monthData.plannedIncome || {},
+                fin.categories,
+                fin.incomeCategories,
+                async (newPlanExp, newPlanInc, applyAll) => {
+                    if (applyAll) {
+                        for (let m = 1; m <= 12; m++) {
+                            const mData = this.getFinancesMonthData(year, m);
+                            mData.plannedExpenses = Object.assign({}, newPlanExp);
+                            mData.plannedIncome = Object.assign({}, newPlanInc);
+                        }
+                        new obsidian.Notice(`✓ Metas de orçamento aplicadas para todo o ano de ${year}!`);
+                    } else {
+                        monthData.plannedExpenses = Object.assign({}, newPlanExp);
+                        monthData.plannedIncome = Object.assign({}, newPlanInc);
+                        new obsidian.Notice(`✓ Metas salvas para ${monthName}/${year}!`);
+                    }
+                    await this.plugin.saveSettings();
+                    this.render();
+                }
+            ).open();
+        };
+
+        // 1. Top Balance KPI Row
+        const totalPendingToCollect = (monthData.expenses || []).reduce((acc, exp) => {
+            if (exp.splitData && exp.splitData.participants) {
+                return acc + exp.splitData.participants.filter(p => !p.settled).reduce((sum, p) => sum + (p.amount || 0), 0);
+            } else if (exp.toCollect) {
+                const matchVal = exp.toCollect.match(/(\d+[\.,]?\d*)/);
+                return acc + (matchVal ? parseFloat(matchVal[1].replace(',', '.')) : 0);
+            }
+            return acc;
+        }, 0);
+
+        const balanceRow = summaryCard.createDiv(`kt-fin-balance-kpi-row ${totalPendingToCollect > 0 ? 'kt-kpi-4-cols' : ''}`);
+
+        // Saldo Inicial
+        const balInitEl = balanceRow.createDiv('kt-fin-kpi-box');
+        const initValRow = balInitEl.createDiv('kt-fin-kpi-val-row');
+        initValRow.createSpan({ cls: 'kt-fin-kpi-val', text: formatCurrency(initialBal, curr) });
+        const editInitBtn = initValRow.createSpan({ cls: 'kt-fin-edit-init-btn', text: '✎' });
+        editInitBtn.title = 'Definir saldo inicial personalizado para este mês';
+        editInitBtn.onclick = () => {
+            new FinanceInitialBalanceModal(this.app, monthData.initialBalance != null ? monthData.initialBalance : initialBal, monthName, year, async (val) => {
+                monthData.initialBalance = val;
+                await this.plugin.saveSettings();
+                this.render();
+            }).open();
+        };
+        balInitEl.createDiv('kt-fin-kpi-lbl').setText('SALDO INICIAL');
+
+        // Saldo Final
+        const balFinalEl = balanceRow.createDiv('kt-fin-kpi-box kt-box-orange');
+        balFinalEl.createDiv('kt-fin-kpi-val').setText(formatCurrency(finalBal, curr));
+        balFinalEl.createDiv('kt-fin-kpi-lbl').setText('SALDO FINAL');
+
+        // Economia do Mês
+        const savingsEl = balanceRow.createDiv('kt-fin-kpi-box kt-box-green');
+        savingsEl.createDiv('kt-fin-kpi-val').setText(formatCurrency(monthSavings, curr));
+        const savingsLbl = monthSavings >= 0 ? `+${savingsPct}% economia` : `${savingsPct}% déficit`;
+        savingsEl.createDiv('kt-fin-kpi-lbl').setText(savingsLbl);
+
+        // A Cobrar de Terceiros (se houver pendência no mês)
+        if (totalPendingToCollect > 0) {
+            const collectEl = balanceRow.createDiv('kt-fin-kpi-box kt-box-red');
+            collectEl.createDiv('kt-fin-kpi-val').setText(formatCurrency(totalPendingToCollect, curr));
+            collectEl.createDiv('kt-fin-kpi-lbl').setText('A COBRAR');
+        }
+
+        // 2. Totals Comparison (Planejado vs Real)
+        const plannedExpTotal = Object.values(monthData.plannedExpenses || {}).reduce((acc, v) => acc + (v || 0), 0);
+        const plannedIncTotal = Object.values(monthData.plannedIncome || {}).reduce((acc, v) => acc + (v || 0), 0);
+
+        const progressSection = summaryCard.createDiv('kt-fin-progress-section');
+
+        // Despesas Progress
+        const expProgRow = progressSection.createDiv('kt-fin-prog-row');
+        const expProgLeft = expProgRow.createDiv('kt-fin-prog-left');
+        expProgLeft.createSpan({ cls: 'kt-fin-prog-title', text: 'Despesas' });
+        expProgLeft.createSpan({ cls: 'kt-fin-prog-meta', text: `Planejado: ${formatCurrency(plannedExpTotal, curr)} • Real: ${formatCurrency(totalExpReal, curr)}` });
+        
+        const expBarTrack = expProgRow.createDiv('kt-fin-prog-track');
+        const expPct = plannedExpTotal > 0 ? Math.min(100, Math.round((totalExpReal / plannedExpTotal) * 100)) : 0;
+        const expBarFill = expBarTrack.createDiv(`kt-fin-prog-fill ${totalExpReal > plannedExpTotal && plannedExpTotal > 0 ? 'is-over' : ''}`);
+        expBarFill.style.width = `${expPct}%`;
+
+        // Renda Progress
+        const incProgRow = progressSection.createDiv('kt-fin-prog-row');
+        const incProgLeft = incProgRow.createDiv('kt-fin-prog-left');
+        incProgLeft.createSpan({ cls: 'kt-fin-prog-title', text: 'Renda' });
+        incProgLeft.createSpan({ cls: 'kt-fin-prog-meta', text: `Planejado: ${formatCurrency(plannedIncTotal, curr)} • Real: ${formatCurrency(totalIncReal, curr)}` });
+
+        const incBarTrack = incProgRow.createDiv('kt-fin-prog-track');
+        const incPct = plannedIncTotal > 0 ? Math.min(100, Math.round((totalIncReal / plannedIncTotal) * 100)) : (totalIncReal > 0 ? 100 : 0);
+        const incBarFill = incBarTrack.createDiv('kt-fin-prog-fill is-green');
+        incBarFill.style.width = `${incPct}%`;
+
+        // 3. Category Comparison Table: Despesas (Planejado vs Real vs Diferença)
+        summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: 'Despesas por Categoria' });
+        const expCompTable = summaryCard.createEl('table', { cls: 'kt-fin-comp-table' });
+        
+        const expThead = expCompTable.createEl('thead');
+        const expThr = expThead.createEl('tr');
+        expThr.createEl('th', { text: 'Categoria' });
+        expThr.createEl('th', { text: 'Planejado' });
+        expThr.createEl('th', { text: 'Real' });
+        expThr.createEl('th', { text: 'Diferença' });
+
+        const expTbody = expCompTable.createEl('tbody');
+
+        // Totals Row
+        const expTotalRow = expTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
+        expTotalRow.createEl('td', { text: 'Totais' });
+        expTotalRow.createEl('td', { text: formatCurrency(plannedExpTotal, curr) });
+        expTotalRow.createEl('td', { text: formatCurrency(totalExpReal, curr) });
+        const expTotalDiff = plannedExpTotal - totalExpReal;
+        const expTotDiffTd = expTotalRow.createEl('td', { cls: expTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
+        expTotDiffTd.setText(formatCurrency(expTotalDiff, curr));
+
+        // Group actual expenses by category
+        const expByCat = {};
+        (monthData.expenses || []).forEach(e => {
+            const cat = e.category || 'Outros';
+            expByCat[cat] = (expByCat[cat] || 0) + (e.value || 0);
+        });
+
+        // Combine all categories that either have a planned value or real expense
+        const allExpCats = Array.from(new Set([...(fin.categories || []), ...Object.keys(monthData.plannedExpenses || {}), ...Object.keys(expByCat)]));
+
+        allExpCats.forEach(cat => {
+            const planned = monthData.plannedExpenses?.[cat] || 0;
+            const real = expByCat[cat] || 0;
+            if (planned === 0 && real === 0) return; // Skip completely empty categories
+
+            const diff = planned - real;
+            const tr = expTbody.createEl('tr');
+            tr.createEl('td', { text: cat, cls: 'kt-td-cat-name' });
+            tr.createEl('td', { text: formatCurrency(planned, curr) });
+            tr.createEl('td', { text: formatCurrency(real, curr) });
+            const diffTd = tr.createEl('td', { cls: diff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
+            diffTd.setText(formatCurrency(diff, curr));
+        });
+
+        // 4. Category Comparison Table: Renda (Planejado vs Real vs Diferença)
+        summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: 'Renda por Categoria' });
+        const incCompTable = summaryCard.createEl('table', { cls: 'kt-fin-comp-table' });
+
+        const incThead = incCompTable.createEl('thead');
+        const incThr = incThead.createEl('tr');
+        incThr.createEl('th', { text: 'Categoria' });
+        incThr.createEl('th', { text: 'Planejado' });
+        incThr.createEl('th', { text: 'Real' });
+        incThr.createEl('th', { text: 'Diferença' });
+
+        const incTbody = incCompTable.createEl('tbody');
+
+        // Income Totals Row
+        const incTotalRow = incTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
+        incTotalRow.createEl('td', { text: 'Totais' });
+        incTotalRow.createEl('td', { text: formatCurrency(plannedIncTotal, curr) });
+        incTotalRow.createEl('td', { text: formatCurrency(totalIncReal, curr) });
+        const incTotalDiff = totalIncReal - plannedIncTotal;
+        const incTotDiffTd = incTotalRow.createEl('td', { cls: incTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
+        incTotDiffTd.setText(formatCurrency(incTotalDiff, curr));
+
+        // Group actual income by category
+        const incByCat = {};
+        (monthData.income || []).forEach(i => {
+            const cat = i.category || 'Pagamento';
+            incByCat[cat] = (incByCat[cat] || 0) + (i.value || 0);
+        });
+
+        const allIncCats = Array.from(new Set([...(fin.incomeCategories || []), ...Object.keys(monthData.plannedIncome || {}), ...Object.keys(incByCat)]));
+
+        allIncCats.forEach(cat => {
+            const planned = monthData.plannedIncome?.[cat] || 0;
+            const real = incByCat[cat] || 0;
+            if (planned === 0 && real === 0) return;
+
+            const diff = real - planned;
+            const tr = incTbody.createEl('tr');
+            tr.createEl('td', { text: cat, cls: 'kt-td-cat-name' });
+            tr.createEl('td', { text: formatCurrency(planned, curr) });
+            tr.createEl('td', { text: formatCurrency(real, curr) });
+            const diffTd = tr.createEl('td', { cls: diff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
+            diffTd.setText(formatCurrency(diff, curr));
+        });
+
+        // 5. Cobranças por Pessoa do Mês (Com resumo e botão de copiar mensagem)
+        const peopleMap = {};
+        (monthData.expenses || []).forEach(exp => {
+            if (exp.splitData && exp.splitData.participants) {
+                exp.splitData.participants.forEach(p => {
+                    const name = (p.name || 'Pessoa').trim();
+                    if (!peopleMap[name]) {
+                        peopleMap[name] = { name, total: 0, pending: 0, items: [] };
+                    }
+                    const amt = p.amount || 0;
+                    peopleMap[name].total += amt;
+                    if (!p.settled) peopleMap[name].pending += amt;
+                    peopleMap[name].items.push({
+                        desc: exp.description,
+                        amount: amt,
+                        settled: !!p.settled,
+                        date: exp.date,
+                        isFixed: exp.isFixed,
+                        expenseId: exp.id
+                    });
+                });
+            } else if (exp.toCollect) {
+                const matchVal = exp.toCollect.match(/(\d+[\.,]?\d*)/);
+                const num = matchVal ? parseFloat(matchVal[1].replace(',', '.')) : 0;
+                const name = exp.toCollect.replace(matchVal ? matchVal[0] : '', '').trim() || 'Pessoa';
+                if (!peopleMap[name]) {
+                    peopleMap[name] = { name, total: 0, pending: 0, items: [] };
+                }
+                peopleMap[name].total += num;
+                peopleMap[name].pending += num;
+                peopleMap[name].items.push({
+                    desc: exp.description,
+                    amount: num,
+                    settled: false,
+                    date: exp.date,
+                    isFixed: exp.isFixed,
+                    expenseId: exp.id
+                });
+            }
+        });
+
+        const peopleList = Object.values(peopleMap);
+        if (peopleList.length > 0) {
+            summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: '👥 Cobranças do Mês por Pessoa' });
+            const splitSummaryWrap = summaryCard.createDiv('kt-fin-people-split-wrap');
+
+            peopleList.forEach(person => {
+                const personBox = splitSummaryWrap.createDiv('kt-fin-person-box');
+                const pHeader = personBox.createDiv('kt-fin-person-header');
+
+                const nameWrap = pHeader.createDiv('kt-fin-person-name-wrap');
+                nameWrap.createSpan({ text: person.name, cls: 'kt-fin-person-name' });
+
+                const isPending = person.pending > 0;
+                const statusBadge = nameWrap.createSpan({
+                    cls: `kt-fin-person-badge ${isPending ? 'is-pending' : 'is-settled'}`,
+                    text: isPending ? `A Cobrar: ${formatCurrency(person.pending, curr)}` : '✓ 100% Pago'
+                });
+
+                // Items list breakdown
+                const itemsList = personBox.createDiv('kt-fin-person-items');
+                person.items.forEach(item => {
+                    const itemRow = itemsList.createDiv('kt-fin-person-item-row');
+                    
+                    let dateDisplay = '';
+                    if (item.date && item.date.includes('-')) {
+                        const dp = item.date.split('-');
+                        if (dp.length === 3) dateDisplay = `${dp[2]}/${dp[1]}`;
+                    }
+                    if (!dateDisplay) {
+                        dateDisplay = item.isFixed ? monthName : '-';
+                    }
+
+                    const dateSpan = itemRow.createSpan({ text: `[ ${dateDisplay} ] `, cls: 'kt-fin-pitem-date' });
+                    dateSpan.style.color = 'var(--text-muted)';
+                    dateSpan.style.fontFamily = 'var(--font-monospace, monospace)';
+                    dateSpan.style.fontSize = '11px';
+
+                    const descSpan = itemRow.createSpan({ text: `${item.desc} / `, cls: 'kt-fin-pitem-desc' });
+                    itemRow.createSpan({ text: formatCurrency(item.amount, curr), cls: 'kt-fin-pitem-val' });
+                    if (item.settled) {
+                        itemRow.createSpan({ text: ' (✓ Pago)', cls: 'kt-diff-pos' });
+                    }
+                });
+
+                // Action Buttons Row
+                const pActions = personBox.createDiv('kt-fin-person-actions');
+                
+                // Copy WhatsApp / Text summary button in requested format
+                const copyMsgBtn = pActions.createEl('button', {
+                    cls: 'kt-fin-person-copy-btn',
+                    text: `📋 Copiar Mensagem (${person.name})`
+                });
+                copyMsgBtn.title = `Copia os valores no formato padrão para enviar para ${person.name}`;
+                copyMsgBtn.onclick = () => {
+                    const pendingItems = person.items.filter(it => !it.settled);
+                    const itemsToReport = pendingItems.length > 0 ? pendingItems : person.items;
+                    
+                    const itemsLines = itemsToReport.map(it => {
+                        let dateDisplay = '';
+                        if (it.date && it.date.includes('-')) {
+                            const dp = it.date.split('-');
+                            if (dp.length === 3) dateDisplay = `${dp[2]}/${dp[1]}`;
+                        }
+                        if (!dateDisplay) {
+                            dateDisplay = it.isFixed ? monthName : '-';
+                        }
+                        return `[ ${dateDisplay} ] - ${it.desc} / ${formatCurrency(it.amount, curr)}`;
+                    }).join('\n');
+
+                    const totalToReport = pendingItems.length > 0 ? person.pending : person.total;
+
+                    const message = `Segue os valores do mes :\n\n${itemsLines}\n\nTotal : ${formatCurrency(totalToReport, curr)}`;
+
+                    navigator.clipboard.writeText(message);
+                    new obsidian.Notice(`✓ Mensagem para ${person.name} copiada com sucesso!`);
+                };
+
+                // Quick toggle all settled button
+                if (isPending) {
+                    const markPaidBtn = pActions.createEl('button', {
+                        cls: 'kt-fin-person-settle-btn',
+                        text: '✓ Marcar Tudo como Pago'
+                    });
+                    markPaidBtn.onclick = async () => {
+                        (monthData.expenses || []).forEach(exp => {
+                            if (exp.splitData && exp.splitData.participants) {
+                                exp.splitData.participants.forEach(p => {
+                                    if ((p.name || '').toLowerCase().trim() === person.name.toLowerCase().trim()) {
+                                        p.settled = true;
+                                    }
+                                });
+                                exp.splitData.totalToCollect = exp.splitData.participants.filter(p => !p.settled).reduce((sum, p) => sum + (p.amount || 0), 0);
+                            }
+                        });
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Cobranças de ${person.name} marcadas como pagas!`);
+                    };
+                }
+            });
+        }
+    }
+
+    async copyFixedExpensesFromPreviousMonth(year, month) {
+        const fin = this.plugin.settings.finances;
+        let prevYear = year;
+        let prevMonth = month - 1;
+        if (prevMonth < 1) {
+            prevMonth = 12;
+            prevYear = year - 1;
+        }
+
+        const prevKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+        const prevData = fin.months[prevKey];
+        if (!prevData || !prevData.expenses || prevData.expenses.length === 0) {
+            return { fixedCount: 0, instCount: 0, totalAdded: 0 };
+        }
+
+        const currentData = this.getFinancesMonthData(year, month);
+        if (!currentData.expenses) currentData.expenses = [];
+
+        // Build sets/maps of current month items to prevent duplicates
+        const existingFixedDescs = new Set(
+            currentData.expenses.filter(e => e.isFixed).map(e => (e.description || '').toLowerCase().trim())
+        );
+
+        const existingInstMap = new Map();
+        currentData.expenses.forEach(e => {
+            const descNorm = (e.description || '').toLowerCase().trim();
+            if (e.installment) {
+                if (!existingInstMap.has(descNorm)) existingInstMap.set(descNorm, new Set());
+                existingInstMap.get(descNorm).add(e.installment.trim());
+            }
+        });
+
+        let fixedCount = 0;
+        let instCount = 0;
+        const monthPad = String(month).padStart(2, '0');
+
+        prevData.expenses.forEach(prevExp => {
+            const desc = (prevExp.description || '').trim();
+            const descNorm = desc.toLowerCase();
+
+            // 1. Process Fixed Expenses
+            if (prevExp.isFixed) {
+                if (!existingFixedDescs.has(descNorm)) {
+                    const cloned = {
+                        id: `fin-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                        type: 'expense',
+                        value: prevExp.value,
+                        description: prevExp.description,
+                        category: prevExp.category,
+                        date: `${year}-${monthPad}-01`,
+                        installment: '',
+                        isFixed: true,
+                        isSplit: prevExp.isSplit || false,
+                        splitData: prevExp.splitData ? JSON.parse(JSON.stringify(prevExp.splitData)) : null
+                    };
+                    currentData.expenses.push(cloned);
+                    existingFixedDescs.add(descNorm);
+                    fixedCount++;
+                }
+                return;
+            }
+
+            // 2. Process Installments (e.g. "1/2", "24/36", "3/12")
+            let instStr = (prevExp.installment || '').trim();
+            let parsedDesc = desc;
+
+            // Check if installment is in prevExp.installment or in prevExp.description
+            let instMatch = instStr.match(/^(\d+)\s*[\/\-]\s*(\d+)$/);
+            if (!instMatch) {
+                const descMatch = desc.match(/\(?(\d+)\s*[\/\-]\s*(\d+)\)?/);
+                if (descMatch) {
+                    instMatch = descMatch;
+                    instStr = `${descMatch[1]}/${descMatch[2]}`;
+                    parsedDesc = desc.replace(descMatch[0], '').trim();
+                }
+            }
+
+            if (instMatch) {
+                const currentPart = parseInt(instMatch[1], 10);
+                const totalParts = parseInt(instMatch[2], 10);
+
+                if (!isNaN(currentPart) && !isNaN(totalParts) && totalParts > 1) {
+                    const nextPart = currentPart + 1;
+
+                    // If nextPart exceeds totalParts (e.g. previous was 2/2 -> next is 3/2), DO NOT copy!
+                    if (nextPart <= totalParts) {
+                        const nextInstStr = `${nextPart}/${totalParts}`;
+                        const cleanDescNorm = (parsedDesc || desc).toLowerCase().trim();
+
+                        // Check if current month already has this installment
+                        const existingInsts = existingInstMap.get(cleanDescNorm);
+                        const alreadyExists = existingInsts && existingInsts.has(nextInstStr);
+
+                        if (!alreadyExists) {
+                            const displayDesc = parsedDesc || desc;
+
+                            const cloned = {
+                                id: `fin-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                                type: 'expense',
+                                value: prevExp.value,
+                                description: displayDesc,
+                                category: prevExp.category,
+                                date: `${year}-${monthPad}-01`,
+                                installment: nextInstStr,
+                                isFixed: false,
+                                isSplit: prevExp.isSplit || false,
+                                splitData: prevExp.splitData ? JSON.parse(JSON.stringify(prevExp.splitData)) : null
+                            };
+                            currentData.expenses.push(cloned);
+
+                            if (!existingInstMap.has(cleanDescNorm)) existingInstMap.set(cleanDescNorm, new Set());
+                            existingInstMap.get(cleanDescNorm).add(nextInstStr);
+                            instCount++;
+                        }
+                    }
+                }
+            }
+        });
+
+        const totalAdded = fixedCount + instCount;
+        if (totalAdded > 0) {
+            await this.plugin.saveSettings();
+        }
+        return { fixedCount, instCount, totalAdded };
+    }
+
+    exportFinancesCSV(year, month, monthData) {
+        let csv = '\uFEFF'; // UTF-8 BOM for Excel
+        csv += 'Tipo;Data;Valor;Descricao;Categoria;Parcela;Fixo;Split_Cobrar\n';
+
+        (monthData.expenses || []).forEach(e => {
+            const desc = `"${(e.description || '').replace(/"/g, '""')}"`;
+            const valStr = String(e.value || 0).replace('.', ',');
+            const toCol = `"${(e.toCollect || '').replace(/"/g, '""')}"`;
+            csv += `Despesa;${e.date || ''};${valStr};${desc};${e.category || ''};${e.installment || ''};${e.isFixed ? 'Sim' : 'Não'};${toCol}\n`;
+        });
+
+        (monthData.income || []).forEach(i => {
+            const desc = `"${(i.description || '').replace(/"/g, '""')}"`;
+            const valStr = String(i.value || 0).replace('.', ',');
+            csv += `Renda;${i.date || ''};${valStr};${desc};${i.category || ''};;;;\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const fileName = `Financas_${year}_${String(month).padStart(2, '0')}.csv`;
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        new obsidian.Notice(`✓ Arquivo exportado: ${fileName}`);
+    }
+
+    // ----------------------------------------------------------
     // FULL KANBAN BOARD VIEW
     // ----------------------------------------------------------
 
@@ -11415,6 +14692,32 @@ const DEFAULT_SETTINGS = {
     awConnected: false,
     awHost: 'http://127.0.0.1:5600',
     dockLayout: null,
+    finances: {
+        currency: 'R$',
+        selectedYear: new Date().getFullYear(),
+        selectedMonth: new Date().getMonth() + 1,
+        categories: [
+            'Moradia',
+            'Alimentação',
+            'Gatas',
+            'Saúde',
+            'Transporte',
+            'Serviços',
+            'Lazer',
+            'Compras',
+            'Viagem',
+            'Streamings',
+            'Outros'
+        ],
+        incomeCategories: [
+            'Pagamento',
+            'Poupança',
+            'Bônus',
+            'Juros',
+            'Outros'
+        ],
+        months: {}
+    }
 };
 
 class KanbanTimelinePlugin extends obsidian.Plugin {
@@ -11524,6 +14827,18 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (this.settings.timeblockHideWeekends === undefined) {
             this.settings.timeblockHideWeekends = false;
+        }
+        if (!this.settings.finances) {
+            this.settings.finances = Object.assign({}, DEFAULT_SETTINGS.finances);
+        }
+        if (!this.settings.finances.months) {
+            this.settings.finances.months = {};
+        }
+        if (!this.settings.finances.categories || this.settings.finances.categories.length === 0) {
+            this.settings.finances.categories = DEFAULT_SETTINGS.finances.categories.slice();
+        }
+        if (!this.settings.finances.incomeCategories || this.settings.finances.incomeCategories.length === 0) {
+            this.settings.finances.incomeCategories = DEFAULT_SETTINGS.finances.incomeCategories.slice();
         }
     }
 
