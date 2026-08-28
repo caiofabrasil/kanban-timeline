@@ -68,6 +68,16 @@ function formatDate(date) {
     return `${dd}-${mm}-${yyyy}`;
 }
 
+function formatIsoDate(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '';
+    const yyyy = d.getFullYear();
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const dd   = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
 function sameDay(a, b) {
     if (!a || !b) return false;
     return a.getFullYear() === b.getFullYear() &&
@@ -3277,6 +3287,231 @@ class CustomEventModal extends obsidian.Modal {
 }
 
 // ================================================================
+// CALENDAR EVENT & SPECIAL DATES MODAL (Aniversários, Lembretes, Recorrência)
+// ================================================================
+
+class CalendarEventModal extends obsidian.Modal {
+    constructor(app, plugin, eventToEdit = null, defaultDate = null, onSave = null, defaultCategory = 'birthday') {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.eventToEdit = eventToEdit;
+        this.defaultDate = defaultDate || new Date();
+        this.defaultCategory = defaultCategory;
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-calevt-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const isEditing = !!this.eventToEdit;
+        contentEl.createEl('h2', { text: isEditing ? '✎ Editar Evento / Data Especial' : '🎉 Novo Evento / Data Especial' });
+
+        const form = contentEl.createDiv('kt-form');
+
+        // 1. Título
+        form.createEl('label', { text: 'Título do Evento / Lembrete *', cls: 'kt-label' });
+        const titleInput = form.createEl('input', {
+            type: 'text',
+            cls: 'kt-input',
+            attr: {
+                placeholder: 'Ex: Aniversário da Ana, Renovação Seguro, Revisão Carro...',
+                value: this.eventToEdit?.title || ''
+            }
+        });
+        titleInput.style.width = '100%';
+        titleInput.style.marginBottom = '12px';
+
+        // 2. Categoria e Cor
+        const catRow = form.createDiv('kt-form-row');
+        catRow.style.display = 'grid';
+        catRow.style.gridTemplateColumns = '1fr 1fr';
+        catRow.style.gap = '12px';
+        catRow.style.marginBottom = '12px';
+
+        const catCol = catRow.createDiv();
+        catCol.createEl('label', { text: 'Tipo / Categoria', cls: 'kt-label' });
+        const catSelect = catCol.createEl('select', { cls: 'kt-select' });
+        catSelect.style.width = '100%';
+
+        const categories = [
+            { id: 'birthday', label: '🎉 Aniversário', icon: '🎉', color: '#ec4899' },
+            { id: 'special',  label: '⭐ Data Especial', icon: '⭐', color: '#f59e0b' },
+            { id: 'reminder', label: '🔔 Lembrete', icon: '🔔', color: '#3b82f6' },
+            { id: 'health',   label: '🏥 Saúde / Consulta', icon: '🏥', color: '#10b981' },
+            { id: 'travel',   label: '✈️ Viagem / Férias', icon: '✈️', color: '#06b6d4' },
+            { id: 'custom',   label: '📌 Outros', icon: '📌', color: '#8b5cf6' }
+        ];
+
+        const initialCat = this.eventToEdit?.category || this.defaultCategory || 'birthday';
+        categories.forEach(c => {
+            const opt = catSelect.createEl('option', { value: c.id, text: c.label });
+            if (c.id === initialCat) opt.selected = true;
+        });
+
+        const colorCol = catRow.createDiv();
+        colorCol.createEl('label', { text: 'Cor de Destaque', cls: 'kt-label' });
+        const colorWrap = colorCol.createDiv();
+        colorWrap.style.display = 'flex';
+        colorWrap.style.alignItems = 'center';
+        colorWrap.style.gap = '8px';
+
+        const colorInput = colorWrap.createEl('input', {
+            type: 'color',
+            cls: 'kt-color-picker',
+            value: this.eventToEdit?.color || categories.find(c => c.id === initialCat)?.color || '#ec4899'
+        });
+        colorInput.style.width = '44px';
+        colorInput.style.height = '34px';
+        colorInput.style.padding = '0';
+        colorInput.style.border = 'none';
+        colorInput.style.borderRadius = '4px';
+        colorInput.style.cursor = 'pointer';
+
+        catSelect.onchange = () => {
+            const matched = categories.find(c => c.id === catSelect.value);
+            if (matched && !isEditing) {
+                colorInput.value = matched.color;
+            }
+        };
+
+        // 3. Data e Repetição
+        const dateRow = form.createDiv('kt-form-row');
+        dateRow.style.display = 'grid';
+        dateRow.style.gridTemplateColumns = '1fr 1fr';
+        dateRow.style.gap = '12px';
+        dateRow.style.marginBottom = '12px';
+
+        let initialDateStr = '';
+        if (this.eventToEdit?.date) {
+            const parts = this.eventToEdit.date.split('-');
+            if (parts.length === 3 && parts[0].length === 4) {
+                initialDateStr = this.eventToEdit.date;
+            } else if (parts.length === 3 && parts[2].length === 4) {
+                initialDateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            } else {
+                initialDateStr = formatIsoDate(this.eventToEdit.date);
+            }
+        } else {
+            initialDateStr = formatIsoDate(this.defaultDate);
+        }
+
+        const dateCol = dateRow.createDiv();
+        dateCol.createEl('label', { text: 'Data *', cls: 'kt-label' });
+        const dateInput = dateCol.createEl('input', {
+            type: 'date',
+            cls: 'kt-input',
+            value: initialDateStr
+        });
+        dateInput.style.width = '100%';
+
+        const repCol = dateRow.createDiv();
+        repCol.createEl('label', { text: 'Repetição / Recorrência', cls: 'kt-label' });
+        const repSelect = repCol.createEl('select', { cls: 'kt-select' });
+        repSelect.style.width = '100%';
+
+        const recurrenceOptions = [
+            { id: 'none',           label: 'Não se repete (Apenas nesta data)' },
+            { id: 'yearly',         label: 'Todo ano (Anual - Aniversários / Datas)' },
+            { id: 'monthly',        label: 'Todo mês (Mensal)' },
+            { id: 'bimonthly',      label: 'Mês sim, mês não (A cada 2 meses)' },
+            { id: 'every_3_months', label: 'A cada 3 meses (Trimestral)' },
+            { id: 'every_6_months', label: 'A cada 6 meses (Semestral)' }
+        ];
+
+        const initialRecurrence = this.eventToEdit?.recurrence || (initialCat === 'birthday' ? 'yearly' : 'none');
+        recurrenceOptions.forEach(r => {
+            const opt = repSelect.createEl('option', { value: r.id, text: r.label });
+            if (r.id === initialRecurrence) opt.selected = true;
+        });
+
+        // 4. Descrição / Notas
+        form.createEl('label', { text: 'Descrição / Detalhes (Opcional)', cls: 'kt-label' });
+        const descInput = form.createEl('textarea', {
+            cls: 'kt-textarea',
+            attr: {
+                placeholder: 'Notas, lembretes ou observações...',
+                rows: 3
+            }
+        });
+        descInput.style.width = '100%';
+        descInput.style.marginBottom = '16px';
+        descInput.value = this.eventToEdit?.description || '';
+
+        // Footer Actions
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+        footer.style.marginTop = '16px';
+
+        const leftGroup = footer.createDiv();
+        if (isEditing) {
+            const delBtn = leftGroup.createEl('button', { cls: 'mod-warning', text: '🗑️ Excluir' });
+            delBtn.onclick = async () => {
+                this.plugin.settings.calendarEvents = (this.plugin.settings.calendarEvents || []).filter(x => x.id !== this.eventToEdit.id);
+                this.close();
+                if (this.onSave) await this.onSave();
+                new obsidian.Notice(`✓ Evento "${this.eventToEdit.title}" excluído.`);
+            };
+        }
+
+        const rightGroup = footer.createDiv();
+        rightGroup.style.display = 'flex';
+        rightGroup.style.gap = '8px';
+
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: isEditing ? 'Salvar Alterações' : 'Criar Evento' });
+        saveBtn.onclick = async () => {
+            const title = titleInput.value.trim();
+            if (!title) {
+                new obsidian.Notice('⚠️ Digite o título do evento.');
+                titleInput.focus();
+                return;
+            }
+
+            const chosenCat = categories.find(c => c.id === catSelect.value) || categories[0];
+            const finalDate = dateInput.value || initialDateStr || formatIsoDate(new Date());
+            const eventData = {
+                id: this.eventToEdit ? this.eventToEdit.id : `calevt-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                title,
+                category: catSelect.value,
+                icon: chosenCat.icon,
+                color: colorInput.value || chosenCat.color,
+                date: finalDate,
+                recurrence: repSelect.value,
+                description: descInput.value.trim()
+            };
+
+            if (!this.plugin.settings.calendarEvents) this.plugin.settings.calendarEvents = [];
+
+            if (isEditing) {
+                const idx = this.plugin.settings.calendarEvents.findIndex(x => x.id === this.eventToEdit.id);
+                if (idx !== -1) {
+                    this.plugin.settings.calendarEvents[idx] = eventData;
+                } else {
+                    this.plugin.settings.calendarEvents.push(eventData);
+                }
+            } else {
+                this.plugin.settings.calendarEvents.push(eventData);
+            }
+
+            this.close();
+            if (this.onSave) await this.onSave();
+            new obsidian.Notice(`✓ Evento "${eventData.title}" salvo no Calendário!`);
+        };
+
+        setTimeout(() => titleInput.focus(), 50);
+    }
+}
+
+// ================================================================
 // QUICK CREATE TASK MODAL (Clique no espaço vazio do Timeblocking)
 // ================================================================
 
@@ -3820,6 +4055,253 @@ class FinanceDatePickerPopover {
 
 // Backward compatibility alias
 const FinanceDatePickerModal = FinanceDatePickerPopover;
+
+// ================================================================
+// CALENDAR & TOOLBAR NAV DATE PICKER POPOVER (Jump to Day, Month, Year)
+// ================================================================
+
+class CalendarNavDatePickerPopover {
+    constructor(anchorEl, view, onDateSelected) {
+        this.anchorEl = anchorEl;
+        this.view = view;
+        this.onDateSelected = onDateSelected;
+
+        let targetYear = new Date().getFullYear();
+        let targetMonth = new Date().getMonth() + 1;
+
+        if (view.hasActiveDockView('calendar')) {
+            const mInfo = view.getCalendarGridInfo();
+            targetYear = mInfo.targetYear;
+            targetMonth = mInfo.targetMonth + 1;
+        } else if (view.selectedDay) {
+            targetYear = view.selectedDay.getFullYear();
+            targetMonth = view.selectedDay.getMonth() + 1;
+        }
+
+        this.viewYear = targetYear;
+        this.viewMonth = targetMonth;
+        this.popoverEl = null;
+        this.backdropEl = null;
+    }
+
+    open() {
+        this.render();
+    }
+
+    close() {
+        if (this.popoverEl) {
+            this.popoverEl.remove();
+            this.popoverEl = null;
+        }
+        if (this.backdropEl) {
+            this.backdropEl.remove();
+            this.backdropEl = null;
+        }
+    }
+
+    render() {
+        this.close();
+
+        // 1. Transparent Backdrop
+        this.backdropEl = document.body.createDiv('kt-gcal-backdrop');
+        this.backdropEl.onclick = (e) => {
+            e.stopPropagation();
+            this.close();
+        };
+
+        // 2. Floating Popover Container
+        const pop = document.body.createDiv('kt-gcal-popover kt-nav-gcal-popover');
+        this.popoverEl = pop;
+        pop.style.width = '260px';
+        pop.onclick = (e) => e.stopPropagation();
+
+        // Position popover relative to anchorEl
+        const rect = this.anchorEl.getBoundingClientRect();
+        let top = rect.bottom + 6;
+        let left = rect.left + (rect.width / 2) - 130;
+
+        if (left + 270 > window.innerWidth) {
+            left = window.innerWidth - 280;
+        }
+        if (left < 10) left = 10;
+        if (top + 320 > window.innerHeight) {
+            top = Math.max(10, rect.top - 330);
+        }
+        pop.style.top = `${Math.max(10, top)}px`;
+        pop.style.left = `${Math.max(10, left)}px`;
+
+        const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+        // Header: Month Selector + Year Selector + Navigation Arrows
+        const hdr = pop.createDiv('kt-gcal-hdr');
+        hdr.style.display = 'flex';
+        hdr.style.alignItems = 'center';
+        hdr.style.justifyContent = 'space-between';
+        hdr.style.gap = '6px';
+
+        const selectorsWrap = hdr.createDiv('kt-nav-datepicker-selectors');
+        selectorsWrap.style.display = 'flex';
+        selectorsWrap.style.alignItems = 'center';
+        selectorsWrap.style.gap = '6px';
+
+        // Month dropdown
+        const monthSel = selectorsWrap.createEl('select', { cls: 'kt-nav-month-select' });
+        monthSel.style.padding = '3px 6px';
+        monthSel.style.fontSize = '12px';
+        monthSel.style.fontWeight = '600';
+        monthSel.style.borderRadius = '4px';
+        monthSel.style.border = '1px solid var(--background-modifier-border)';
+        monthSel.style.background = 'var(--background-secondary)';
+        monthSel.style.color = 'var(--text-normal)';
+
+        monthNames.forEach((name, idx) => {
+            const opt = monthSel.createEl('option', { value: String(idx + 1), text: name });
+            if (idx + 1 === this.viewMonth) opt.selected = true;
+        });
+        monthSel.onchange = () => {
+            this.viewMonth = parseInt(monthSel.value, 10);
+            this.render();
+        };
+
+        // Year input
+        const yearInput = selectorsWrap.createEl('input', {
+            type: 'number',
+            cls: 'kt-nav-year-input',
+            value: String(this.viewYear)
+        });
+        yearInput.style.width = '64px';
+        yearInput.style.padding = '3px 6px';
+        yearInput.style.fontSize = '12px';
+        yearInput.style.fontWeight = '600';
+        yearInput.style.borderRadius = '4px';
+        yearInput.style.border = '1px solid var(--background-modifier-border)';
+        yearInput.style.background = 'var(--background-secondary)';
+        yearInput.style.color = 'var(--text-normal)';
+
+        yearInput.onchange = () => {
+            const y = parseInt(yearInput.value, 10);
+            if (!isNaN(y) && y >= 1970 && y <= 2100) {
+                this.viewYear = y;
+                this.render();
+            }
+        };
+
+        const navWrap = hdr.createDiv('kt-gcal-nav');
+        navWrap.style.display = 'flex';
+        navWrap.style.gap = '2px';
+
+        const prevBtn = navWrap.createEl('button', { cls: 'kt-gcal-nav-btn', text: '‹' });
+        prevBtn.title = 'Mês anterior';
+        prevBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (this.viewMonth === 1) {
+                this.viewMonth = 12;
+                this.viewYear--;
+            } else {
+                this.viewMonth--;
+            }
+            this.render();
+        };
+
+        const nextBtn = navWrap.createEl('button', { cls: 'kt-gcal-nav-btn', text: '›' });
+        nextBtn.title = 'Próximo mês';
+        nextBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (this.viewMonth === 12) {
+                this.viewMonth = 1;
+                this.viewYear++;
+            } else {
+                this.viewMonth++;
+            }
+            this.render();
+        };
+
+        // Weekday Headers (Dom, Seg, Ter, Qua, Qui, Sex, Sáb)
+        const weekdaysEl = pop.createDiv('kt-gcal-weekdays');
+        const dayHeaders = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
+        dayHeaders.forEach(d => weekdaysEl.createSpan({ text: d }));
+
+        // Day Grid
+        const grid = pop.createDiv('kt-gcal-grid');
+
+        const firstDayOfMonth = new Date(this.viewYear, this.viewMonth - 1, 1);
+        const lastDayOfMonth = new Date(this.viewYear, this.viewMonth, 0);
+
+        const startDow = firstDayOfMonth.getDay(); // 0 (Dom) to 6 (Sáb)
+        const daysInPrevMonth = new Date(this.viewYear, this.viewMonth - 1, 0).getDate();
+
+        // 1. Previous Month Spillover Days
+        for (let i = startDow - 1; i >= 0; i--) {
+            const prevD = daysInPrevMonth - i;
+            const dEl = grid.createDiv('kt-gcal-day kt-gcal-day-muted');
+            dEl.setText(String(prevD));
+            const targetPrevMonth = this.viewMonth === 1 ? 12 : this.viewMonth - 1;
+            const targetPrevYear = this.viewMonth === 1 ? this.viewYear - 1 : this.viewYear;
+            dEl.onclick = () => {
+                const picked = new Date(targetPrevYear, targetPrevMonth - 1, prevD);
+                this.close();
+                if (this.onDateSelected) this.onDateSelected(picked);
+            };
+        }
+
+        // 2. Current Month Days
+        const today = new Date();
+        for (let dayNum = 1; dayNum <= lastDayOfMonth.getDate(); dayNum++) {
+            const dayDate = new Date(this.viewYear, this.viewMonth - 1, dayNum);
+            const isToday = sameDay(dayDate, today);
+
+            const dEl = grid.createDiv(`kt-gcal-day${isToday ? ' kt-gcal-today' : ''}`);
+            dEl.setText(String(dayNum));
+
+            dEl.onclick = () => {
+                const picked = new Date(this.viewYear, this.viewMonth - 1, dayNum);
+                this.close();
+                if (this.onDateSelected) this.onDateSelected(picked);
+            };
+        }
+
+        // 3. Next Month Spillover Days
+        const totalRendered = startDow + lastDayOfMonth.getDate();
+        const remaining = (7 - (totalRendered % 7)) % 7;
+        for (let dayNum = 1; dayNum <= remaining; dayNum++) {
+            const dEl = grid.createDiv('kt-gcal-day kt-gcal-day-muted');
+            dEl.setText(String(dayNum));
+            const targetNextMonth = this.viewMonth === 12 ? 1 : this.viewMonth + 1;
+            const targetNextYear = this.viewMonth === 12 ? this.viewYear + 1 : this.viewYear;
+            dEl.onclick = () => {
+                const picked = new Date(targetNextYear, targetNextMonth - 1, dayNum);
+                this.close();
+                if (this.onDateSelected) this.onDateSelected(picked);
+            };
+        }
+
+        // Footer Actions: "Hoje" and "Ir para Este Mês"
+        const footer = pop.createDiv('kt-gcal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+        footer.style.paddingTop = '8px';
+        footer.style.marginTop = '4px';
+        footer.style.borderTop = '1px solid var(--background-modifier-border)';
+
+        const todayBtn = footer.createEl('button', { cls: 'kt-gcal-quick-btn', text: 'Hoje' });
+        todayBtn.style.padding = '3px 8px';
+        todayBtn.style.fontSize = '11.5px';
+        todayBtn.onclick = () => {
+            this.close();
+            if (this.onDateSelected) this.onDateSelected(new Date());
+        };
+
+        const goToMonthBtn = footer.createEl('button', { cls: 'kt-gcal-quick-btn mod-cta', text: 'Abrir Mês' });
+        goToMonthBtn.style.padding = '3px 10px';
+        goToMonthBtn.style.fontSize = '11.5px';
+        goToMonthBtn.onclick = () => {
+            const picked = new Date(this.viewYear, this.viewMonth - 1, 1);
+            this.close();
+            if (this.onDateSelected) this.onDateSelected(picked);
+        };
+    }
+}
 
 class FinanceSplitModal extends obsidian.Modal {
     constructor(app, plugin, item, curr, onSave) {
@@ -6814,6 +7296,7 @@ kanban-plugin: basic
         const activeTab = paneNode.activeTab || tabs[0];
 
         const DOCK_VIEWS = [
+            { id: 'calendar',  name: 'Calendário',   icon: '📅' },
             { id: 'gantt',     name: 'Cronograma',   icon: '📊' },
             { id: 'timeblock', name: 'Timeblocking', icon: '⏰' },
             { id: 'kanban',    name: 'Kanban',       icon: '📋' },
@@ -6984,7 +7467,9 @@ kanban-plugin: basic
 
     renderDockViewContent(container, viewMode) {
         if (viewMode === 'gantt') {
-            this.renderGantt(container);
+            this.renderGanttTimeline(container);
+        } else if (viewMode === 'calendar') {
+            this.renderCalendarGrid(container);
         } else if (viewMode === 'timeblock') {
             this.renderTimeblock(container);
         } else if (viewMode === 'kanban') {
@@ -6998,7 +7483,7 @@ kanban-plugin: basic
         } else if (viewMode === 'finances') {
             this.renderFinancesView(container);
         } else {
-            this.renderGantt(container);
+            this.renderGanttTimeline(container);
         }
     }
 
@@ -7125,6 +7610,7 @@ kanban-plugin: basic
         // View mode tabs (Minimalist Obsidian style)
         const tabs = tb.createDiv('kt-tabs');
 
+        const calendarTab = tabs.createEl('button', { cls: 'kt-tab', text: 'Calendário' });
         const ganttTab    = tabs.createEl('button', { cls: 'kt-tab', text: 'Cronograma' });
         const timeTab     = tabs.createEl('button', { cls: 'kt-tab', text: 'Timeblocking' });
         const kanbanTab   = tabs.createEl('button', { cls: 'kt-tab', text: 'Kanban' });
@@ -7133,6 +7619,7 @@ kanban-plugin: basic
         const postItsTab  = tabs.createEl('button', { cls: 'kt-tab', text: 'Post-its' });
         const financesTab = tabs.createEl('button', { cls: 'kt-tab', text: 'Finanças' });
 
+        if (this.viewMode === 'calendar')  calendarTab.addClass('active');
         if (this.viewMode === 'gantt')     ganttTab.addClass('active');
         if (this.viewMode === 'timeblock') timeTab.addClass('active');
         if (this.viewMode === 'kanban')    kanbanTab.addClass('active');
@@ -7157,6 +7644,7 @@ kanban-plugin: basic
             });
         };
 
+        makeTopTabDraggable(calendarTab, 'calendar');
         makeTopTabDraggable(ganttTab, 'gantt');
         makeTopTabDraggable(timeTab, 'timeblock');
         makeTopTabDraggable(kanbanTab, 'kanban');
@@ -7187,6 +7675,12 @@ kanban-plugin: basic
             }
             switchMainView('gantt');
         };
+        calendarTab.onclick = () => {
+            if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
+                this.plugin.syncAllRemoteCalendars(false);
+            }
+            switchMainView('calendar');
+        };
         timeTab.onclick     = () => {
             if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
                 this.plugin.syncAllRemoteCalendars(false);
@@ -7211,20 +7705,20 @@ kanban-plugin: basic
         postItsTab.onclick  = () => switchMainView('postits');
         financesTab.onclick = () => switchMainView('finances');
 
-        // Navigation (for Gantt, Timeblocking & Habits)
-        const showNav = this.hasActiveDockView('gantt') || this.hasActiveDockView('timeblock') || this.hasActiveDockView('habits');
+        // Navigation (for Gantt, Calendar, Timeblocking & Habits)
+        const showNav = this.hasActiveDockView('gantt') || this.hasActiveDockView('calendar') || this.hasActiveDockView('timeblock') || this.hasActiveDockView('habits');
         if (showNav) {
             const nav = tb.createDiv('kt-nav');
 
             const prevBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '‹' });
 
             const isGanttActive  = this.hasActiveDockView('gantt');
+            const isCalActive    = this.hasActiveDockView('calendar');
             const isTbActive     = this.hasActiveDockView('timeblock');
             const isHabitsActive = this.hasActiveDockView('habits');
-            const isCalView      = isGanttActive && (this.plugin.settings.cronogramaSubView === 'calendar');
             const lbl            = nav.createDiv('kt-date-label');
 
-            if (isGanttActive && isCalView) {
+            if (isCalActive) {
                 const mInfo = this.getCalendarGridInfo();
                 lbl.setText(mInfo.monthLabel);
             } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
@@ -7236,6 +7730,43 @@ kanban-plugin: basic
                 const we            = new Date(ws); we.setDate(we.getDate() + (daysDisplayed - 1));
                 lbl.setText(`${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}`);
             }
+
+            lbl.title = 'Clique para escolher um dia e ano específico 📅';
+            lbl.onclick = (e) => {
+                e.stopPropagation();
+                new CalendarNavDatePickerPopover(lbl, this, async (pickedDate) => {
+                    const now = new Date();
+                    if (isCalActive) {
+                        this.monthOffset = (pickedDate.getFullYear() - now.getFullYear()) * 12 + (pickedDate.getMonth() - now.getMonth());
+                        this.selectedDay = pickedDate;
+                    } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
+                        this.selectedDay = pickedDate;
+                    } else {
+                        const nowStart = new Date(now);
+                        nowStart.setHours(0, 0, 0, 0);
+                        const nowDow = nowStart.getDay();
+                        const nowDiff = nowDow === 0 ? -6 : 1 - nowDow;
+                        const nowWs = new Date(nowStart);
+                        nowWs.setDate(nowWs.getDate() + nowDiff);
+
+                        const tgtStart = new Date(pickedDate);
+                        tgtStart.setHours(0, 0, 0, 0);
+                        const tgtDow = tgtStart.getDay();
+                        const tgtDiff = tgtDow === 0 ? -6 : 1 - tgtDow;
+                        const tgtWs = new Date(tgtStart);
+                        tgtWs.setDate(tgtWs.getDate() + tgtDiff);
+
+                        this.weekOffset = Math.round((tgtWs.getTime() - nowWs.getTime()) / (7 * 86400000));
+                        this.selectedDay = pickedDate;
+                    }
+                    this.awHabitCache = {};
+                    this.render();
+                    if (isHabitsActive && this.plugin.settings.awConnected) {
+                        await this.syncActivityWatchHabits();
+                        if (this.hasActiveDockView('habits')) this.render();
+                    }
+                }).open();
+            };
 
             const nextBtn = nav.createEl('button', { cls: 'kt-nav-btn', text: '›' });
 
@@ -7252,7 +7783,7 @@ kanban-plugin: basic
                 }
             };
             prevBtn.onclick  = async () => {
-                if (isGanttActive && isCalView && this.plugin.settings.ganttDaysMode === 'month') {
+                if (isCalActive) {
                     this.monthOffset = (this.monthOffset || 0) - 1;
                 } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
                     const cur = this.selectedDay || new Date();
@@ -7269,7 +7800,7 @@ kanban-plugin: basic
                 }
             };
             nextBtn.onclick  = async () => {
-                if (isGanttActive && isCalView && this.plugin.settings.ganttDaysMode === 'month') {
+                if (isCalActive) {
                     this.monthOffset = (this.monthOffset || 0) + 1;
                 } else if (isTbActive && !isGanttActive && this.plugin.settings.timeblockSubView === 'day') {
                     const cur = this.selectedDay || new Date();
@@ -7286,6 +7817,17 @@ kanban-plugin: basic
                 }
             };
 
+            if (isCalActive) {
+                const addEvtBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-add-calevt-nav-btn', text: '＋ Evento' });
+                addEvtBtn.title = 'Criar novo evento, data especial, aniversário ou lembrete';
+                addEvtBtn.onclick = () => {
+                    new CalendarEventModal(this.app, this.plugin, null, new Date(), async () => {
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }, 'birthday').open();
+                };
+            }
+
             if (this.plugin.settings.remoteCalendars && this.plugin.settings.remoteCalendars.length > 0) {
                 const syncCalBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-sync-cal-btn', text: '🔄 Agenda' });
                 syncCalBtn.title = 'Sincronizar eventos do Google Agenda / Calendários Remotos';
@@ -7296,34 +7838,6 @@ kanban-plugin: basic
                     new obsidian.Notice(`✓ Google Agenda sincronizado: ${count} eventos.`);
                 };
             }
-        }
-
-        // Sub-view Toggle for Cronograma (Gantt vs Calendar Grid)
-        if (this.hasActiveDockView('gantt')) {
-            const subToggle = tb.createDiv('kt-subview-toggle');
-            const curSub = this.plugin.settings.cronogramaSubView || 'gantt';
-
-            const ganttBtn = subToggle.createEl('button', {
-                cls: `kt-subview-btn ${curSub === 'gantt' ? 'is-active' : ''}`,
-                text: '📊 Gantt'
-            });
-            ganttBtn.title = 'Visualização em barras horizontais contínuas (Gantt)';
-            ganttBtn.onclick = async () => {
-                this.plugin.settings.cronogramaSubView = 'gantt';
-                await this.plugin.saveSettings();
-                this.render();
-            };
-
-            const calBtn = subToggle.createEl('button', {
-                cls: `kt-subview-btn ${curSub === 'calendar' ? 'is-active' : ''}`,
-                text: '📅 Calendário'
-            });
-            calBtn.title = 'Visualização em grade de calendário com cartões (estilo Trello)';
-            calBtn.onclick = async () => {
-                this.plugin.settings.cronogramaSubView = 'calendar';
-                await this.plugin.saveSettings();
-                this.render();
-            };
         }
 
         // Sub-view Toggle for Timeblocking (1 Dia vs Semana Multi-Day)
@@ -7464,20 +7978,16 @@ kanban-plugin: basic
     }
 
     // ----------------------------------------------------------
-    // CRONOGRAMA VIEW (Gantt & Calendar Grid)
+    // CRONOGRAMA (Gantt) & CALENDÁRIO VIEWS
     // ----------------------------------------------------------
 
     renderGantt(container) {
-        const subView = this.plugin.settings.cronogramaSubView || 'gantt';
-        if (subView === 'calendar') {
-            this.renderCalendarGrid(container);
-        } else {
-            this.renderGanttTimeline(container);
-        }
+        this.renderGanttTimeline(container);
     }
 
     getCalendarGridInfo(containerWidth) {
-        const mode = this.plugin.settings.ganttDaysMode || '14';
+        const isCalActive = this.hasActiveDockView('calendar');
+        const mode = isCalActive ? 'month' : (this.plugin.settings.ganttDaysMode || '14');
         
         if (mode === 'month') {
             const now = new Date();
@@ -7547,6 +8057,79 @@ kanban-plugin: basic
 
     getMonthGrid(containerWidth) {
         return this.getCalendarGridInfo(containerWidth);
+    }
+
+    getCustomCalendarEventsForDay(day) {
+        const events = this.plugin.settings.calendarEvents || [];
+        if (events.length === 0) return [];
+
+        const targetY = day.getFullYear();
+        const targetM = day.getMonth();
+        const targetD = day.getDate();
+
+        return events.filter(evt => {
+            if (!evt || !evt.date) return false;
+            let baseY, baseM, baseD;
+            const parts = evt.date.split('-');
+            if (parts.length === 3) {
+                if (parts[0].length === 4) {
+                    baseY = parseInt(parts[0], 10);
+                    baseM = parseInt(parts[1], 10) - 1;
+                    baseD = parseInt(parts[2], 10);
+                } else if (parts[2].length === 4) {
+                    baseY = parseInt(parts[2], 10);
+                    baseM = parseInt(parts[1], 10) - 1;
+                    baseD = parseInt(parts[0], 10);
+                } else {
+                    return false;
+                }
+            } else {
+                const parsed = new Date(evt.date);
+                if (isNaN(parsed.getTime())) return false;
+                baseY = parsed.getFullYear();
+                baseM = parsed.getMonth();
+                baseD = parsed.getDate();
+            }
+
+            const rec = evt.recurrence || 'none';
+
+            if (rec === 'none') {
+                return targetY === baseY && targetM === baseM && targetD === baseD;
+            }
+
+            // Target must not be before base date
+            if (targetY < baseY) return false;
+            if (targetY === baseY && targetM < baseM) return false;
+            if (targetY === baseY && targetM === baseM && targetD < baseD) return false;
+
+            // Handle day clamping for months with fewer days (e.g. 31st on a 30-day month)
+            const daysInTargetMonth = new Date(targetY, targetM + 1, 0).getDate();
+            const effectiveDay = Math.min(baseD, daysInTargetMonth);
+
+            if (rec === 'yearly') {
+                return targetM === baseM && targetD === effectiveDay;
+            }
+
+            const monthDiff = (targetY - baseY) * 12 + (targetM - baseM);
+
+            if (rec === 'monthly') {
+                return monthDiff >= 0 && targetD === effectiveDay;
+            }
+
+            if (rec === 'bimonthly') {
+                return monthDiff >= 0 && (monthDiff % 2 === 0) && targetD === effectiveDay;
+            }
+
+            if (rec === 'every_3_months') {
+                return monthDiff >= 0 && (monthDiff % 3 === 0) && targetD === effectiveDay;
+            }
+
+            if (rec === 'every_6_months') {
+                return monthDiff >= 0 && (monthDiff % 6 === 0) && targetD === effectiveDay;
+            }
+
+            return false;
+        });
     }
 
     renderCalendarGrid(container) {
@@ -7640,11 +8223,74 @@ kanban-plugin: basic
                         this.openDayInTimeblocking(d);
                     }
                 };
+
+                dayCell.oncontextmenu = (e) => {
+                    if (e.target.closest('.kt-cal-bar')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    const menu = new obsidian.Menu();
+
+                    menu.addItem(item => {
+                        item.setTitle('🎉 Adicionar Aniversário...')
+                            .setIcon('cake')
+                            .onClick(() => {
+                                new CalendarEventModal(this.app, this.plugin, null, d, async () => {
+                                    await this.plugin.saveSettings();
+                                    this.render();
+                                }, 'birthday').open();
+                            });
+                    });
+
+                    menu.addItem(item => {
+                        item.setTitle('⭐ Adicionar Data Especial...')
+                            .setIcon('star')
+                            .onClick(() => {
+                                new CalendarEventModal(this.app, this.plugin, null, d, async () => {
+                                    await this.plugin.saveSettings();
+                                    this.render();
+                                }, 'special').open();
+                            });
+                    });
+
+                    menu.addItem(item => {
+                        item.setTitle('🗓️ Adicionar Lembrete / Evento...')
+                            .setIcon('calendar-plus')
+                            .onClick(() => {
+                                new CalendarEventModal(this.app, this.plugin, null, d, async () => {
+                                    await this.plugin.saveSettings();
+                                    this.render();
+                                }, 'reminder').open();
+                            });
+                    });
+
+                    menu.addSeparator();
+
+                    menu.addItem(item => {
+                        item.setTitle('⏰ Abrir no Timeblocking')
+                            .setIcon('clock')
+                            .onClick(() => {
+                                this.openDayInTimeblocking(d);
+                            });
+                    });
+
+                    menu.showAtMouseEvent(e);
+                };
             });
 
-            // Layer B: Foreground Continuous Events Tracks
+            // Layer B: Foreground Continuous Events & Special Dates Tracks
             const weekStart = startOfDay(weekDays[0]);
             const weekEnd = endOfDay(weekDays[6]);
+
+            // Gather all special events for each day of this week
+            const weekSpecialEvents = [];
+            for (let c = 0; c < 7; c++) {
+                const d = weekDays[c];
+                const evts = this.getCustomCalendarEventsForDay(d);
+                evts.forEach(evt => {
+                    weekSpecialEvents.push({ evt, day: d, col: c });
+                });
+            }
 
             const weekCards = scheduled.filter(c => {
                 const s = startOfDay(c.startDate);
@@ -7663,6 +8309,23 @@ kanban-plugin: basic
             const tracks = [];
             const eventsLayer = weekRow.createDiv('kt-cal-week-events-layer');
 
+            // 1. Allocate tracks for special events first (all-day / reminders / birthdays)
+            weekSpecialEvents.forEach(item => {
+                let trackIdx = 0;
+                while (true) {
+                    if (!tracks[trackIdx]) {
+                        tracks[trackIdx] = [false, false, false, false, false, false, false];
+                    }
+                    if (!tracks[trackIdx][item.col]) {
+                        tracks[trackIdx][item.col] = true;
+                        item.trackIdx = trackIdx;
+                        break;
+                    }
+                    trackIdx++;
+                }
+            });
+
+            // 2. Allocate tracks for task cards without any collision
             weekCards.forEach(card => {
                 const cardStart = startOfDay(card.startDate);
                 const cardEnd = endOfDay(card.endDate || card.startDate);
@@ -7688,7 +8351,6 @@ kanban-plugin: basic
                 if (startCol > endCol) startCol = endCol;
                 const colSpan = endCol - startCol + 1;
 
-                // Find track
                 let trackIdx = 0;
                 while (true) {
                     if (!tracks[trackIdx]) {
@@ -7702,60 +8364,112 @@ kanban-plugin: basic
                         for (let col = startCol; col <= endCol; col++) {
                             tracks[trackIdx][col] = true;
                         }
+                        card._calTrackIdx = trackIdx;
+                        card._calStartCol = startCol;
+                        card._calColSpan  = colSpan;
                         break;
                     }
                     trackIdx++;
                 }
+            });
 
-                const isStart = cardStart >= weekStart;
-                const isEnd = cardEnd <= weekEnd;
-                const isMultiDay = (card.endDate && !sameDay(card.startDate, card.endDate));
+            // 3. Render Special Events in eventsLayer
+            weekSpecialEvents.forEach(item => {
+                const { evt, day: d, col, trackIdx } = item;
+                const pill = eventsLayer.createDiv('kt-cal-bar kt-cal-special-event-bar');
+                pill.style.gridColumn = `${col + 1} / span 1`;
+                pill.style.gridRow    = `${trackIdx + 1}`;
+                pill.style.setProperty('--evt-color', evt.color || '#ec4899');
+                pill.setAttribute('data-evt-id', evt.id);
 
-                const bar = eventsLayer.createDiv(`kt-cal-bar${isMultiDay ? ' kt-cal-bar-multi' : ''}${card.isCompleted ? ' is-completed' : ''}`);
+                const inner = pill.createDiv('kt-cal-card-inner');
+                const row = inner.createDiv('kt-cal-card-row');
+
+                const iconSpan = row.createSpan('kt-cal-evt-icon');
+                iconSpan.setText(evt.icon || '🎉');
+
+                const titleSpan = row.createSpan('kt-cal-card-title kt-cal-evt-title');
+                titleSpan.setText(evt.title);
+
+                let recurrenceBadge = '';
+                if (evt.recurrence === 'yearly') recurrenceBadge = ' • Anual';
+                else if (evt.recurrence === 'monthly') recurrenceBadge = ' • Mensal';
+                else if (evt.recurrence === 'bimonthly') recurrenceBadge = ' • Bimestral';
+                else if (evt.recurrence === 'every_3_months') recurrenceBadge = ' • Trimestral';
+                else if (evt.recurrence === 'every_6_months') recurrenceBadge = ' • Semestral';
+
+                pill.title = `${evt.icon || ''} ${evt.title}${recurrenceBadge}${evt.description ? '\n' + evt.description : ''}\nClique para editar • Botão direito para opções`;
+
+                pill.onclick = (e) => {
+                    e.stopPropagation();
+                    new CalendarEventModal(this.app, this.plugin, evt, d, async () => {
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+
+                pill.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = new obsidian.Menu();
+                    menu.addItem(menuItem => {
+                        menuItem.setTitle('✎ Editar Evento / Data...')
+                            .setIcon('pencil')
+                            .onClick(() => pill.click());
+                    });
+                    menu.addItem(menuItem => {
+                        menuItem.setTitle('🗑️ Excluir Evento')
+                            .setIcon('trash')
+                            .onClick(async () => {
+                                this.plugin.settings.calendarEvents = (this.plugin.settings.calendarEvents || []).filter(x => x.id !== evt.id);
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Evento "${evt.title}" excluído.`);
+                            });
+                    });
+                    menu.showAtMouseEvent(e);
+                };
+            });
+
+            // 4. Render Task Cards in eventsLayer
+            weekCards.forEach(card => {
+                const startCol = card._calStartCol !== undefined ? card._calStartCol : 0;
+                const colSpan  = card._calColSpan !== undefined ? card._calColSpan : 1;
+                const trackIdx = card._calTrackIdx !== undefined ? card._calTrackIdx : 0;
+
+                const cardStart = startOfDay(card.startDate);
+                const cardEnd   = endOfDay(card.endDate || card.startDate);
+
+                const isMultiDay = (colSpan > 1) || (card.startDate && card.endDate && !sameDay(card.startDate, card.endDate));
+                const isContPrev = cardStart < weekStart;
+                const isContNext = cardEnd > weekEnd;
+
+                const bar = eventsLayer.createDiv(`kt-cal-bar${isMultiDay ? ' kt-cal-bar-multi' : ''}${isContPrev ? ' kt-cal-cont-prev' : ''}${isContNext ? ' kt-cal-cont-next' : ''}${card.isCompleted ? ' is-completed' : ''}`);
                 bar.style.gridColumn = `${startCol + 1} / span ${colSpan}`;
-                bar.style.gridRow = `${trackIdx + 1}`;
+                bar.style.gridRow    = `${trackIdx + 1}`;
 
                 const projColor = card.tagColor || card.projectColor || getCardTagColor(card.tags, this.plugin.settings.projects) || getProjectColor([], card.column, this.plugin.settings.columnColors) || '#6366f1';
                 bar.style.setProperty('--proj-color', projColor);
-
-                if (!isStart) bar.addClass('kt-cal-cont-prev');
-                if (!isEnd) bar.addClass('kt-cal-cont-next');
-
-                // Left resize handle (Drag to adjust start date)
-                if (isStart) {
-                    const handleL = bar.createDiv('kt-cal-bar-handle kt-cal-handle-left');
-                    handleL.title = 'Arrastar para alterar data de início';
-                    this.attachCalendarResize(handleL, 'start', card, days);
-                }
-
-                // Right resize handle (Drag to adjust end date)
-                if (isEnd) {
-                    const handleR = bar.createDiv('kt-cal-bar-handle kt-cal-handle-right');
-                    handleR.title = 'Arrastar para alterar data de término';
-                    this.attachCalendarResize(handleR, 'end', card, days);
-                }
 
                 // Inner wrapper for 1-line card layout: [ ⚪ Checkbox | Título           ⏱ Horas | #Tag ]
                 const innerWrap = bar.createDiv('kt-cal-card-inner');
                 const row = innerWrap.createDiv('kt-cal-card-row');
 
                 // Check circle
-                if (isStart || !isMultiDay) {
-                    const chk = row.createSpan('kt-cal-card-chk');
-                    chk.setText(card.isCompleted ? '✓' : '○');
-                    chk.title = card.isCompleted ? 'Marcar como pendente' : 'Concluir tarefa';
-                    chk.onclick = async (e) => {
-                        e.stopPropagation();
-                        await this.toggleCardCompletion(card);
-                    };
-                }
+                const chk = row.createSpan('kt-cal-card-chk');
+                chk.setText(card.isCompleted ? '☑' : '☐');
+                chk.title = card.isCompleted ? 'Marcar como pendente' : 'Concluir tarefa';
+                chk.onclick = async (e) => {
+                    e.stopPropagation();
+                    await this.toggleCardCompletion(card);
+                };
 
-                const titleEl = row.createDiv('kt-cal-card-title');
+                const titleEl = row.createSpan('kt-cal-card-title');
                 titleEl.setText(card.title);
 
                 const metaRow = row.createDiv('kt-cal-card-meta-row');
 
-                if (isStart && card.estimateMinutes && card.estimateMinutes > 0) {
+                if (card.estimateMinutes && card.estimateMinutes > 0 && !isMultiDay) {
                     const estSpan = metaRow.createSpan('kt-cal-card-est');
                     estSpan.setText(`⏱ ${card.estimateText}`);
                 }
@@ -7783,7 +8497,20 @@ kanban-plugin: basic
                     this.draggedCard = null;
                 });
 
+                // Drag resize handles (start & end)
+                if (!isContPrev) {
+                    const handleL = bar.createDiv('kt-cal-bar-handle kt-cal-handle-left');
+                    handleL.title = 'Arrastar para alterar data de início';
+                    this.attachCalendarResize(handleL, 'start', card, days);
+                }
+                if (!isContNext) {
+                    const handleR = bar.createDiv('kt-cal-bar-handle kt-cal-handle-right');
+                    handleR.title = 'Arrastar para alterar data de término';
+                    this.attachCalendarResize(handleR, 'end', card, days);
+                }
+
                 bar.onclick = (e) => {
+                    if (e.target === chk) return;
                     e.stopPropagation();
                     this.openCardOptionsModal(card, card.startDate);
                 };
@@ -7814,9 +8541,6 @@ kanban-plugin: basic
                 });
             });
         }
-
-        // 3. Backlog Drawer (Overlay at bottom)
-        this.renderBacklogDrawer(calContainer, unscheduled);
     }
 
     attachCalendarResize(handleEl, edgeType, card, allGridDays) {
@@ -14841,6 +15565,7 @@ const DEFAULT_SETTINGS = {
     },
     remoteCalendars: [],
     hiddenRemoteEvents: [],
+    calendarEvents: [],
     cronogramaSubView: 'gantt',
     timeblockSubView: 'day',
     timeblockHideWeekends: false,
