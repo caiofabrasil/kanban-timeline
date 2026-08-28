@@ -11047,12 +11047,15 @@ kanban-plugin: basic
             this.savedFinancesTablesScrollTop = tablesContainer.scrollTop;
         });
 
-        // Click on background of tables container deselects row
+        // Click on background of tables container deselects rows
         tablesContainer.addEventListener('click', (e) => {
-            if (!e.target.closest('.kt-fin-table tbody tr') && !e.target.closest('.kt-fin-act-btn') && !e.target.closest('.kt-fin-more-dropdown') && !e.target.closest('.modal')) {
-                this.financesSelectedItemId = null;
-                const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
-                allTrs.forEach(row => row.removeClass('is-selected'));
+            if (!e.target.closest('.kt-fin-table tbody tr') && 
+                !e.target.closest('.kt-fin-act-btn') && 
+                !e.target.closest('.kt-fin-more-dropdown') && 
+                !e.target.closest('.kt-fin-selection-floating-bar') && 
+                !e.target.closest('.modal') && 
+                !e.target.closest('.menu')) {
+                this.clearFinanceSelection();
             }
         });
 
@@ -11060,21 +11063,36 @@ kanban-plugin: basic
         if (!this.financesKeyHandlerAttached) {
             this.financesKeyHandlerAttached = true;
             this.registerDomEvent(window, 'keydown', (e) => {
-                if (this.currentViewMode !== 'finances') return;
+                // Check if finances view is active in the DOM
+                if (!this.containerEl.querySelector('.kt-finances-container')) return;
+
                 const activeEl = document.activeElement;
                 if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
                     return;
                 }
+
                 if (e.key === 'f' || e.key === 'F') {
-                    if (this.financesSelectedItemId) {
+                    const selectedIds = this.financesSelectedIds && this.financesSelectedIds.size > 0 
+                        ? Array.from(this.financesSelectedIds) 
+                        : (this.financesSelectedItemId ? [this.financesSelectedItemId] : []);
+
+                    if (selectedIds.length > 0) {
                         e.preventDefault();
-                        this.focusFinancesSelectedItem(this.financesSelectedItemId, true);
+                        const targetId = this.financesLastClickedId || selectedIds[0];
+                        this.focusFinancesSelectedItem(targetId, true);
+                        selectedIds.forEach(id => {
+                            const tr = this.containerEl.querySelector(`tr[data-item-id="${id}"]`);
+                            if (tr) {
+                                tr.removeClass('kt-row-flash');
+                                void tr.offsetWidth;
+                                tr.addClass('kt-row-flash');
+                                setTimeout(() => tr.removeClass('kt-row-flash'), 1000);
+                            }
+                        });
                     }
                 } else if (e.key === 'Escape') {
-                    if (this.financesSelectedItemId) {
-                        this.financesSelectedItemId = null;
-                        const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
-                        allTrs.forEach(row => row.removeClass('is-selected'));
+                    if (this.financesSelectedIds && this.financesSelectedIds.size > 0) {
+                        this.clearFinanceSelection();
                     }
                 }
             });
@@ -11094,6 +11112,9 @@ kanban-plugin: basic
         if (this.financesSearchQuery) {
             this.filterFinancesTables(tablesContainer, this.financesSearchQuery);
         }
+
+        // Update floating selection summary bar
+        this.updateFinancesSelectionBar();
 
         // Restore scroll position after table render
         if (this.pendingFinancesScrollToItemId) {
@@ -11502,16 +11523,13 @@ kanban-plugin: basic
 
         sorted.forEach(exp => {
             const hasPendingSplit = exp.splitData && exp.splitData.participants?.some(p => !p.settled);
-            const isSelected = this.financesSelectedItemId === exp.id;
+            const isSelected = this.financesSelectedIds && this.financesSelectedIds.has(exp.id);
             const tr = tbody.createEl('tr', { cls: `${hasPendingSplit ? 'kt-row-split' : ''} ${isSelected ? 'is-selected' : ''}` });
             tr.setAttribute('data-item-id', exp.id);
 
-            // Selection on click
+            // Selection on click with Ctrl/Shift multi-select support
             tr.onclick = (e) => {
-                this.financesSelectedItemId = exp.id;
-                const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
-                allTrs.forEach(row => row.removeClass('is-selected'));
-                tr.addClass('is-selected');
+                this.handleFinanceRowClick(exp.id, e);
             };
 
             // Right-click context menu (Copiar para o mês seguinte)
@@ -11751,16 +11769,13 @@ kanban-plugin: basic
         }
 
         incomeList.forEach(inc => {
-            const isSelected = this.financesSelectedItemId === inc.id;
+            const isSelected = this.financesSelectedIds && this.financesSelectedIds.has(inc.id);
             const tr = tbody.createEl('tr', { cls: isSelected ? 'is-selected' : '' });
             tr.setAttribute('data-item-id', inc.id);
 
-            // Selection on click
+            // Selection on click with Ctrl/Shift multi-select support
             tr.onclick = (e) => {
-                this.financesSelectedItemId = inc.id;
-                const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
-                allTrs.forEach(row => row.removeClass('is-selected'));
-                tr.addClass('is-selected');
+                this.handleFinanceRowClick(inc.id, e);
             };
 
             // Right-click context menu (Copiar para o mês seguinte)
@@ -11981,6 +11996,147 @@ kanban-plugin: basic
         const targetMonthName = mNames[nextMonth - 1] || `Mês ${nextMonth}`;
         const instBadge = nextInstStr ? ` [Parcela: (${nextInstStr})]` : '';
         new obsidian.Notice(`✓ "${newItem.description}" copiado para ${targetMonthName}/${nextYear}${instBadge}!`);
+    }
+
+    handleFinanceRowClick(itemId, event) {
+        if (!this.financesSelectedIds) this.financesSelectedIds = new Set();
+
+        const isCtrlOrMeta = event.ctrlKey || event.metaKey;
+        const isShift = event.shiftKey;
+
+        const renderedTrs = Array.from(this.containerEl.querySelectorAll('.kt-fin-table tbody tr[data-item-id]'));
+        const allItemIds = renderedTrs.map(tr => tr.getAttribute('data-item-id')).filter(Boolean);
+
+        if (isShift && this.financesLastClickedId && allItemIds.includes(this.financesLastClickedId)) {
+            const lastIdx = allItemIds.indexOf(this.financesLastClickedId);
+            const curIdx = allItemIds.indexOf(itemId);
+            const start = Math.min(lastIdx, curIdx);
+            const end = Math.max(lastIdx, curIdx);
+
+            if (!isCtrlOrMeta) {
+                this.financesSelectedIds.clear();
+            }
+            for (let i = start; i <= end; i++) {
+                this.financesSelectedIds.add(allItemIds[i]);
+            }
+        } else if (isCtrlOrMeta) {
+            if (this.financesSelectedIds.has(itemId)) {
+                this.financesSelectedIds.delete(itemId);
+            } else {
+                this.financesSelectedIds.add(itemId);
+            }
+            this.financesLastClickedId = itemId;
+        } else {
+            // Normal single click
+            this.financesSelectedIds.clear();
+            this.financesSelectedIds.add(itemId);
+            this.financesLastClickedId = itemId;
+        }
+
+        this.financesSelectedItemId = this.financesSelectedIds.size > 0 ? (this.financesLastClickedId || Array.from(this.financesSelectedIds)[0]) : null;
+
+        // Update CSS classes
+        renderedTrs.forEach(tr => {
+            const id = tr.getAttribute('data-item-id');
+            if (this.financesSelectedIds.has(id)) {
+                tr.addClass('is-selected');
+            } else {
+                tr.removeClass('is-selected');
+            }
+        });
+
+        this.updateFinancesSelectionBar();
+    }
+
+    updateFinancesSelectionBar() {
+        const leftCol = this.containerEl.querySelector('.kt-fin-left-col');
+        if (!leftCol) return;
+
+        let bar = leftCol.querySelector('.kt-fin-selection-floating-bar');
+        const selectedCount = this.financesSelectedIds ? this.financesSelectedIds.size : 0;
+
+        if (selectedCount === 0) {
+            if (bar) bar.remove();
+            return;
+        }
+
+        if (!bar) {
+            bar = leftCol.createDiv('kt-fin-selection-floating-bar');
+        } else {
+            bar.empty();
+        }
+
+        const fin = this.plugin.settings.finances;
+        const curr = fin.currency || 'R$';
+        const now = new Date();
+        const selYear = fin.selectedYear || now.getFullYear();
+        const selMonth = fin.selectedMonth || (now.getMonth() + 1);
+        const monthData = this.getFinancesMonthData(selYear, selMonth);
+
+        const allItems = [...(monthData.expenses || []), ...(monthData.income || [])];
+        const selectedItems = allItems.filter(item => this.financesSelectedIds.has(item.id));
+        const totalSum = selectedItems.reduce((acc, item) => acc + (item.value || 0), 0);
+
+        // Stats section
+        const stats = bar.createDiv('kt-fin-bar-stats');
+        const countBadge = stats.createSpan({ cls: 'kt-fin-bar-count', text: `${selectedCount} ${selectedCount === 1 ? 'despesa/renda' : 'despesas/rendas'}` });
+        stats.createSpan({ text: '•' });
+        stats.createSpan({ cls: 'kt-fin-bar-sum', text: `Soma: ${formatCurrency(totalSum, curr)}` });
+
+        // Actions section
+        const actions = bar.createDiv('kt-fin-bar-actions');
+
+        // Copy all selected to next month button
+        const copyBtn = actions.createEl('button', { cls: 'kt-fin-bar-btn', text: '📋 Copiar p/ Próximo Mês' });
+        copyBtn.title = 'Copiar todos os itens selecionados para o mês seguinte';
+        copyBtn.onclick = async (e) => {
+            e.stopPropagation();
+            for (const item of selectedItems) {
+                const itemType = (monthData.income || []).some(x => x.id === item.id) ? 'income' : 'expense';
+                await this.copyFinanceItemToNextMonth(item, selYear, selMonth, itemType);
+            }
+            new obsidian.Notice(`✓ ${selectedItems.length} itens copiados com sucesso para o próximo mês!`);
+        };
+
+        // Clear selection button
+        const clearBtn = actions.createEl('button', { cls: 'kt-fin-bar-btn', text: '✕ Desmarcar' });
+        clearBtn.title = 'Limpar seleção';
+        clearBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.clearFinanceSelection();
+        };
+
+        // Delete all selected button
+        const delBtn = actions.createEl('button', { cls: 'kt-fin-bar-btn mod-warning', text: `🗑️ Excluir (${selectedCount})` });
+        delBtn.title = 'Excluir itens selecionados';
+        delBtn.onclick = (e) => {
+            e.stopPropagation();
+            const confirmModal = new FinanceConfirmModal(
+                this.app,
+                `🗑️ Excluir ${selectedCount} itens selecionados`,
+                `Tem certeza que deseja excluir os ${selectedCount} itens selecionados no valor total de ${formatCurrency(totalSum, curr)}?`,
+                async () => {
+                    monthData.expenses = (monthData.expenses || []).filter(x => !this.financesSelectedIds.has(x.id));
+                    monthData.income = (monthData.income || []).filter(x => !this.financesSelectedIds.has(x.id));
+                    this.clearFinanceSelection();
+                    await this.plugin.saveSettings();
+                    this.render();
+                }
+            );
+            confirmModal.open();
+        };
+    }
+
+    clearFinanceSelection() {
+        if (this.financesSelectedIds) {
+            this.financesSelectedIds.clear();
+        }
+        this.financesSelectedItemId = null;
+        this.financesLastClickedId = null;
+        const allTrs = this.containerEl.querySelectorAll('.kt-fin-table tbody tr');
+        allTrs.forEach(row => row.removeClass('is-selected'));
+        const bar = this.containerEl.querySelector('.kt-fin-selection-floating-bar');
+        if (bar) bar.remove();
     }
 
     focusFinancesSelectedItem(itemId, flash = true) {
