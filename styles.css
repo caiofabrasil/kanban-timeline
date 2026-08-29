@@ -8358,6 +8358,995 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     margin: 4px 0;
 }
 
+/* ================================================================
+   HEALTH TRACKER (SAÚDE & BEM-ESTAR) - MINIMALIST OBSIDIAN DESIGN
+   ================================================================ */
 
+.kt-health-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    background: var(--background-primary);
+    padding: 16px 20px;
+    box-sizing: border-box;
+    gap: 16px;
+}
 
+/* Topbar & Profile Switcher */
+.kt-health-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
 
+.kt-health-profile-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-health-profile-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    border: 1px solid var(--background-modifier-border);
+    transition: all 0.15s ease;
+}
+
+.kt-health-profile-pill:hover {
+    color: var(--text-normal);
+    border-color: var(--text-muted);
+}
+
+.kt-health-profile-pill.is-active {
+    background: var(--background-primary-alt, rgba(56, 189, 248, 0.1));
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.kt-health-profile-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.kt-health-profile-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 10px;
+    background: var(--background-modifier-border);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-add-profile-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 16px;
+    border: 1px dashed var(--background-modifier-border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.kt-health-add-profile-btn:hover {
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+}
+
+/* Subtabs Navigation Bar */
+.kt-health-nav-strip {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 2px;
+}
+
+.kt-health-tab-btn {
+    background: transparent;
+    border: none;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+    border-bottom: 2px solid transparent;
+    transition: all 0.12s ease;
+}
+
+.kt-health-tab-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-health-tab-btn.is-active {
+    color: var(--text-normal);
+    font-weight: 600;
+    border-bottom-color: var(--interactive-accent);
+}
+
+/* Health Cards & Grids */
+.kt-health-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-sizing: border-box;
+}
+
+.kt-health-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 10px;
+}
+
+.kt-health-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-normal);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-health-card-subtitle {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+/* KPI Summary Cards */
+.kt-health-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    width: 100%;
+}
+
+.kt-health-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-kpi-label {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+
+.kt-health-kpi-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-normal);
+    letter-spacing: -0.5px;
+}
+
+.kt-health-kpi-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Quick Log Check-in Bar */
+.kt-health-quicklog-wrap {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    background: var(--background-secondary-alt, var(--background-secondary));
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    align-items: center;
+}
+
+.kt-health-quicklog-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-quicklog-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.kt-health-quicklog-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-health-water-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    cursor: pointer;
+}
+
+.kt-health-water-btn:hover {
+    border-color: #38bdf8;
+    color: #38bdf8;
+}
+
+/* Range Slider and Score Selector */
+.kt-health-score-group {
+    display: flex;
+    gap: 4px;
+}
+
+.kt-health-score-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.1s ease;
+}
+
+.kt-health-score-btn:hover {
+    color: var(--text-normal);
+    border-color: var(--text-muted);
+}
+
+.kt-health-score-btn.is-selected {
+    background: var(--interactive-accent);
+    color: #ffffff;
+    border-color: var(--interactive-accent);
+}
+
+/* Biomarker Evolution Chart & Reference Band */
+.kt-health-chart-wrap {
+    width: 100%;
+    position: relative;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px;
+    box-sizing: border-box;
+}
+
+.kt-health-chart-svg {
+    width: 100%;
+    height: 250px;
+    display: block;
+    overflow: visible;
+}
+
+.kt-health-ref-band {
+    fill: rgba(34, 197, 94, 0.08);
+    stroke: rgba(34, 197, 94, 0.25);
+    stroke-dasharray: 4 3;
+    stroke-width: 1;
+}
+
+.kt-health-chart-line {
+    fill: none;
+    stroke: #38bdf8;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.kt-health-chart-dot {
+    stroke-width: 2.5;
+    cursor: pointer;
+    transition: r 0.15s ease;
+}
+
+.kt-health-chart-dot.is-normal {
+    fill: var(--background-primary);
+    stroke: #22c55e;
+}
+
+.kt-health-chart-dot.is-warning {
+    fill: var(--background-primary);
+    stroke: #eab308;
+}
+
+.kt-health-chart-dot.is-danger {
+    fill: var(--background-primary);
+    stroke: #ef4444;
+}
+
+.kt-health-chart-dot:hover {
+    r: 6.5;
+    stroke-width: 3.5;
+}
+
+/* Timeline of Consultations & Lab Exams */
+.kt-health-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.kt-health-entry-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 0.15s ease;
+}
+
+.kt-health-entry-card:hover {
+    border-color: var(--interactive-accent);
+}
+
+.kt-health-entry-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-health-entry-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-health-entry-date {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-entry-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.kt-health-badge {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-badge.is-pending {
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.kt-health-badge.is-completed {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.kt-health-badge.is-danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.kt-health-pdf-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.kt-health-pdf-btn:hover {
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+}
+
+/* Mental Health / Burnout Alert Banner */
+.kt-health-burnout-banner {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-health-burnout-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ef4444;
+}
+
+.kt-health-burnout-desc {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+/* ================================================================
+   MODAL FORM ALIGNMENT & CONTROLS (CLEAN OBSIDIAN DESIGN)
+   ================================================================ */
+
+.kt-form-row {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    width: 100%;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+}
+
+.kt-form-field {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 5px !important;
+    width: 100% !important;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+}
+
+.kt-form-field label {
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    color: var(--text-muted) !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    display: block !important;
+    margin: 0 !important;
+}
+
+.kt-form-field input[type="text"],
+.kt-form-field input[type="number"],
+.kt-form-field input[type="date"],
+.kt-form-field input[type="color"],
+.kt-form-field select,
+.kt-form-field textarea {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 7px 10px !important;
+    font-size: 13px !important;
+    color: var(--text-normal) !important;
+    background: var(--background-secondary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    border-radius: 6px !important;
+    outline: none !important;
+    display: block !important;
+    transition: border-color 0.15s ease !important;
+}
+
+.kt-form-field input:focus,
+.kt-form-field select:focus,
+.kt-form-field textarea:focus {
+    border-color: var(--interactive-accent) !important;
+    box-shadow: 0 0 0 1px var(--interactive-accent) !important;
+}
+
+.kt-form-field textarea {
+    resize: vertical !important;
+    font-family: inherit !important;
+    line-height: 1.4 !important;
+    min-height: 60px !important;
+}
+
+/* Exam PDF Row & Dropzone */
+.kt-health-pdf-row {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 8px !important;
+    width: 100% !important;
+    align-items: center !important;
+}
+
+.kt-health-pdf-row input[type="text"] {
+    flex: 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+}
+
+.kt-health-pdf-row select {
+    width: 180px !important;
+    min-width: 180px !important;
+    flex-shrink: 0 !important;
+}
+
+.kt-health-dropzone {
+    border: 2px dashed var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    background: var(--background-primary);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    margin-bottom: 12px;
+}
+
+.kt-health-dropzone:hover,
+.kt-health-dropzone.is-dragover {
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-health-extract-preview {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+/* Minimal Subtle Action Buttons */
+.kt-health-btn-minimal-danger {
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    color: var(--text-muted) !important;
+    font-size: 11.5px !important;
+    font-weight: 450 !important;
+    padding: 3px 8px !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+    opacity: 0.7;
+    box-shadow: none !important;
+}
+
+.kt-health-btn-minimal-danger:hover {
+    color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.1) !important;
+    border-color: rgba(239, 68, 68, 0.2) !important;
+    opacity: 1;
+}
+
+.kt-health-exam-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.kt-health-exam-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-health-exam-card:hover {
+    border-color: var(--interactive-accent);
+    background: var(--background-secondary-alt);
+}
+
+.kt-health-exam-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.kt-health-exam-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-health-exam-date {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Health Exam Details Modal */
+.kt-health-details-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.kt-health-details-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-health-details-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+    margin-bottom: 4px;
+}
+
+.kt-health-details-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.kt-health-details-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-health-details-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.kt-health-details-kpi-card {
+    background: var(--background-secondary-alt);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kt-health-details-kpi-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-details-kpi-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-details-table-wrap {
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+}
+
+.kt-health-details-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.kt-health-details-table th {
+    position: sticky;
+    top: 0;
+    background: var(--background-secondary);
+    padding: 8px 12px;
+    font-weight: 600;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--background-modifier-border);
+    z-index: 2;
+}
+
+.kt-health-details-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+.kt-health-details-table tr:last-child td {
+    border-bottom: none;
+}
+
+.kt-health-details-table tr:hover td {
+    background: var(--background-modifier-hover);
+}
+
+/* ================================================================
+   MULTI-BIOMARKER DASHBOARD GRID & SPARKLINE CARDS
+   ================================================================ */
+
+.kt-health-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.kt-health-filter-chip {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-health-filter-chip:hover {
+    color: var(--text-normal);
+    border-color: var(--text-muted);
+}
+
+.kt-health-filter-chip.is-active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent, #ffffff);
+    border-color: var(--interactive-accent);
+    font-weight: 600;
+}
+
+.kt-health-biomarkers-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 14px;
+    width: 100%;
+}
+
+.kt-health-biomarker-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    box-sizing: border-box;
+}
+
+.kt-health-biomarker-card:hover {
+    border-color: var(--text-muted);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.kt-health-biomarker-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.kt-health-biomarker-card-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin-bottom: 2px;
+}
+
+.kt-health-biomarker-card-cat {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-biomarker-card-value-box {
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.kt-health-biomarker-card-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-biomarker-card-unit {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+.kt-health-sparkline-wrap {
+    width: 100%;
+    height: 120px;
+    position: relative;
+    background: var(--background-secondary);
+    border-radius: 6px;
+    padding: 6px;
+    box-sizing: border-box;
+}
+
+.kt-health-sparkline-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.kt-health-mini-history {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    border-top: 1px solid var(--background-modifier-border);
+    padding-top: 8px;
+    font-size: 11.5px;
+}
+
+.kt-health-mini-history-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--text-muted);
+}
+
+.kt-health-biomarker-card {
+    cursor: pointer;
+}
+
+.kt-health-search-input {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-normal);
+    outline: none;
+    transition: all 0.15s ease;
+    width: 220px;
+}
+
+.kt-health-search-input:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+/* Expanded Biomarker Modal */
+.kt-health-expanded-chart-wrap {
+    width: 100%;
+    height: 240px;
+    position: relative;
+    background: var(--background-secondary-alt);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+}
+
+.kt-health-expanded-chart-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+/* Bioimpedance Section & Image Gallery */
+.kt-health-bio-section {
+    margin-top: 18px;
+}
+
+.kt-health-bio-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.kt-health-bio-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.kt-health-bio-kpi-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-bio-kpi-val {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-bio-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.kt-health-bio-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-health-bio-card:hover {
+    border-color: var(--interactive-accent);
+    background: var(--background-secondary-alt);
+}
+
+.kt-health-bio-thumb {
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    cursor: zoom-in;
+}
+
+.kt-health-bio-metrics-mini {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    font-size: 11.5px;
+}
+
+.kt-health-bio-metric-item {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-muted);
+    padding: 2px 0;
+    border-bottom: 1px dashed var(--background-modifier-border);
+}
+
+.kt-health-bio-metric-item b {
+    color: var(--text-normal);
+}
