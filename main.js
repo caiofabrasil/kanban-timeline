@@ -4601,8 +4601,16 @@ class FinanceEntryModal extends obsidian.Modal {
         this.onSave     = onSave;
         this.onDelete   = onDelete;
 
-        const monthPad = String(month).padStart(2, '0');
-        const defaultDate = `${year}-${monthPad}-01`;
+        const today = new Date();
+        let defaultDate;
+        if (today.getFullYear() === year && (today.getMonth() + 1) === month) {
+            defaultDate = formatIsoDate(today);
+        } else {
+            const maxDays = new Date(year, month, 0).getDate();
+            const dayNum = Math.min(today.getDate(), maxDays);
+            const monthPad = String(month).padStart(2, '0');
+            defaultDate = `${year}-${monthPad}-${String(dayNum).padStart(2, '0')}`;
+        }
 
         this.modeVal        = item ? (item.type || mode) : mode;
         this.valueVal       = item ? (typeof item.value === 'number' ? item.value.toFixed(2).replace('.', ',') : String(item.value || '')) : '';
@@ -4623,9 +4631,6 @@ class FinanceEntryModal extends obsidian.Modal {
         contentEl.addClass('kt-card-edit-modal');
 
         const isEdit = !!item;
-        const monthPad = String(month).padStart(2, '0');
-        const defaultDate = `${year}-${monthPad}-01`;
-
         contentEl.createEl('h2', { text: isEdit ? `Editar ${this.modeVal === 'income' ? 'Renda' : 'Despesa'}` : `Nova ${this.modeVal === 'income' ? 'Renda' : 'Despesa'}` });
 
         // 1. Tipo (Despesa / Renda)
@@ -4829,6 +4834,164 @@ class FinanceEntryModal extends obsidian.Modal {
         };
 
         saveBtn.onclick = submit;
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinancePlannedItemModal extends obsidian.Modal {
+    constructor(app, plugin, item, year, month, categories, incomeCategories, onSave, onDelete) {
+        super(app);
+        this.app              = app;
+        this.plugin           = plugin;
+        this.item             = item || null;
+        this.year             = year;
+        this.month            = month;
+        this.categories       = categories || [];
+        this.incomeCategories = incomeCategories || [];
+        this.onSave           = onSave;
+        this.onDelete         = onDelete;
+
+        const today = new Date();
+        let defaultDate;
+        if (today.getFullYear() === year && (today.getMonth() + 1) === month) {
+            defaultDate = formatIsoDate(today);
+        } else {
+            const maxDays = new Date(year, month, 0).getDate();
+            const dayNum = Math.min(today.getDate(), maxDays);
+            const monthPad = String(month).padStart(2, '0');
+            defaultDate = `${year}-${monthPad}-${String(dayNum).padStart(2, '0')}`;
+        }
+
+        this.typeVal  = item ? item.type : 'expense';
+        this.valueVal = item ? (typeof item.value === 'number' ? item.value.toFixed(2).replace('.', ',') : String(item.value || '')) : '';
+        this.descVal  = item ? (item.description || '') : '';
+        this.catVal   = item ? (item.category || (this.typeVal === 'income' ? this.incomeCategories[0] : this.categories[0]) || 'Outros') : (this.categories[0] || 'Outros');
+        this.dateVal  = item ? (item.date || defaultDate) : defaultDate;
+    }
+
+    onOpen() {
+        const { contentEl, item } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        const isEdit = !!item;
+        contentEl.createEl('h2', { text: isEdit ? 'Editar Previsão / Gasto Planejado' : 'Nova Previsão / Gasto Planejado' });
+
+        // 1. Tipo de Previsão (Despesa Planejada vs Receita/Entrada Prevista)
+        new obsidian.Setting(contentEl)
+            .setName('Tipo de Previsão')
+            .addDropdown(d => {
+                d.addOption('expense', '🔴 Despesa Prevista (Gasto Planejado)');
+                d.addOption('income', '🟢 Receita Prevista (Entrada Planejada)');
+                d.setValue(this.typeVal);
+                d.onChange(v => {
+                    this.typeVal = v;
+                    const catList = this.typeVal === 'income' ? this.incomeCategories : this.categories;
+                    this.catVal = catList[0] || 'Outros';
+                    this.onOpen();
+                });
+            });
+
+        // 2. Valor
+        new obsidian.Setting(contentEl)
+            .setName('Valor Estimado (R$)')
+            .addText(t => {
+                t.setPlaceholder('Ex: 500,00')
+                 .setValue(this.valueVal)
+                 .onChange(v => this.valueVal = v);
+                t.inputEl.style.fontSize = '16px';
+                t.inputEl.style.fontWeight = '700';
+                setTimeout(() => t.inputEl.focus(), 30);
+            });
+
+        // 3. Descrição
+        new obsidian.Setting(contentEl)
+            .setName('Descrição da Previsão')
+            .addText(t => {
+                t.setPlaceholder('Ex: Freela Projeto X, Compra Monitor, Conserto Carro...')
+                 .setValue(this.descVal)
+                 .onChange(v => this.descVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        // 4. Categoria
+        const catList = this.typeVal === 'income' ? this.incomeCategories : this.categories;
+        const catSetting = new obsidian.Setting(contentEl)
+            .setName('Categoria');
+        
+        catSetting.addDropdown(d => {
+            catList.forEach(c => d.addOption(c, c));
+            if (!catList.includes(this.catVal)) {
+                d.addOption(this.catVal, this.catVal);
+            }
+            d.setValue(this.catVal);
+            d.onChange(v => this.catVal = v);
+        });
+
+        // 5. Data Prevista
+        new obsidian.Setting(contentEl)
+            .setName('Data Prevista')
+            .setDesc('Quando você prevê que este gasto ou entrada irá ocorrer')
+            .addText(t => {
+                t.setValue(this.dateVal).onChange(v => this.dateVal = v.trim());
+                t.inputEl.style.width = '140px';
+            });
+
+        // Footer Actions
+        const footer = contentEl.createDiv('kt-fin-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+        footer.style.marginTop = '20px';
+
+        const leftGroup = footer.createDiv();
+        if (isEdit && this.onDelete) {
+            const delBtn = leftGroup.createEl('button', { cls: 'mod-warning', text: '🗑️ Excluir' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(item);
+            };
+        }
+
+        const rightGroup = footer.createDiv();
+        rightGroup.style.display = 'flex';
+        rightGroup.style.gap = '8px';
+
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: isEdit ? 'Salvar Alterações' : 'Salvar Previsão' });
+        saveBtn.onclick = () => {
+            const cleanVal = parseFinanceCurrencyInput(this.valueVal);
+            if (cleanVal <= 0) {
+                new obsidian.Notice('⚠️ Digite um valor válido.');
+                return;
+            }
+
+            const cleanDesc = this.descVal.trim();
+            if (!cleanDesc) {
+                new obsidian.Notice('⚠️ Digite uma descrição para a previsão.');
+                return;
+            }
+
+            const result = {
+                id: item ? item.id : `plan-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                type: this.typeVal,
+                value: cleanVal,
+                description: cleanDesc,
+                category: this.catVal,
+                date: this.dateVal || formatIsoDate(new Date())
+            };
+
+            this.close();
+            this.onSave(result);
+        };
     }
 
     onClose() {
@@ -9053,11 +9216,96 @@ kanban-plugin: basic
         });
     }
 
+    getAssociatedTagForColumn(columnName) {
+        if (!columnName) return null;
+        const colClean = columnName.trim();
+        const colLower = colClean.toLowerCase();
+
+        // 1. Direct hashtag in column title (e.g. "Tarefas #Lojinha" or "#Lojinha")
+        const tagMatch = colClean.match(/#([A-Za-z0-9_\-\/]+)/);
+        if (tagMatch) {
+            return `#${tagMatch[1]}`;
+        }
+
+        // 2. Matching configured project in settings
+        const customProjects = this.plugin.settings.projects || [];
+        for (const proj of customProjects) {
+            // Check explicitly assigned columns
+            if (Array.isArray(proj.columns)) {
+                for (const c of proj.columns) {
+                    if ((c || '').toLowerCase().trim() === colLower) {
+                        return proj.tag ? (proj.tag.startsWith('#') ? proj.tag : `#${proj.tag}`) : `#${proj.name}`;
+                    }
+                }
+            }
+            // Check project name or tag matching column name
+            const pName = (proj.name || '').toLowerCase().trim();
+            const pTag = (proj.tag || '').replace(/^#/, '').toLowerCase().trim();
+            if (pName && (colLower === pName || colLower.includes(pName) || pName.includes(colLower))) {
+                return proj.tag ? (proj.tag.startsWith('#') ? proj.tag : `#${proj.tag}`) : `#${proj.name}`;
+            }
+            if (pTag && (colLower === pTag || colLower.includes(pTag) || pTag.includes(colLower))) {
+                return proj.tag ? (proj.tag.startsWith('#') ? proj.tag : `#${proj.tag}`) : `#${proj.name}`;
+            }
+        }
+
+        // 3. Check existing tags across cards that match the column name
+        const colWord = colLower.replace(/[\s\-_]+/g, '');
+        if (Array.isArray(this.cards) && this.cards.length > 0) {
+            const colCards = this.cards.filter(c => (c.column || '').toLowerCase().trim() === colLower);
+            const tagCounts = {};
+            for (const c of colCards) {
+                if (Array.isArray(c.tags)) {
+                    for (const t of c.tags) {
+                        const cleanT = t.replace(/^#/, '').toLowerCase().replace(/[\s\-_]+/g, '');
+                        if (cleanT === colWord || (cleanT.length >= 3 && colWord.includes(cleanT))) {
+                            return t.startsWith('#') ? t : `#${t}`;
+                        }
+                        tagCounts[t] = (tagCounts[t] || 0) + 1;
+                    }
+                }
+            }
+            // If majority of cards in this column share a tag, use it
+            if (colCards.length > 0) {
+                for (const [t, count] of Object.entries(tagCounts)) {
+                    if (count / colCards.length >= 0.5) {
+                        return t.startsWith('#') ? t : `#${t}`;
+                    }
+                }
+            }
+            for (const card of this.cards) {
+                if (Array.isArray(card.tags)) {
+                    for (const tag of card.tags) {
+                        const cleanTag = tag.replace(/^#/, '').toLowerCase().replace(/[\s\-_]+/g, '');
+                        if (cleanTag === colWord || (cleanTag.length >= 3 && colWord.includes(cleanTag))) {
+                            return tag.startsWith('#') ? tag : `#${tag}`;
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
     async addCardToColumn(columnName, cardTitle) {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
+
+        let finalTitle = cardTitle.trim();
+        const assocTag = this.getAssociatedTagForColumn(columnName);
+
+        if (assocTag) {
+            const cleanTag = assocTag.replace(/^#/, '').toLowerCase();
+            const tagRegex = new RegExp(`(?:^|\\s)#${cleanTag}(?:\\s|$)`, 'i');
+            if (!tagRegex.test(finalTitle)) {
+                const tagToAdd = assocTag.startsWith('#') ? assocTag : `#${assocTag}`;
+                finalTitle = `${finalTitle} ${tagToAdd}`;
+            }
+        }
+
         let content = await this.app.vault.read(file);
-        content = this.parser.addCardToColumn(content, columnName, cardTitle);
+        content = this.parser.addCardToColumn(content, columnName, finalTitle);
         await this.app.vault.modify(file, content);
         new obsidian.Notice(`➕ Card adicionado em "${columnName}"`);
     }
@@ -11618,9 +11866,13 @@ kanban-plugin: basic
                 initialBalance: null,
                 plannedExpenses: {},
                 plannedIncome: {},
+                plannedItems: [],
                 expenses: [],
                 income: []
             };
+        }
+        if (!fin.months[key].plannedItems) {
+            fin.months[key].plannedItems = [];
         }
         return fin.months[key];
     }
@@ -11667,6 +11919,9 @@ kanban-plugin: basic
             if (Array.isArray(monthData.income)) {
                 monthData.income = monthData.income.filter(inc => inc && typeof inc.value === 'number' && !isNaN(inc.value));
             }
+            if (Array.isArray(monthData.plannedItems)) {
+                monthData.plannedItems = monthData.plannedItems.filter(p => p && typeof p.value === 'number' && !isNaN(p.value));
+            }
         });
     }
 
@@ -11688,6 +11943,26 @@ kanban-plugin: basic
         // 1. Top Header Bar (Year, Months Navigation, Actions)
         this.renderFinancesHeader(finContainer, selYear, selMonth, monthData, curr);
 
+        // Top Main View Mode Switcher (Lançamentos vs Central de Análise)
+        if (!this.financesMainViewTab) this.financesMainViewTab = 'overview';
+
+        const mainSwitcher = finContainer.createDiv('kt-fin-main-switcher');
+        const mainTabs = [
+            { id: 'overview',  label: 'Lançamentos & Resumo' },
+            { id: 'analytics', label: 'Analise Financeira' }
+        ];
+
+        mainTabs.forEach(mt => {
+            const btn = mainSwitcher.createEl('button', {
+                cls: `kt-fin-main-tab-btn ${this.financesMainViewTab === mt.id ? 'is-active' : ''}`,
+                text: mt.label
+            });
+            btn.onclick = () => {
+                this.financesMainViewTab = mt.id;
+                this.render();
+            };
+        });
+
         // 2. Calculations
         const initialBal = this.getInheritedInitialBalance(selYear, selMonth);
         const totalExpReal = (monthData.expenses || []).reduce((acc, e) => acc + (e.value || 0), 0);
@@ -11695,6 +11970,17 @@ kanban-plugin: basic
         const finalBal = initialBal + totalIncReal - totalExpReal;
         const monthSavings = totalIncReal - totalExpReal;
         const savingsPct = initialBal > 0 ? ((monthSavings / initialBal) * 100).toFixed(1) : 0;
+
+        if (this.financesMainViewTab === 'analytics') {
+            this.renderFinancesAnalyticsView(finContainer, selYear, selMonth, monthData, curr);
+            return;
+        }
+
+        const plannedItems = monthData.plannedItems || [];
+        const plannedExpItems = plannedItems.filter(p => p.type !== 'income');
+        const plannedIncItems = plannedItems.filter(p => p.type === 'income');
+        const totalPlannedExp = plannedExpItems.reduce((acc, p) => acc + (p.value || 0), 0);
+        const totalPlannedInc = plannedIncItems.reduce((acc, p) => acc + (p.value || 0), 0);
 
         // 3. Two-Column Split Layout
         const splitLayout = finContainer.createDiv('kt-fin-split-layout');
@@ -11709,9 +11995,10 @@ kanban-plugin: basic
         const subTabLeft = subTabWrap.createDiv('kt-fin-subtab-left');
 
         const tabs = [
-            { id: 'all',      label: 'Visão Completa (Ambos)' },
+            { id: 'all',      label: 'Visão Completa' },
             { id: 'income',   label: `Renda (${formatCurrency(totalIncReal, curr)})`, count: (monthData.income || []).length },
-            { id: 'expenses', label: `Despesas (${formatCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length }
+            { id: 'expenses', label: `Despesas (${formatCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length },
+            { id: 'planned',  label: `💡 Planejado (${plannedItems.length})`, count: plannedItems.length }
         ];
 
         tabs.forEach(t => {
@@ -11823,13 +12110,16 @@ kanban-plugin: basic
         }
 
         if (this.finLeftSubTab === 'all') {
-            // Renda por cima, depois despesas
+            // Renda por cima, depois despesas, depois planejamento
             this.renderFinancesIncomeTable(tablesContainer, selYear, selMonth, monthData, curr);
             this.renderFinancesExpensesTable(tablesContainer, selYear, selMonth, monthData, curr);
+            this.renderFinancesPlannedTable(tablesContainer, selYear, selMonth, monthData, curr);
         } else if (this.finLeftSubTab === 'income') {
             this.renderFinancesIncomeTable(tablesContainer, selYear, selMonth, monthData, curr);
         } else if (this.finLeftSubTab === 'expenses') {
             this.renderFinancesExpensesTable(tablesContainer, selYear, selMonth, monthData, curr);
+        } else if (this.finLeftSubTab === 'planned') {
+            this.renderFinancesPlannedTable(tablesContainer, selYear, selMonth, monthData, curr);
         }
 
         // Apply search filter if query exists
@@ -12392,7 +12682,44 @@ kanban-plugin: basic
 
             // 4. Categoria
             const tdCat = tr.createEl('td', { cls: 'kt-td-cat' });
-            tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: exp.category || 'Outros' });
+            const catPill = tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: exp.category || 'Outros' });
+            catPill.title = 'Clique para alterar categoria';
+            catPill.onclick = (e) => {
+                e.stopPropagation();
+                const menu = new obsidian.Menu();
+                (fin.categories || ['Outros']).forEach(cat => {
+                    const isSelected = cat === (exp.category || 'Outros');
+                    menu.addItem(item => {
+                        item.setTitle(`${isSelected ? '✓ ' : '   '}${cat}`)
+                            .onClick(async () => {
+                                exp.category = cat;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Categoria alterada para "${cat}"`);
+                            });
+                    });
+                });
+                menu.addSeparator();
+                menu.addItem(item => {
+                    item.setTitle('＋ Nova Categoria...')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newCat = prompt('Nome da nova categoria de despesa:');
+                            if (newCat && newCat.trim()) {
+                                const clean = newCat.trim();
+                                if (!fin.categories.includes(clean)) {
+                                    fin.categories.push(clean);
+                                }
+                                exp.category = clean;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Nova categoria "${clean}" criada e aplicada!`);
+                            }
+                        });
+                });
+                const rect = catPill.getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+            };
 
             // 5. Ações (Editar & Excluir)
             const tdAct = tr.createEl('td', { cls: 'kt-td-actions' });
@@ -12571,7 +12898,44 @@ kanban-plugin: basic
 
             // 4. Categoria
             const tdCat = tr.createEl('td', { cls: 'kt-td-cat' });
-            tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: inc.category || 'Pagamento' });
+            const catPill = tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: inc.category || 'Pagamento' });
+            catPill.title = 'Clique para alterar categoria';
+            catPill.onclick = (e) => {
+                e.stopPropagation();
+                const menu = new obsidian.Menu();
+                (fin.incomeCategories || ['Pagamento', 'Outros']).forEach(cat => {
+                    const isSelected = cat === (inc.category || 'Pagamento');
+                    menu.addItem(item => {
+                        item.setTitle(`${isSelected ? '✓ ' : '   '}${cat}`)
+                            .onClick(async () => {
+                                inc.category = cat;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Categoria alterada para "${cat}"`);
+                            });
+                    });
+                });
+                menu.addSeparator();
+                menu.addItem(item => {
+                    item.setTitle('＋ Nova Categoria...')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newCat = prompt('Nome da nova categoria de renda:');
+                            if (newCat && newCat.trim()) {
+                                const clean = newCat.trim();
+                                if (!fin.incomeCategories.includes(clean)) {
+                                    fin.incomeCategories.push(clean);
+                                }
+                                inc.category = clean;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Nova categoria "${clean}" criada e aplicada!`);
+                            }
+                        });
+                });
+                const rect = catPill.getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+            };
 
             // 5. Ações
             const tdAct = tr.createEl('td', { cls: 'kt-td-actions' });
@@ -12617,6 +12981,262 @@ kanban-plugin: basic
                 monthData.income = monthData.income.filter(x => x.id !== inc.id);
                 await this.plugin.saveSettings();
                 this.render();
+            };
+        });
+    }
+
+    async confirmPlannedItem(item, year, month, monthData) {
+        monthData.plannedItems = (monthData.plannedItems || []).filter(x => x.id !== item.id);
+
+        const isIncome = item.type === 'income';
+        const newItem = {
+            id: `fin-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: item.date || formatIsoDate(new Date()),
+            value: item.value,
+            description: item.description,
+            category: item.category || 'Outros',
+            isFixed: false,
+            installment: ''
+        };
+
+        if (isIncome) {
+            if (!monthData.income) monthData.income = [];
+            monthData.income.push(newItem);
+            new obsidian.Notice(`✓ Entrada "${newItem.description}" (${formatCurrency(newItem.value, this.plugin.settings.finances.currency || 'R$')}) efetivada e movida para a Renda!`);
+        } else {
+            if (!monthData.expenses) monthData.expenses = [];
+            monthData.expenses.push(newItem);
+            new obsidian.Notice(`✓ Despesa "${newItem.description}" (${formatCurrency(newItem.value, this.plugin.settings.finances.currency || 'R$')}) efetivada e movida para os Gastos!`);
+        }
+
+        this.reconcileFinancesMonths();
+        await this.plugin.saveSettings();
+        this.pendingFinancesScrollToItemId = newItem.id;
+        this.financesSelectedItemId = newItem.id;
+        this.render();
+    }
+
+    renderFinancesPlannedTable(parent, year, month, monthData, curr) {
+        const fin = this.plugin.settings.finances;
+        const section = parent.createDiv('kt-fin-section kt-fin-planned-section');
+
+        const secHdr = section.createDiv('kt-fin-section-hdr');
+        const titleWrap = secHdr.createDiv();
+        titleWrap.style.display = 'flex';
+        titleWrap.style.alignItems = 'center';
+        titleWrap.style.gap = '8px';
+        titleWrap.createEl('h3', { text: '💡 Despesas & Entradas Planejadas (Previsões)' });
+
+        const plannedItems = monthData.plannedItems || [];
+        const plannedExpTotal = plannedItems.filter(x => x.type !== 'income').reduce((acc, x) => acc + (x.value || 0), 0);
+        const plannedIncTotal = plannedItems.filter(x => x.type === 'income').reduce((acc, x) => acc + (x.value || 0), 0);
+
+        if (plannedItems.length > 0) {
+            const badge = titleWrap.createSpan({ cls: 'kt-fin-planned-summary-badge' });
+            badge.setText(`Gastos Previstos: ${formatCurrency(plannedExpTotal, curr)} • Entradas Previstas: ${formatCurrency(plannedIncTotal, curr)}`);
+        }
+
+        const addPlanBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn mod-cta', text: '＋ Nova Previsão / Gasto Planejado' });
+        addPlanBtn.onclick = () => {
+            new FinancePlannedItemModal(
+                this.app,
+                this.plugin,
+                null,
+                year,
+                month,
+                fin.categories,
+                fin.incomeCategories,
+                async (newItem) => {
+                    if (!monthData.plannedItems) monthData.plannedItems = [];
+                    monthData.plannedItems.push(newItem);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`✓ Previsão "${newItem.description}" adicionada!`);
+                }
+            ).open();
+        };
+
+        const importHabitsBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn', text: '⚡ Importar Gastos Recorrentes' });
+        importHabitsBtn.title = 'Preencher previsões automaticamente com base nos seus hábitos recorrentes e médias mensais';
+        importHabitsBtn.onclick = async () => {
+            const habits = this.calculateRecurringHabitEstimates(year);
+            if (habits.length === 0) {
+                new obsidian.Notice('Nenhum gasto recorrente identificado ainda para importar.');
+                return;
+            }
+            if (!monthData.plannedItems) monthData.plannedItems = [];
+
+            // Clean up any previously imported fixed, installment or non-recurring artifacts
+            monthData.plannedItems = monthData.plannedItems.filter(p => {
+                const desc = (p.description || '').toLowerCase();
+                return !desc.includes('computador caio') && !desc.includes('parcela carro') && !desc.includes('trem vit') && !desc.includes('festival') && !desc.includes('diamantina') && !desc.includes('[fixo]');
+            });
+
+            let addedCount = 0;
+            habits.slice(0, 15).forEach(m => {
+                const existing = monthData.plannedItems.find(p => p.description.toLowerCase() === m.name.toLowerCase());
+                if (existing) {
+                    existing.value = m.monthlyAvgCost;
+                    existing.category = m.category;
+                } else {
+                    monthData.plannedItems.push({
+                        id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                        type: 'expense',
+                        value: m.monthlyAvgCost,
+                        description: m.name,
+                        category: m.category,
+                        date: ''
+                    });
+                    addedCount++;
+                }
+            });
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ ${habits.length} hábitos recorrentes importados para o planejamento de ${month}/${year}!`);
+        };
+
+        const tableWrap = section.createDiv('kt-fin-table-wrap');
+        const table = tableWrap.createEl('table', { cls: 'kt-fin-table kt-fin-planned-table' });
+
+        const thead = table.createEl('thead');
+        const thr = thead.createEl('tr');
+        thr.createEl('th', { text: 'Tipo' });
+        thr.createEl('th', { text: 'Data Prevista' });
+        thr.createEl('th', { text: 'Valor' });
+        thr.createEl('th', { text: 'Descrição' });
+        thr.createEl('th', { text: 'Categoria' });
+        thr.createEl('th', { text: 'Ações', cls: 'kt-th-actions' });
+
+        const tbody = table.createEl('tbody');
+
+        if (plannedItems.length === 0) {
+            const emptyTr = tbody.createEl('tr');
+            const td = emptyTr.createEl('td', { cls: 'kt-td-empty', attr: { colspan: '6' } });
+            td.setText('Nenhum gasto ou entrada planejada para este mês. Adicione previsões para planejar seus gastos antes de realizá-los.');
+            return;
+        }
+
+        // Sort by date ascending
+        const sorted = plannedItems.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+        sorted.forEach(item => {
+            const isIncome = item.type === 'income';
+            const tr = tbody.createEl('tr', { cls: `kt-row-planned ${isIncome ? 'is-planned-income' : 'is-planned-expense'}` });
+            tr.setAttribute('data-item-id', item.id);
+            tr.setAttribute('data-search-text', `${item.description} ${item.category} ${item.value} ${item.date}`.toLowerCase());
+
+            // 1. Tipo Badge
+            const typeTd = tr.createEl('td', { cls: 'kt-td-planned-type' });
+            const typeBadge = typeTd.createSpan({ cls: `kt-planned-type-badge ${isIncome ? 'is-income' : 'is-expense'}` });
+            typeBadge.setText(isIncome ? '🟢 Entrada Prevista' : '🔴 Gasto Planejado');
+
+            // 2. Data
+            const dateTd = tr.createEl('td', { cls: 'kt-td-date' });
+            dateTd.setText(item.date || '-');
+
+            // 3. Valor
+            const valTd = tr.createEl('td', { cls: `kt-td-val ${isIncome ? 'kt-val-green' : 'kt-val-red'}` });
+            valTd.setText(`${isIncome ? '+' : '-'}${formatCurrency(item.value, curr)}`);
+
+            // 4. Descrição
+            const descTd = tr.createEl('td', { cls: 'kt-td-desc' });
+            descTd.setText(item.description);
+
+            // 5. Categoria
+            const catTd = tr.createEl('td', { cls: 'kt-td-cat' });
+            const catPill = catTd.createSpan({ cls: 'kt-fin-cat-pill' });
+            catPill.setText(item.category || 'Outros');
+            catPill.title = 'Clique para alterar categoria';
+            catPill.onclick = (e) => {
+                e.stopPropagation();
+                const catList = isIncome ? (fin.incomeCategories || ['Pagamento', 'Outros']) : (fin.categories || ['Outros']);
+                const menu = new obsidian.Menu();
+                catList.forEach(cat => {
+                    const isSelected = cat === (item.category || 'Outros');
+                    menu.addItem(mItem => {
+                        mItem.setTitle(`${isSelected ? '✓ ' : '   '}${cat}`)
+                            .onClick(async () => {
+                                item.category = cat;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Categoria da previsão alterada para "${cat}"`);
+                            });
+                    });
+                });
+                menu.addSeparator();
+                menu.addItem(mItem => {
+                    mItem.setTitle('＋ Nova Categoria...')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newCat = prompt(`Nome da nova categoria de ${isIncome ? 'renda' : 'despesa'}:`);
+                            if (newCat && newCat.trim()) {
+                                const clean = newCat.trim();
+                                if (isIncome) {
+                                    if (!fin.incomeCategories.includes(clean)) fin.incomeCategories.push(clean);
+                                } else {
+                                    if (!fin.categories.includes(clean)) fin.categories.push(clean);
+                                }
+                                item.category = clean;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Nova categoria "${clean}" criada e aplicada!`);
+                            }
+                        });
+                });
+                const rect = catPill.getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+            };
+
+            // 6. Ações (Confirmar / Efetivar -> passar para gastos/renda, Editar, Excluir)
+            const actTd = tr.createEl('td', { cls: 'kt-td-actions' });
+            const actWrap = actTd.createDiv('kt-fin-act-wrap');
+
+            // Botão Confirmar / Efetivar
+            const confirmBtn = actWrap.createEl('button', { cls: 'kt-fin-confirm-plan-btn', text: '✓ Efetivar' });
+            confirmBtn.title = isIncome ? 'Confirmar e passar para Renda realizada' : 'Confirmar e passar para Gastos realizados';
+            confirmBtn.onclick = async (e) => {
+                e.stopPropagation();
+                await this.confirmPlannedItem(item, year, month, monthData);
+            };
+
+            // Botão Editar
+            const editBtn = actWrap.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+            editBtn.title = 'Editar previsão';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                new FinancePlannedItemModal(
+                    this.app,
+                    this.plugin,
+                    item,
+                    year,
+                    month,
+                    fin.categories,
+                    fin.incomeCategories,
+                    async (updatedItem) => {
+                        const idx = (monthData.plannedItems || []).findIndex(x => x.id === item.id);
+                        if (idx !== -1) monthData.plannedItems[idx] = updatedItem;
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Previsão "${updatedItem.description}" atualizada.`);
+                    },
+                    async (delItem) => {
+                        monthData.plannedItems = (monthData.plannedItems || []).filter(x => x.id !== delItem.id);
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Previsão "${delItem.description}" excluída.`);
+                    }
+                ).open();
+            };
+
+            // Botão Excluir
+            const delBtn = actWrap.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.title = 'Excluir previsão';
+            delBtn.onclick = async (e) => {
+                e.stopPropagation();
+                monthData.plannedItems = (monthData.plannedItems || []).filter(x => x.id !== item.id);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Previsão "${item.description}" excluída.`);
             };
         });
     }
@@ -12728,12 +13348,21 @@ kanban-plugin: basic
         const isCtrlOrMeta = event.ctrlKey || event.metaKey;
         const isShift = event.shiftKey;
 
-        const renderedTrs = Array.from(this.containerEl.querySelectorAll('.kt-fin-table tbody tr[data-item-id]'));
-        const allItemIds = renderedTrs.map(tr => tr.getAttribute('data-item-id')).filter(Boolean);
+        // Get all rendered TRs
+        const allTrs = Array.from(this.containerEl.querySelectorAll('.kt-fin-table tbody tr[data-item-id]'));
 
-        if (isShift && this.financesLastClickedId && allItemIds.includes(this.financesLastClickedId)) {
-            const lastIdx = allItemIds.indexOf(this.financesLastClickedId);
-            const curIdx = allItemIds.indexOf(itemId);
+        // Filter ONLY currently visible TRs (not hidden by search or tab)
+        const visibleTrs = allTrs.filter(tr => {
+            if (tr.style.display === 'none') return false;
+            const sec = tr.closest('.kt-fin-section');
+            if (sec && sec.style.display === 'none') return false;
+            return true;
+        });
+        const visibleItemIds = visibleTrs.map(tr => tr.getAttribute('data-item-id')).filter(Boolean);
+
+        if (isShift && this.financesLastClickedId && visibleItemIds.includes(this.financesLastClickedId) && visibleItemIds.includes(itemId)) {
+            const lastIdx = visibleItemIds.indexOf(this.financesLastClickedId);
+            const curIdx = visibleItemIds.indexOf(itemId);
             const start = Math.min(lastIdx, curIdx);
             const end = Math.max(lastIdx, curIdx);
 
@@ -12741,7 +13370,7 @@ kanban-plugin: basic
                 this.financesSelectedIds.clear();
             }
             for (let i = start; i <= end; i++) {
-                this.financesSelectedIds.add(allItemIds[i]);
+                this.financesSelectedIds.add(visibleItemIds[i]);
             }
         } else if (isCtrlOrMeta) {
             if (this.financesSelectedIds.has(itemId)) {
@@ -12760,7 +13389,7 @@ kanban-plugin: basic
         this.financesSelectedItemId = this.financesSelectedIds.size > 0 ? (this.financesLastClickedId || Array.from(this.financesSelectedIds)[0]) : null;
 
         // Update CSS classes
-        renderedTrs.forEach(tr => {
+        allTrs.forEach(tr => {
             const id = tr.getAttribute('data-item-id');
             if (this.financesSelectedIds.has(id)) {
                 tr.addClass('is-selected');
@@ -12917,6 +13546,1062 @@ kanban-plugin: basic
         });
     }
 
+    getFinanceCategoryColor(category) {
+        const BUSINESS_DARK_PALETTE = {
+            'moradia':     '#3b82f6', // Tech Blue
+            'lazer':       '#06b6d4', // Cyan Teal
+            'serviços':    '#6366f1', // Indigo Slate
+            'servicos':    '#6366f1',
+            'transporte':  '#0284c7', // Sky Blue
+            'saúde':       '#10b981', // Emerald Green
+            'saude':       '#10b981',
+            'alimentação': '#14b8a6', // Teal Mint
+            'alimentacao': '#14b8a6',
+            'gatas':       '#8b5cf6', // Deep Iris
+            'viagem':      '#38bdf8', // Ice Blue
+            'compras':     '#059669', // Dark Mint
+            'streamings':  '#4f46e5', // Deep Blue
+            'outros':      '#64748b', // Slate Grey
+            'pagamento':   '#10b981', // Emerald
+            'poupança':    '#0ea5e9', // Sky Blue
+            'poupanca':    '#0ea5e9',
+            'bônus':       '#3b82f6',
+            'bonus':       '#3b82f6',
+            'juros':       '#6366f1'
+        };
+        if (!category) return '#64748b';
+        const key = category.toLowerCase().trim();
+        if (BUSINESS_DARK_PALETTE[key]) return BUSINESS_DARK_PALETTE[key];
+        
+        // Deterministic blue/green hue hash fallback (range 150 - 240 deg)
+        let hash = 0;
+        for (let i = 0; i < key.length; i++) hash = key.charCodeAt(i) + ((hash << 5) - hash);
+        const hue = 150 + Math.abs(hash % 90);
+        return `hsl(${hue}, 65%, 50%)`;
+    }
+
+    polarToCartesian(centerX, centerY, radius, angleInDegrees) {
+        const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+        return {
+            x: centerX + radius * Math.cos(angleInRadians),
+            y: centerY + radius * Math.sin(angleInRadians)
+        };
+    }
+
+    describeDonutSlice(centerX, centerY, outerR, innerR, startAngle, endAngle) {
+        if (endAngle - startAngle >= 359.99) {
+            return `M ${centerX} ${centerY - outerR} ` +
+                   `A ${outerR} ${outerR} 0 1 1 ${centerX} ${centerY + outerR} ` +
+                   `A ${outerR} ${outerR} 0 1 1 ${centerX} ${centerY - outerR} ` +
+                   `M ${centerX} ${centerY - innerR} ` +
+                   `A ${innerR} ${innerR} 0 1 0 ${centerX} ${centerY + innerR} ` +
+                   `A ${innerR} ${innerR} 0 1 0 ${centerX} ${centerY - innerR} Z`;
+        }
+
+        const startOuter = this.polarToCartesian(centerX, centerY, outerR, startAngle);
+        const endOuter   = this.polarToCartesian(centerX, centerY, outerR, endAngle);
+        const startInner = this.polarToCartesian(centerX, centerY, innerR, endAngle);
+        const endInner   = this.polarToCartesian(centerX, centerY, innerR, startAngle);
+
+        const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+
+        return [
+            `M ${startOuter.x} ${startOuter.y}`,
+            `A ${outerR} ${outerR} 0 ${largeArcFlag} 1 ${endOuter.x} ${endOuter.y}`,
+            `L ${startInner.x} ${startInner.y}`,
+            `A ${innerR} ${innerR} 0 ${largeArcFlag} 0 ${endInner.x} ${endInner.y}`,
+            'Z'
+        ].join(' ');
+    }
+
+    buildSmoothSplinePath(points) {
+        if (!points || points.length === 0) return '';
+        if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+        if (points.length === 2) return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+
+        let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+        for (let i = 0; i < points.length - 1; i++) {
+            const p0 = i > 0 ? points[i - 1] : points[0];
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const p3 = i < points.length - 2 ? points[i + 2] : p2;
+
+            const cp1x = p1.x + (p2.x - p0.x) / 6;
+            const cp1y = p1.y + (p2.y - p0.y) / 6;
+
+            const cp2x = p2.x - (p3.x - p1.x) / 6;
+            const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+            path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+        }
+        return path;
+    }
+
+    buildSmoothAreaPath(points, bottomY) {
+        const linePath = this.buildSmoothSplinePath(points);
+        if (!linePath) return '';
+        const first = points[0];
+        const last = points[points.length - 1];
+        return `${linePath} L ${last.x.toFixed(1)} ${bottomY.toFixed(1)} L ${first.x.toFixed(1)} ${bottomY.toFixed(1)} Z`;
+    }
+
+    renderEvolutionLineChart(container, selYear, selMonth, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        const card = container.createDiv('kt-fin-card');
+
+        if (!this.financesLineMetric) this.financesLineMetric = 'finalBalance';
+
+        const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+        const fullMonthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+        // Compute 12-month data series
+        const series = [];
+        let runningBal = this.getInheritedInitialBalance(selYear, 1);
+
+        for (let m = 1; m <= 12; m++) {
+            const mData = this.getFinancesMonthData(selYear, m);
+            const incList = mData.income || [];
+            const expList = mData.expenses || [];
+            const inc = incList.reduce((acc, i) => acc + (i.value || 0), 0);
+            const exp = expList.reduce((acc, e) => acc + (e.value || 0), 0);
+            const savings = inc - exp;
+            
+            if (mData.initialBalance != null) {
+                runningBal = mData.initialBalance + savings;
+            } else {
+                runningBal += savings;
+            }
+
+            let val = 0;
+            let hasData = false;
+
+            if (this.financesLineMetric === 'finalBalance') {
+                val = runningBal;
+                hasData = (incList.length > 0 || expList.length > 0 || mData.initialBalance != null);
+            } else if (this.financesLineMetric === 'savings') {
+                val = savings;
+                hasData = (incList.length > 0 || expList.length > 0);
+            } else if (this.financesLineMetric === 'income') {
+                val = inc;
+                hasData = (incList.length > 0);
+            } else if (this.financesLineMetric === 'expenses') {
+                val = exp;
+                hasData = (expList.length > 0);
+            } else if (this.financesLineMetric.startsWith('cat:')) {
+                const targetCat = this.financesLineMetric.replace('cat:', '');
+                const catExp = expList.filter(e => (e.category || 'Outros') === targetCat);
+                val = catExp.reduce((acc, e) => acc + (e.value || 0), 0);
+                hasData = (catExp.length > 0);
+            }
+
+            series.push({
+                month: m,
+                name: monthNames[m - 1],
+                fullName: fullMonthNames[m - 1],
+                value: val,
+                hasData,
+                inc,
+                exp,
+                savings,
+                bal: runningBal
+            });
+        }
+
+        const currentPoint = series[selMonth - 1] || series[0];
+        const prevPoint = selMonth > 1 ? series[selMonth - 2] : null;
+        const deltaVal = prevPoint ? currentPoint.value - prevPoint.value : 0;
+        const deltaPct = prevPoint && prevPoint.value !== 0 ? ((deltaVal / Math.abs(prevPoint.value)) * 100).toFixed(1) : null;
+
+        // Card Header with Title, Big KPI and Metric Switcher
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Evolução Temporal & Tendências' });
+
+        const kpiRow = titleGroup.createDiv('kt-fin-kpi-big');
+        kpiRow.createSpan({ text: formatCurrency(currentPoint.value, curr) });
+
+        if (deltaVal !== 0 && prevPoint && currentPoint.hasData) {
+            const isPos = deltaVal >= 0;
+            const deltaEl = kpiRow.createSpan({
+                cls: `kt-fin-kpi-delta ${isPos ? 'is-positive' : 'is-negative'}`,
+                text: `${isPos ? '+' : ''}${formatCurrency(deltaVal, curr)}${deltaPct ? ` (${isPos ? '+' : ''}${deltaPct}%)` : ''}`
+            });
+            deltaEl.title = `Comparado a ${prevPoint.name}/${selYear}`;
+        }
+
+        // Metric Select Dropdown
+        const selectMetric = cardHdr.createEl('select', { cls: 'kt-fin-metric-select' });
+        const metricOptions = [
+            { id: 'finalBalance', label: 'Montante Acumulado (Poupança)' },
+            { id: 'savings',      label: 'Economia Mensal (Saldo Líquido)' },
+            { id: 'income',       label: 'Renda Total' },
+            { id: 'expenses',     label: 'Gastos Totais' }
+        ];
+
+        const allCats = fin.categories || ['Moradia', 'Lazer', 'Serviços', 'Transporte', 'Saúde', 'Alimentação'];
+        allCats.forEach(c => {
+            metricOptions.push({ id: `cat:${c}`, label: `Gastos: ${c}` });
+        });
+
+        metricOptions.forEach(opt => {
+            const el = selectMetric.createEl('option', { value: opt.id, text: opt.label });
+            if (opt.id === this.financesLineMetric) el.selected = true;
+        });
+
+        selectMetric.onchange = () => {
+            this.financesLineMetric = selectMetric.value;
+            this.render();
+        };
+
+        // SVG Chart Construction (Proportional & Rich)
+        const chartWrap = card.createDiv('kt-fin-line-chart-wrap');
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 1000 280');
+        svg.classList.add('kt-fin-line-chart-svg');
+
+        // Linear Gradient Definition
+        const defs = document.createElementNS(svgNS, 'defs');
+        const grad = document.createElementNS(svgNS, 'linearGradient');
+        grad.setAttribute('id', 'ktFinLineGrad');
+        grad.setAttribute('x1', '0');
+        grad.setAttribute('y1', '0');
+        grad.setAttribute('x2', '0');
+        grad.setAttribute('y2', '1');
+
+        const stop1 = document.createElementNS(svgNS, 'stop');
+        stop1.setAttribute('offset', '0%');
+        stop1.setAttribute('stop-color', '#22c55e');
+        stop1.setAttribute('stop-opacity', '0.38');
+
+        const stop2 = document.createElementNS(svgNS, 'stop');
+        stop2.setAttribute('offset', '100%');
+        stop2.setAttribute('stop-color', '#22c55e');
+        stop2.setAttribute('stop-opacity', '0.0');
+
+        grad.appendChild(stop1);
+        grad.appendChild(stop2);
+        defs.appendChild(grad);
+        svg.appendChild(defs);
+
+        // Calculate Geometry Across 1000px Width (Aligned 1-to-1 with 12 Month Grid)
+        const padY = 25;
+        const chartH = 210;
+        const bottomY = padY + chartH;
+
+        const activeValues = series.filter(s => s.hasData).map(s => s.value);
+        let minVal = activeValues.length > 0 ? Math.min(...activeValues) : 0;
+        let maxVal = activeValues.length > 0 ? Math.max(...activeValues) : 100;
+
+        if (minVal === maxVal) {
+            minVal = minVal - 100;
+            maxVal = maxVal + 100;
+        } else {
+            const range = maxVal - minVal;
+            minVal = minVal - range * 0.1;
+            maxVal = maxVal + range * 0.1;
+        }
+
+        const points = series.map((s, idx) => {
+            const x = (idx + 0.5) * (1000 / 12);
+            const y = s.hasData ? (bottomY - ((s.value - minVal) / (maxVal - minVal)) * chartH) : bottomY;
+            return { x, y, data: s };
+        });
+
+        // Background Grid Lines
+        for (let g = 0; g <= 3; g++) {
+            const gy = padY + (g / 3) * chartH;
+            const gLine = document.createElementNS(svgNS, 'line');
+            gLine.setAttribute('x1', '20');
+            gLine.setAttribute('y1', String(gy));
+            gLine.setAttribute('x2', '980');
+            gLine.setAttribute('y2', String(gy));
+            gLine.classList.add('kt-fin-chart-grid-line');
+            svg.appendChild(gLine);
+        }
+
+        // Draw Zero Baseline Line if values span below and above 0
+        if (minVal < 0 && maxVal > 0) {
+            const yZero = bottomY - ((0 - minVal) / (maxVal - minVal)) * chartH;
+            const zeroLine = document.createElementNS(svgNS, 'line');
+            zeroLine.setAttribute('x1', '20');
+            zeroLine.setAttribute('y1', String(yZero));
+            zeroLine.setAttribute('x2', '980');
+            zeroLine.setAttribute('y2', String(yZero));
+            zeroLine.classList.add('kt-fin-chart-zero-line');
+            svg.appendChild(zeroLine);
+
+            const zeroTxt = document.createElementNS(svgNS, 'text');
+            zeroTxt.setAttribute('x', '26');
+            zeroTxt.setAttribute('y', String(yZero - 4));
+            zeroTxt.classList.add('kt-fin-chart-zero-label');
+            zeroTxt.textContent = 'R$ 0,00';
+            svg.appendChild(zeroTxt);
+        }
+
+        const activePoints = points.filter(p => p.data.hasData);
+
+        // Area Path (for months with actual data)
+        if (activePoints.length >= 2) {
+            const areaBaselineY = (minVal < 0 && maxVal > 0) ? (bottomY - ((0 - minVal) / (maxVal - minVal)) * chartH) : bottomY;
+            const areaPathStr = this.buildSmoothAreaPath(activePoints, areaBaselineY);
+            if (areaPathStr) {
+                const areaPath = document.createElementNS(svgNS, 'path');
+                areaPath.setAttribute('d', areaPathStr);
+                areaPath.classList.add('kt-fin-chart-area');
+                svg.appendChild(areaPath);
+            }
+        }
+
+        // Line Path (Solid for active data points)
+        if (activePoints.length >= 2) {
+            const linePathStr = this.buildSmoothSplinePath(activePoints);
+            if (linePathStr) {
+                const linePath = document.createElementNS(svgNS, 'path');
+                linePath.setAttribute('d', linePathStr);
+                linePath.classList.add('kt-fin-chart-line');
+                svg.appendChild(linePath);
+            }
+        }
+
+        // Future/Unregistered segment connector (Subtle dashed line)
+        if (activePoints.length > 0 && activePoints.length < points.length) {
+            const lastActiveIdx = points.indexOf(activePoints[activePoints.length - 1]);
+            if (lastActiveIdx >= 0 && lastActiveIdx < points.length - 1) {
+                const futurePoints = points.slice(lastActiveIdx);
+                let dDash = `M ${futurePoints[0].x.toFixed(1)} ${futurePoints[0].y.toFixed(1)}`;
+                for (let k = 1; k < futurePoints.length; k++) {
+                    dDash += ` L ${futurePoints[k].x.toFixed(1)} ${futurePoints[k].y.toFixed(1)}`;
+                }
+                const dashPath = document.createElementNS(svgNS, 'path');
+                dashPath.setAttribute('d', dDash);
+                dashPath.setAttribute('fill', 'none');
+                dashPath.setAttribute('stroke', '#166534');
+                dashPath.setAttribute('stroke-width', '1.5');
+                dashPath.setAttribute('stroke-dasharray', '4 4');
+                dashPath.setAttribute('opacity', '0.5');
+                svg.appendChild(dashPath);
+            }
+        }
+
+        // Tooltip element
+        let tooltipEl = null;
+
+        // Points (Circles)
+        points.forEach((pt) => {
+            const isSel = pt.data.month === selMonth;
+            const hasData = pt.data.hasData;
+            const isNeg = hasData && pt.data.value < 0;
+            const circle = document.createElementNS(svgNS, 'circle');
+            circle.setAttribute('cx', String(pt.x));
+            circle.setAttribute('cy', String(pt.y));
+
+            if (hasData) {
+                circle.setAttribute('r', isSel ? '6.5' : '4.5');
+                circle.classList.add('kt-fin-chart-dot');
+                if (isNeg) circle.classList.add('is-negative');
+                if (isSel) circle.classList.add('is-selected');
+            } else {
+                circle.setAttribute('r', '4');
+                circle.classList.add('kt-fin-chart-dot-nodata');
+                if (isSel) circle.classList.add('is-selected');
+            }
+
+            circle.addEventListener('mouseenter', () => {
+                circle.setAttribute('r', '7.5');
+                if (!tooltipEl) tooltipEl = chartWrap.createDiv('kt-fin-chart-tooltip');
+                if (hasData) {
+                    tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span class="kt-fin-tip-val">${formatCurrency(pt.data.value, curr)}</span>`;
+                } else {
+                    tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span style="color:var(--text-muted);font-size:11px;">(Sem lançamentos)</span>`;
+                }
+            });
+
+            circle.addEventListener('mouseleave', () => {
+                circle.setAttribute('r', hasData ? (isSel ? '6.5' : '4.5') : '4');
+                if (tooltipEl) {
+                    tooltipEl.remove();
+                    tooltipEl = null;
+                }
+            });
+
+            circle.addEventListener('click', () => {
+                if (pt.data.month !== selMonth) {
+                    this.plugin.settings.finances.selectedMonth = pt.data.month;
+                    this.render();
+                }
+            });
+
+            svg.appendChild(circle);
+        });
+
+        chartWrap.appendChild(svg);
+
+        // X-Axis Month Buttons
+        const xLabelsWrap = chartWrap.createDiv('kt-fin-chart-x-labels');
+        series.forEach(s => {
+            const btn = xLabelsWrap.createEl('button', {
+                cls: `kt-fin-chart-x-btn ${s.month === selMonth ? 'is-selected' : ''}`,
+                text: s.name
+            });
+            btn.onclick = () => {
+                if (s.month !== selMonth) {
+                    this.plugin.settings.finances.selectedMonth = s.month;
+                    this.render();
+                }
+            };
+        });
+    }
+
+    renderProminentCategoryPieChart(container, monthData, curr) {
+        const card = container.createDiv('kt-fin-card');
+
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Divisão de Gastos do Mês' });
+        titleGroup.createSpan({ cls: 'kt-fin-card-subtitle', text: 'Distribuição e peso de cada categoria no orçamento' });
+
+        const expenses = monthData.expenses || [];
+        const expByCat = {};
+        let totalExp = 0;
+
+        expenses.forEach(e => {
+            const cat = e.category || 'Outros';
+            const val = e.value || 0;
+            expByCat[cat] = (expByCat[cat] || 0) + val;
+            totalExp += val;
+        });
+
+        if (totalExp <= 0) {
+            const emptyDiv = card.createDiv('kt-td-empty');
+            emptyDiv.setText('Nenhum gasto registrado neste mês.');
+            return;
+        }
+
+        const sortedCats = Object.entries(expByCat)
+            .map(([category, value]) => ({
+                category,
+                value,
+                pct: (value / totalExp) * 100,
+                color: this.getFinanceCategoryColor(category)
+            }))
+            .sort((a, b) => b.value - a.value);
+
+        const donutWrap = card.createDiv('kt-fin-prominent-donut-wrap');
+        const stage = donutWrap.createDiv('kt-fin-pie-stage');
+
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '-130 -130 260 260');
+        svg.classList.add('kt-fin-big-donut-svg');
+
+        // Center Labels (Minimalist & Crisp)
+        const centerLbl = document.createElementNS(svgNS, 'text');
+        centerLbl.setAttribute('x', '0');
+        centerLbl.setAttribute('y', '-12');
+        centerLbl.classList.add('kt-pie-center-title');
+        centerLbl.textContent = 'TOTAL GASTOS';
+        svg.appendChild(centerLbl);
+
+        const centerVal = document.createElementNS(svgNS, 'text');
+        centerVal.setAttribute('x', '0');
+        centerVal.setAttribute('y', '14');
+        centerVal.classList.add('kt-pie-center-val');
+        centerVal.textContent = formatCurrency(totalExp, curr);
+        svg.appendChild(centerVal);
+
+        const centerSub = document.createElementNS(svgNS, 'text');
+        centerSub.setAttribute('x', '0');
+        centerSub.setAttribute('y', '32');
+        centerSub.classList.add('kt-pie-center-sub');
+        centerSub.textContent = '';
+        svg.appendChild(centerSub);
+
+        let currentAngle = 0;
+        const outerR = 115;
+        const innerR = 75;
+        const sliceEls = [];
+
+        sortedCats.forEach((item) => {
+            const sliceAngle = (item.value / totalExp) * 360;
+            const startA = currentAngle;
+            const endA = currentAngle + sliceAngle;
+            currentAngle += sliceAngle;
+
+            const path = document.createElementNS(svgNS, 'path');
+            const d = this.describeDonutSlice(0, 0, outerR, innerR, startA, endA);
+            path.setAttribute('d', d);
+            path.setAttribute('fill', item.color);
+            path.setAttribute('stroke', 'var(--background-secondary)');
+            path.setAttribute('stroke-width', sortedCats.length > 1 ? '3' : '0');
+            path.classList.add('kt-fin-pie-slice');
+
+            const activate = () => {
+                centerLbl.textContent = item.category;
+                centerVal.textContent = formatCurrency(item.value, curr);
+                centerSub.textContent = `${item.pct.toFixed(1)}% do total`;
+                path.style.transform = 'scale(1.045)';
+            };
+
+            const deactivate = () => {
+                centerLbl.textContent = 'TOTAL GASTOS';
+                centerVal.textContent = formatCurrency(totalExp, curr);
+                centerSub.textContent = '';
+                path.style.transform = '';
+            };
+
+            path.addEventListener('mouseenter', activate);
+            path.addEventListener('mouseleave', deactivate);
+            path.addEventListener('click', () => {
+                this.financesMainViewTab = 'overview';
+                this.financesSearchQuery = item.category;
+                this.render();
+            });
+
+            svg.appendChild(path);
+            sliceEls.push({ item, path, activate, deactivate });
+        });
+
+        stage.appendChild(svg);
+
+        // Breakdown Ranking List
+        const list = donutWrap.createDiv('kt-fin-breakdown-list');
+        sliceEls.forEach(({ item, activate, deactivate }) => {
+            const row = list.createDiv('kt-fin-breakdown-row');
+            const top = row.createDiv('kt-fin-bd-top');
+
+            const left = top.createDiv('kt-fin-bd-left');
+            const dot = left.createSpan({ cls: 'kt-fin-bd-dot' });
+            dot.style.backgroundColor = item.color;
+            left.createSpan({ text: item.category });
+
+            const right = top.createDiv('kt-fin-bd-right');
+            right.createSpan({ cls: 'kt-fin-bd-val', text: formatCurrency(item.value, curr) });
+            right.createSpan({ cls: 'kt-fin-bd-pct', text: `${item.pct.toFixed(1)}%` });
+
+            const track = row.createDiv('kt-fin-bd-bar-track');
+            const fill = track.createDiv('kt-fin-bd-bar-fill');
+            fill.style.width = `${item.pct}%`;
+            fill.style.backgroundColor = item.color;
+
+            row.addEventListener('mouseenter', activate);
+            row.addEventListener('mouseleave', deactivate);
+            row.addEventListener('click', () => {
+                this.financesMainViewTab = 'overview';
+                this.financesSearchQuery = item.category;
+                this.render();
+            });
+        });
+    }
+
+    normalizeMerchantName(desc) {
+        if (!desc) return 'Outros';
+        let clean = desc.trim();
+
+        // 1. Remove brackets, installments, dates, asterisks, fixo tags
+        clean = clean.replace(/\s*\(\d+\/\d+\)/g, '');
+        clean = clean.replace(/\s*\[\d+\/\d+\]/g, '');
+        clean = clean.replace(/\s*\[Fixo\]/gi, '');
+        clean = clean.replace(/\s*\(Fixo\)/gi, '');
+        clean = clean.replace(/\s*\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '');
+        clean = clean.replace(/\s*-\s*parcela\s*\d+/gi, '');
+        clean = clean.replace(/\s*parcela\s*\d+/gi, '');
+
+        // 2. Remove common online/gateway payment prefixes (e.g. "Ifood *", "MP *", "Uber *", "Frogpay -")
+        clean = clean.replace(/^(ifood|ifd|uber|mercadopago|paypal|picpay|recargapay|99app|frogpay)\s*[\*_\-\s]\s*/i, '');
+        clean = clean.replace(/^(mp|pag|pg|st)\s*[\*_\-]\s*/i, '');
+
+        // 3. Remove leading/trailing transaction noise and stars
+        clean = clean.replace(/\*[^\s]+/g, '');
+        clean = clean.replace(/\b(com\.br|com|br)\b/gi, '');
+        clean = clean.trim();
+
+        // 4. Remove leading/trailing business descriptor noise (e.g. "Drogaria", "Padaria", "Burguer", "Mktp")
+        clean = clean.replace(/^(drogaria|farmacia|farmacias|padaria|restaurante|bar e lanches|auto posto|posto|loja|supermercado|mercado|comercio de|distribuidora)\s+/i, '');
+        clean = clean.replace(/\s+(burguer|burger|lanches|restaurante|bar|drogaria|farmacia|padaria|express|store|online|mktp|servicos|comercio|delivery|ltda|me|sa|eireli)$/i, '');
+        clean = clean.replace(/[\*\-_]+/g, ' ').trim();
+
+        // 5. Canonical Merchant Alias Map (unaccented lowercase keys)
+        const unaccented = clean.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        const KNOWN_MERCHANTS = {
+            'pagu': 'PAGU',
+            'pagu burguer': 'PAGU',
+            'araujo': 'Drogaria Araújo',
+            'drogaria araujo': 'Drogaria Araújo',
+            'pao e vida': 'Pão e Vida',
+            'padaria pao e vida': 'Pão e Vida',
+            'amazon': 'Amazon',
+            'amzn': 'Amazon',
+            'amzn mktp': 'Amazon',
+            'daki': 'DAKI',
+            'ifood': 'iFood',
+            'uber': 'Uber',
+            'petz': 'PETZ',
+            'estacionamento': 'Estacionamento',
+            'gasolina': 'Gasolina',
+            'iof': 'IOF Internacional',
+            'iof internacional': 'IOF Internacional'
+        };
+
+        if (KNOWN_MERCHANTS[unaccented]) {
+            return KNOWN_MERCHANTS[unaccented];
+        }
+
+        // Title case default
+        return clean.length > 0 ? clean.replace(/\b\w/g, l => l.toUpperCase()) : desc.trim();
+    }
+
+    calculateRecurringHabitEstimates(targetYear) {
+        const fin = this.plugin?.settings?.finances || {};
+        const merchantMap = {};
+        let activeMonthsCount = 0;
+
+        for (let m = 1; m <= 12; m++) {
+            const mKey = `${targetYear}-${String(m).padStart(2, '0')}`;
+            const mData = fin.months?.[mKey];
+            if (!mData) continue;
+
+            const expList = mData.expenses || [];
+            const incList = mData.income || [];
+            if (expList.length > 0 || incList.length > 0) activeMonthsCount++;
+
+            expList.forEach(e => {
+                const isFixed = e.isFixed === true || e.isFixed === 'true' || e.isFixed === 'Sim' || e.isFixed === 'sim' || e.isFixed === 1;
+                const hasInstallment = !!(e.installment && String(e.installment).trim().length > 0);
+                const rawDesc = (e.description || '').trim();
+                const isFixedOrInstByText = /\[fixo\]|\(fixo\)|parcela|\b\d{1,2}\/\d{1,2}\b|computador\s*caio|parcela\s*carro|trem\s*vit|festival\s*jap|diamantina/i.test(rawDesc);
+
+                if (isFixed || hasInstallment || isFixedOrInstByText) return;
+
+                const norm = this.normalizeMerchantName(e.description);
+                if (!norm) return;
+                const normKey = norm.toLowerCase();
+                const val = e.value || 0;
+                const cat = e.category || 'Outros';
+
+                if (!merchantMap[normKey]) {
+                    merchantMap[normKey] = {
+                        key: normKey,
+                        name: norm,
+                        count: 0,
+                        total: 0,
+                        monthsOccurred: new Set(),
+                        categories: {},
+                        sampleDesc: e.description
+                    };
+                }
+
+                merchantMap[normKey].count++;
+                merchantMap[normKey].total += val;
+                merchantMap[normKey].monthsOccurred.add(m);
+                merchantMap[normKey].categories[cat] = (merchantMap[normKey].categories[cat] || 0) + 1;
+            });
+        }
+
+        const denom = Math.max(1, activeMonthsCount);
+        const result = [];
+
+        Object.values(merchantMap).forEach(m => {
+            // Must have occurred across multiple months (at least 3 distinct months if dataset has >= 4 months)
+            const minMonths = denom <= 3 ? 2 : 3;
+            if (m.monthsOccurred.size < minMonths) return;
+            if (m.count < 3 && m.total < 150) return;
+
+            const primaryCat = Object.entries(m.categories).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Outros';
+            const monthlyAvgCost = Math.round((m.total / denom) * 100) / 100;
+            const avgSpentInActiveMonths = Math.round((m.total / Math.max(1, m.monthsOccurred.size)) * 100) / 100;
+            const avgTicket = Math.round((m.total / m.count) * 100) / 100;
+            const monthsCount = m.monthsOccurred.size;
+
+            result.push({
+                name: m.name,
+                key: m.key,
+                count: m.count,
+                monthsCount,
+                activeMonthsCount: denom,
+                total: m.total,
+                monthlyAvgCost,
+                avgSpentInActiveMonths,
+                avgTicket,
+                category: primaryCat
+            });
+        });
+
+        return result.sort((a, b) => b.count - a.count || b.total - a.total);
+    }
+
+    renderRecurringExpensesIntelligence(container, selYear, selMonth, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        const card = container.createDiv('kt-fin-card');
+
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Gastos Recorrentes & Hábitos' });
+        titleGroup.createSpan({ cls: 'kt-fin-card-subtitle', text: 'Comércios frequentes e média de consumo mensal estimada:' });
+
+        const habits = this.calculateRecurringHabitEstimates(selYear);
+
+        if (habits.length === 0) {
+            const empty = card.createDiv('kt-td-empty');
+            empty.setText('Nenhum gasto recorrente identificado ainda.');
+            return;
+        }
+
+        const currentMonthKey = `${selYear}-${String(selMonth).padStart(2, '0')}`;
+        const currentMonthData = fin.months?.[currentMonthKey] || {};
+
+        const list = card.createDiv('kt-fin-recurring-list');
+        habits.slice(0, 15).forEach(m => {
+            const row = list.createDiv('kt-fin-rec-row');
+            const catColor = this.getFinanceCategoryColor(m.category);
+
+            const top = row.createDiv('kt-fin-rec-top');
+            const left = top.createDiv('kt-fin-rec-left');
+            const dot = left.createSpan({ cls: 'kt-fin-bd-dot' });
+            dot.style.backgroundColor = catColor;
+            left.createSpan({ text: m.name });
+            left.createSpan({ cls: 'kt-fin-rec-freq-badge', text: `${m.count}x no ano • ${m.monthsCount}/${m.activeMonthsCount} meses` });
+
+            const right = top.createDiv('kt-fin-rec-right');
+            right.createSpan({ cls: 'kt-fin-rec-total', text: formatCurrency(m.total, curr) });
+
+            // Plan button per item
+            const planBtn = right.createEl('button', {
+                cls: 'kt-fin-rec-plan-btn',
+                text: `＋ Planejar (${formatCurrency(m.monthlyAvgCost, curr)}/mês)`
+            });
+            planBtn.title = `Adicionar previsão de ${m.name} (${formatCurrency(m.monthlyAvgCost, curr)}) aos gastos planejados de ${selMonth}/${selYear}`;
+            planBtn.onclick = async (e) => {
+                e.stopPropagation();
+                if (!currentMonthData.plannedItems) currentMonthData.plannedItems = [];
+                
+                const existingIdx = currentMonthData.plannedItems.findIndex(p => p.description.toLowerCase() === m.name.toLowerCase());
+                if (existingIdx !== -1) {
+                    currentMonthData.plannedItems[existingIdx].value = m.monthlyAvgCost;
+                    currentMonthData.plannedItems[existingIdx].category = m.category;
+                } else {
+                    currentMonthData.plannedItems.push({
+                        id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                        type: 'expense',
+                        value: m.monthlyAvgCost,
+                        description: m.name,
+                        category: m.category,
+                        date: ''
+                    });
+                }
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Previsão "${m.name}" (${formatCurrency(m.monthlyAvgCost, curr)}/mês) salva no Planejamento!`);
+            };
+
+            const bottom = row.createDiv('kt-fin-rec-bottom');
+            bottom.createSpan({
+                text: `${m.count} compras em ${m.monthsCount} dos ${m.activeMonthsCount} meses • Média/compra: ${formatCurrency(m.avgTicket, curr)} • Previsão: `,
+                cls: 'kt-fin-rec-sub'
+            });
+            const monthlyPill = bottom.createSpan({ cls: 'kt-fin-rec-monthly-badge', text: `${formatCurrency(m.monthlyAvgCost, curr)} / mês` });
+            monthlyPill.title = `Gasto total acumulado de ${formatCurrency(m.total, curr)} em ${m.count} compras distribuídas em ${m.monthsCount} dos ${m.activeMonthsCount} meses registrados. Previsão mensal amortizada: ${formatCurrency(m.monthlyAvgCost, curr)}/mês.`;
+            bottom.createSpan({ text: m.category, attr: { style: `color:${catColor}; font-weight:600; margin-left:auto;` } });
+
+            row.addEventListener('click', () => {
+                this.financesMainViewTab = 'overview';
+                this.financesSearchQuery = m.name;
+                this.render();
+            });
+        });
+
+        // Bulk Actions Bar at the bottom of the Card
+        const actions = card.createDiv('kt-fin-smart-actions');
+        actions.style.marginTop = '10px';
+
+        const applyHabitsThisMonth = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn is-primary',
+            text: `⚡ Consolidar Todos os Hábitos no Mês Atual`
+        });
+        applyHabitsThisMonth.title = `Adiciona todos os gastos recorrentes como previsões planejadas em ${selMonth}/${selYear}`;
+        applyHabitsThisMonth.onclick = async () => {
+            if (!currentMonthData.plannedItems) currentMonthData.plannedItems = [];
+            let addedCount = 0;
+            habits.slice(0, 15).forEach(m => {
+                const existing = currentMonthData.plannedItems.find(p => p.description.toLowerCase() === m.name.toLowerCase());
+                if (existing) {
+                    existing.value = m.monthlyAvgCost;
+                    existing.category = m.category;
+                } else {
+                    currentMonthData.plannedItems.push({
+                        id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                        type: 'expense',
+                        value: m.monthlyAvgCost,
+                        description: m.name,
+                        category: m.category,
+                        date: ''
+                    });
+                    addedCount++;
+                }
+            });
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ ${habits.length} hábitos recorrentes consolidados nos gastos planejados deste mês!`);
+        };
+
+        const applyHabitsAllYear = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn',
+            text: `⚡ Consolidar Hábitos em Todo o Ano`
+        });
+        applyHabitsAllYear.onclick = async () => {
+            for (let m = 1; m <= 12; m++) {
+                const mData = this.getFinancesMonthData(selYear, m);
+                if (!mData.plannedItems) mData.plannedItems = [];
+                habits.slice(0, 15).forEach(hab => {
+                    const existing = mData.plannedItems.find(p => p.description.toLowerCase() === hab.name.toLowerCase());
+                    if (existing) {
+                        existing.value = hab.monthlyAvgCost;
+                        existing.category = hab.category;
+                    } else {
+                        mData.plannedItems.push({
+                            id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                            type: 'expense',
+                            value: hab.monthlyAvgCost,
+                            description: hab.name,
+                            category: hab.category,
+                            date: ''
+                        });
+                    }
+                });
+            }
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ Hábitos recorrentes consolidados em todos os 12 meses de ${selYear}!`);
+        };
+    }
+
+    calculateHistoricalAverages(targetYear, targetMonth) {
+        const fin = this.plugin?.settings?.finances || {};
+        const avgExp = {};
+        const avgInc = {};
+        let activeExpMonths = 0;
+        let activeIncMonths = 0;
+
+        for (let m = 1; m <= 12; m++) {
+            const mKey = `${targetYear}-${String(m).padStart(2, '0')}`;
+            const mData = fin.months?.[mKey];
+            if (!mData) continue;
+
+            const expList = mData.expenses || [];
+            const incList = mData.income || [];
+
+            if (expList.length > 0) {
+                activeExpMonths++;
+                expList.forEach(e => {
+                    const cat = e.category || 'Outros';
+                    avgExp[cat] = (avgExp[cat] || 0) + (e.value || 0);
+                });
+            }
+
+            if (incList.length > 0) {
+                activeIncMonths++;
+                incList.forEach(i => {
+                    const cat = i.category || 'Outros';
+                    avgInc[cat] = (avgInc[cat] || 0) + (i.value || 0);
+                });
+            }
+        }
+
+        // Fallback across all available months in settings if target year is fresh
+        if (activeExpMonths === 0) {
+            Object.entries(fin.months || {}).forEach(([mKey, mData]) => {
+                if (!mData) return;
+                const expList = mData.expenses || [];
+                const incList = mData.income || [];
+                if (expList.length > 0) {
+                    activeExpMonths++;
+                    expList.forEach(e => {
+                        const cat = e.category || 'Outros';
+                        avgExp[cat] = (avgExp[cat] || 0) + (e.value || 0);
+                    });
+                }
+                if (incList.length > 0) {
+                    activeIncMonths++;
+                    incList.forEach(i => {
+                        const cat = i.category || 'Outros';
+                        avgInc[cat] = (avgInc[cat] || 0) + (i.value || 0);
+                    });
+                }
+            });
+        }
+
+        const resExp = {};
+        const resInc = {};
+        const denomExp = Math.max(1, activeExpMonths);
+        const denomInc = Math.max(1, activeIncMonths);
+
+        Object.entries(avgExp).forEach(([cat, sum]) => {
+            resExp[cat] = Math.round(sum / denomExp);
+        });
+
+        Object.entries(avgInc).forEach(([cat, sum]) => {
+            resInc[cat] = Math.round(sum / denomInc);
+        });
+
+        // Ensure default categories exist if completely empty
+        if (Object.keys(resExp).length === 0) {
+            const fallbackCats = fin.categories || ['Moradia', 'Alimentação', 'Lazer', 'Transporte', 'Saúde'];
+            fallbackCats.forEach(c => { resExp[c] = 0; });
+        }
+
+        return {
+            avgExpenses: resExp,
+            avgIncome: resInc,
+            activeExpMonths,
+            activeIncMonths
+        };
+    }
+
+    renderSmartPlanningAssistant(container, selYear, selMonth, monthData, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        
+        container.createEl('h4', { cls: 'kt-fin-table-title', text: 'Médias Históricas' });
+        const card = container.createDiv('kt-fin-smart-plan-wrap');
+        card.style.marginBottom = '18px';
+
+        const history = this.calculateHistoricalAverages(selYear, selMonth);
+
+        const expAverages = Object.entries(history.avgExpenses).sort((a, b) => b[1] - a[1]);
+
+        const grid = card.createDiv('kt-fin-smart-avg-grid');
+        expAverages.forEach(([cat, avgVal]) => {
+            const currentPlan = monthData.plannedExpenses?.[cat] || 0;
+            const row = grid.createDiv('kt-fin-smart-avg-row');
+
+            const left = row.createDiv('kt-fin-smart-avg-left');
+            const dot = left.createSpan({ cls: 'kt-fin-bd-dot' });
+            dot.style.backgroundColor = this.getFinanceCategoryColor(cat);
+            left.createSpan({ text: cat });
+
+            const right = row.createDiv('kt-fin-smart-avg-right');
+            right.createSpan({
+                text: currentPlan > 0 ? `Meta: ${formatCurrency(currentPlan, curr)}` : 'Sem meta',
+                attr: { style: 'color:var(--text-muted); font-size:11px;' }
+            });
+            right.createSpan({ cls: 'kt-fin-smart-avg-val', text: `Média: ${formatCurrency(avgVal, curr)}` });
+        });
+
+        const actions = card.createDiv('kt-fin-smart-actions');
+
+        const applyThisMonthBtn = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn is-primary',
+            text: 'Aplicar Médias no Mês Atual'
+        });
+        applyThisMonthBtn.onclick = async () => {
+            if (!monthData.plannedExpenses) monthData.plannedExpenses = {};
+            if (!monthData.plannedIncome) monthData.plannedIncome = {};
+
+            Object.entries(history.avgExpenses).forEach(([cat, val]) => {
+                monthData.plannedExpenses[cat] = val;
+            });
+            Object.entries(history.avgIncome).forEach(([cat, val]) => {
+                monthData.plannedIncome[cat] = val;
+            });
+
+            await this.plugin.saveSettings();
+            new obsidian.Notice(`Metas de ${selMonth}/${selYear} preenchidas com as médias históricas!`);
+            this.render();
+        };
+
+        const applyAllYearBtn = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn',
+            text: 'Aplicar em Todo o Ano'
+        });
+        applyAllYearBtn.onclick = async () => {
+            for (let m = 1; m <= 12; m++) {
+                const mData = this.getFinancesMonthData(selYear, m);
+                if (!mData.plannedExpenses) mData.plannedExpenses = {};
+                if (!mData.plannedIncome) mData.plannedIncome = {};
+
+                Object.entries(history.avgExpenses).forEach(([cat, val]) => {
+                    mData.plannedExpenses[cat] = val;
+                });
+                Object.entries(history.avgIncome).forEach(([cat, val]) => {
+                    mData.plannedIncome[cat] = val;
+                });
+            }
+
+            await this.plugin.saveSettings();
+            new obsidian.Notice(`Médias históricas aplicadas a todos os 12 meses de ${selYear}!`);
+            this.render();
+        };
+    }
+
+    renderFutureInstallmentsTimeline(container, selYear, selMonth, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        const card = container.createDiv('kt-fin-card');
+
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Comprometimento de Parcelas & Custos Fixos' });
+        titleGroup.createSpan({ cls: 'kt-fin-card-subtitle', text: 'Previsão consolidada das faturas e fixos para os próximos 6 meses:' });
+
+        const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+        const timelineList = card.createDiv('kt-fin-future-timeline');
+
+        let nextM = selMonth + 1;
+        let nextY = selYear;
+        let countFuture = 0;
+
+        for (let i = 1; i <= 6; i++) {
+            if (nextM > 12) {
+                nextM = 1;
+                nextY++;
+            }
+
+            const mKey = `${nextY}-${String(nextM).padStart(2, '0')}`;
+            const mData = fin.months?.[mKey];
+
+            if (mData && mData.expenses && mData.expenses.length > 0) {
+                const instExpenses = mData.expenses.filter(e => e.installment || e.isFixed);
+                const sumInst = instExpenses.reduce((acc, e) => acc + (e.value || 0), 0);
+
+                if (sumInst > 0 || instExpenses.length > 0) {
+                    countFuture++;
+                    const monthCard = timelineList.createDiv('kt-fin-future-month-card');
+                    
+                    const mHdr = monthCard.createDiv('kt-fin-future-month-hdr');
+                    mHdr.createSpan({ cls: 'kt-fin-future-month-name', text: `${monthNames[nextM - 1]}/${nextY}` });
+                    mHdr.createSpan({ cls: 'kt-fin-future-month-total', text: `${formatCurrency(sumInst, curr)} (${instExpenses.length} itens)` });
+
+                    const itemsList = monthCard.createDiv('kt-fin-future-items-list');
+                    instExpenses.forEach(it => {
+                        const itemRow = itemsList.createDiv('kt-fin-future-item');
+                        const label = it.installment ? `${it.description} (${it.installment})` : (it.isFixed ? `${it.description} [Fixo]` : it.description);
+                        itemRow.createSpan({ text: label });
+                        itemRow.createSpan({ cls: 'kt-fin-future-item-val', text: formatCurrency(it.value || 0, curr) });
+                    });
+                }
+            }
+
+            nextM++;
+        }
+
+        if (countFuture === 0) {
+            const empty = timelineList.createDiv('kt-td-empty');
+            empty.setText('Nenhum parcelamento ou custo fixo futuro encontrado nos próximos 6 meses.');
+        }
+    }
+
+    renderFinancesAnalyticsView(container, year, month, monthData, curr) {
+        const viewWrap = container.createDiv('kt-fin-analytics-view');
+
+        // 1. Top Section: 2-Column Dashboard (Line Chart 58% + Minimal Donut 42%)
+        const topGrid = viewWrap.createDiv('kt-fin-analytics-top-grid');
+        this.renderEvolutionLineChart(topGrid, year, month, curr);
+        this.renderProminentCategoryPieChart(topGrid, monthData, curr);
+
+        // 2. Middle Section: 2-Column Dashboard (Recurring Merchants 50% + Future Installments 50%)
+        const midGrid = viewWrap.createDiv('kt-fin-analytics-mid-grid');
+        this.renderRecurringExpensesIntelligence(midGrid, year, month, curr);
+        this.renderFutureInstallmentsTimeline(midGrid, year, month, curr);
+    }
+
     renderFinancesBudgetSummary(parent, year, month, monthData, curr, initialBal, finalBal, monthSavings, savingsPct, totalExpReal, totalIncReal) {
         const fin = this.plugin.settings.finances;
         const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -12926,10 +14611,10 @@ kanban-plugin: basic
 
         // Header with Edit Budget Button
         const cardHdr = summaryCard.createDiv('kt-fin-budget-hdr');
-        cardHdr.createEl('h3', { text: `Orçamento Mensal • ${monthName}` });
+        cardHdr.createEl('h3', { text: `Resumo Executivo • ${monthName}` });
 
         const editBudgetBtn = cardHdr.createEl('button', { cls: 'kt-fin-edit-budget-btn', text: '✎ Metas Planejadas' });
-        editBudgetBtn.title = 'Editar valores planejados por categoria';
+        editBudgetBtn.title = 'Editar metas planejadas por categoria';
         editBudgetBtn.onclick = () => {
             new FinancePlannedBudgetModal(
                 this.app,
@@ -13005,7 +14690,38 @@ kanban-plugin: basic
             collectEl.createDiv('kt-fin-kpi-lbl').setText('A COBRAR');
         }
 
-        // 2. Totals Comparison (Planejado vs Real)
+        // 2. Projeção com Gastos e Entradas Planejadas
+        const plannedItems = monthData.plannedItems || [];
+        const plannedExpItems = plannedItems.filter(p => p.type !== 'income');
+        const plannedIncItems = plannedItems.filter(p => p.type === 'income');
+        const totalPlannedExp = plannedExpItems.reduce((acc, p) => acc + (p.value || 0), 0);
+        const totalPlannedInc = plannedIncItems.reduce((acc, p) => acc + (p.value || 0), 0);
+        const projectedFinalBal = finalBal + totalPlannedInc - totalPlannedExp;
+
+        if (plannedItems.length > 0) {
+            const projSection = summaryCard.createDiv('kt-fin-projection-box');
+            const projHdr = projSection.createDiv('kt-fin-proj-hdr');
+            projHdr.createSpan({ cls: 'kt-fin-proj-title', text: 'Projeção com Previsões do Mês' });
+
+            const projRow = projSection.createDiv('kt-fin-proj-grid');
+
+            // Gastos Previstos
+            const expProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-red');
+            expProjEl.createDiv('kt-fin-proj-val').setText(`-${formatCurrency(totalPlannedExp, curr)}`);
+            expProjEl.createDiv('kt-fin-proj-lbl').setText(`GASTOS PREVISTOS (${plannedExpItems.length})`);
+
+            // Entradas Previstas
+            const incProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-green');
+            incProjEl.createDiv('kt-fin-proj-val').setText(`+${formatCurrency(totalPlannedInc, curr)}`);
+            incProjEl.createDiv('kt-fin-proj-lbl').setText(`ENTRADAS PREVISTAS (${plannedIncItems.length})`);
+
+            // Saldo Final Projetado (Orange matching Saldo Final)
+            const balProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-orange');
+            balProjEl.createDiv('kt-fin-proj-val').setText(formatCurrency(projectedFinalBal, curr));
+            balProjEl.createDiv('kt-fin-proj-lbl').setText('SALDO FINAL PROJETADO');
+        }
+
+        // 3. Totals Comparison (Planejado vs Real)
         const plannedExpTotal = Object.values(monthData.plannedExpenses || {}).reduce((acc, v) => acc + (v || 0), 0);
         const plannedIncTotal = Object.values(monthData.plannedIncome || {}).reduce((acc, v) => acc + (v || 0), 0);
 
@@ -13033,7 +14749,7 @@ kanban-plugin: basic
         const incBarFill = incBarTrack.createDiv('kt-fin-prog-fill is-green');
         incBarFill.style.width = `${incPct}%`;
 
-        // 3. Category Comparison Table: Despesas (Planejado vs Real vs Diferença)
+        // Category Comparison Table: Despesas
         summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: 'Despesas por Categoria' });
         const expCompTable = summaryCard.createEl('table', { cls: 'kt-fin-comp-table' });
         
@@ -13046,7 +14762,6 @@ kanban-plugin: basic
 
         const expTbody = expCompTable.createEl('tbody');
 
-        // Totals Row
         const expTotalRow = expTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
         expTotalRow.createEl('td', { text: 'Totais' });
         expTotalRow.createEl('td', { text: formatCurrency(plannedExpTotal, curr) });
@@ -13055,20 +14770,18 @@ kanban-plugin: basic
         const expTotDiffTd = expTotalRow.createEl('td', { cls: expTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
         expTotDiffTd.setText(formatCurrency(expTotalDiff, curr));
 
-        // Group actual expenses by category
         const expByCat = {};
         (monthData.expenses || []).forEach(e => {
             const cat = e.category || 'Outros';
             expByCat[cat] = (expByCat[cat] || 0) + (e.value || 0);
         });
 
-        // Combine all categories that either have a planned value or real expense
         const allExpCats = Array.from(new Set([...(fin.categories || []), ...Object.keys(monthData.plannedExpenses || {}), ...Object.keys(expByCat)]));
 
         allExpCats.forEach(cat => {
             const planned = monthData.plannedExpenses?.[cat] || 0;
             const real = expByCat[cat] || 0;
-            if (planned === 0 && real === 0) return; // Skip completely empty categories
+            if (planned === 0 && real === 0) return;
 
             const diff = planned - real;
             const tr = expTbody.createEl('tr');
@@ -13079,7 +14792,7 @@ kanban-plugin: basic
             diffTd.setText(formatCurrency(diff, curr));
         });
 
-        // 4. Category Comparison Table: Renda (Planejado vs Real vs Diferença)
+        // Category Comparison Table: Renda
         summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: 'Renda por Categoria' });
         const incCompTable = summaryCard.createEl('table', { cls: 'kt-fin-comp-table' });
 
@@ -13092,7 +14805,6 @@ kanban-plugin: basic
 
         const incTbody = incCompTable.createEl('tbody');
 
-        // Income Totals Row
         const incTotalRow = incTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
         incTotalRow.createEl('td', { text: 'Totais' });
         incTotalRow.createEl('td', { text: formatCurrency(plannedIncTotal, curr) });
@@ -13101,7 +14813,6 @@ kanban-plugin: basic
         const incTotDiffTd = incTotalRow.createEl('td', { cls: incTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
         incTotDiffTd.setText(formatCurrency(incTotalDiff, curr));
 
-        // Group actual income by category
         const incByCat = {};
         (monthData.income || []).forEach(i => {
             const cat = i.category || 'Pagamento';
@@ -13124,7 +14835,10 @@ kanban-plugin: basic
             diffTd.setText(formatCurrency(diff, curr));
         });
 
-        // 5. Cobranças por Pessoa do Mês (Com resumo e botão de copiar mensagem)
+        // 5. Médias Históricas (Sugestões e auto-preenchimento)
+        this.renderSmartPlanningAssistant(summaryCard, year, month, monthData, curr);
+
+        // 6. Cobranças por Pessoa do Mês (Splits)
         const peopleMap = {};
         (monthData.expenses || []).forEach(exp => {
             if (exp.splitData && exp.splitData.participants) {
@@ -13212,7 +14926,6 @@ kanban-plugin: basic
                 // Action Buttons Row
                 const pActions = personBox.createDiv('kt-fin-person-actions');
                 
-                // Copy WhatsApp / Text summary button in requested format
                 const copyMsgBtn = pActions.createEl('button', {
                     cls: 'kt-fin-person-copy-btn',
                     text: `📋 Copiar Mensagem (${person.name})`
@@ -13235,14 +14948,12 @@ kanban-plugin: basic
                     }).join('\n');
 
                     const totalToReport = pendingItems.length > 0 ? person.pending : person.total;
-
                     const message = `Segue os valores do mes :\n\n${itemsLines}\n\nTotal : ${formatCurrency(totalToReport, curr)}`;
 
                     navigator.clipboard.writeText(message);
                     new obsidian.Notice(`✓ Mensagem para ${person.name} copiada com sucesso!`);
                 };
 
-                // Quick toggle all settled button
                 if (isPending) {
                     const markPaidBtn = pActions.createEl('button', {
                         cls: 'kt-fin-person-settle-btn',
@@ -13954,11 +15665,25 @@ kanban-plugin: basic
         const form = footer.createDiv('kt-add-card-form');
         form.style.display = 'none';
 
+        // Tag badge for associated project/column
+        const tagBadge = form.createDiv('kt-add-card-tag-badge');
+        tagBadge.style.display = 'none';
+
         const input = form.createEl('textarea', {
             cls: 'kt-new-card-input',
-            attr: { placeholder: 'Digite o título do card...', rows: '2' }
+            attr: { placeholder: 'Digite o título do card...', rows: '3' }
         });
-        new CardTextareaSuggester(this.app, input, () => this.cards.flatMap(c => c.tags));
+        new CardTextareaSuggester(this.app, input, () => [
+            ...this.cards.flatMap(c => c.tags || []),
+            ...(this.plugin.settings.projects || []).map(p => p.tag).filter(Boolean),
+            ...(this.plugin.settings.projects || []).map(p => p.name).filter(Boolean)
+        ]);
+
+        const autoResize = () => {
+            input.style.height = 'auto';
+            input.style.height = Math.max(68, input.scrollHeight) + 'px';
+        };
+        input.addEventListener('input', autoResize);
 
         const btnRow = form.createDiv('kt-add-card-actions');
         const confirmBtn = btnRow.createEl('button', {
@@ -13974,13 +15699,28 @@ kanban-plugin: basic
             addBtn.style.display = 'none';
             form.style.display = 'flex';
             input.value = '';
-            input.focus();
+
+            const assocTag = this.getAssociatedTagForColumn(colName);
+            if (assocTag) {
+                tagBadge.setText(`🏷️ ${assocTag}`);
+                tagBadge.title = `A tag ${assocTag} será adicionada automaticamente ao card se você não a digitar.`;
+                tagBadge.style.display = 'inline-flex';
+            } else {
+                tagBadge.style.display = 'none';
+            }
+
+            autoResize();
+            setTimeout(() => {
+                input.focus();
+                autoResize();
+            }, 30);
         };
 
         const closeForm = () => {
             form.style.display = 'none';
             addBtn.style.display = 'flex';
             input.value = '';
+            input.style.height = '';
         };
 
         const submitForm = async () => {
@@ -13988,6 +15728,7 @@ kanban-plugin: basic
             if (val) {
                 await this.addCardToColumn(colName, val);
                 input.value = '';
+                autoResize();
                 input.focus();
                 await this.refresh();
             }
