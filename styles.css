@@ -95,10 +95,22 @@
 
 .kt-date-label {
     font-size: 12px;
-    color: var(--text-muted);
+    font-weight: 600;
+    color: var(--text-normal);
     min-width: 180px;
     text-align: center;
     font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+.kt-date-label:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--background-modifier-border);
+    color: var(--text-accent, var(--interactive-accent));
 }
 
 .kt-file-picker { margin-left: auto; }
@@ -4943,7 +4955,7 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     top: 0;
     left: 0;
     right: 0;
-    bottom: 40px; /* Leaves room for collapsed drawer header */
+    bottom: 0; /* Full height layout without drawer */
     height: auto;
     overflow: hidden;
     display: flex;
@@ -4952,14 +4964,7 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 }
 
 .kt-cal-container .kt-backlog-drawer {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 40;
-    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.45);
-    background: var(--background-secondary);
-    border-top: 1px solid var(--background-modifier-border);
+    display: none;
 }
 
 .kt-cal-weekdays-header {
@@ -5011,25 +5016,20 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     overflow: hidden;
 }
 
-/* Layer A: Background 7 Day Cells */
 .kt-cal-week-bg {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 1px;
-    background: var(--background-modifier-border);
-    height: 100%;
-    width: 100%;
+    z-index: 1;
 }
 
 .kt-cal-day-cell {
     background: var(--background-primary);
-    padding: 4px 6px;
-    display: flex;
-    flex-direction: column;
-    transition: background-color 0.12s ease;
-    position: relative;
     overflow: hidden;
     cursor: pointer;
 }
@@ -5085,6 +5085,53 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     font-size: 11px;
     font-weight: 700;
     color: var(--text-normal);
+}
+
+/* Custom Special Events & Dates on Day Cells */
+.kt-cal-day-special-events {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 4px;
+    z-index: 5;
+    position: relative;
+    pointer-events: auto;
+}
+
+.kt-cal-special-event-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--evt-color, #ec4899) 18%, var(--background-secondary));
+    border-left: 3px solid var(--evt-color, #ec4899);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-normal);
+    cursor: pointer;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.kt-cal-special-event-pill:hover {
+    background: color-mix(in srgb, var(--evt-color, #ec4899) 32%, var(--background-secondary));
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.kt-cal-evt-icon {
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.kt-cal-evt-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Layer B: Foreground Continuous Events Layer */
@@ -5159,6 +5206,28 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
     border-right: 2px dashed color-mix(in srgb, var(--proj-color, #6366f1) 70%, transparent);
+}
+
+.kt-cal-bar.kt-cal-special-event-bar {
+    height: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0 7px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--evt-color, #ec4899) 18%, var(--background-secondary));
+    border: 1px solid color-mix(in srgb, var(--evt-color, #ec4899) 35%, var(--background-modifier-border));
+    border-left: 4px solid var(--evt-color, #ec4899);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.kt-cal-bar.kt-cal-special-event-bar:hover {
+    background: color-mix(in srgb, var(--evt-color, #ec4899) 32%, var(--background-secondary));
+    border-color: var(--evt-color, #ec4899);
+    transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
 }
 
 .kt-cal-card-inner {
@@ -5544,3 +5613,1864 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     border-color: var(--interactive-accent) !important;
     font-weight: 700;
 }
+
+/* ================================================================
+   PROJECT REPORT MODAL (DISCRIMINADO & EXPORTAÇÃO PARA O CHEFE)
+   ================================================================ */
+
+.kt-report-modal-wrapper {
+    background: var(--background-primary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+.kt-report-modal {
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    color: var(--text-normal);
+}
+
+.kt-report-header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-report-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-report-proj-badge {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.kt-report-color-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+}
+
+.kt-report-proj-title {
+    margin: 0 !important;
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    color: var(--text-normal) !important;
+}
+
+.kt-report-tag-pill {
+    background: var(--background-modifier-hover);
+    color: var(--text-accent);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.kt-report-close-btn {
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+}
+
+.kt-report-close-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+/* Report Filter Bar */
+.kt-report-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+}
+
+.kt-report-btn-group {
+    display: flex;
+    align-items: center;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 3px;
+}
+
+.kt-report-filter-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-report-filter-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-filter-btn.is-active {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent, #ffffff) !important;
+    font-weight: 700;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* KPI Summary Cards */
+.kt-report-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.kt-report-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.kt-report-kpi-card.kt-kpi-green {
+    background: var(--background-secondary);
+    border-color: var(--background-modifier-border);
+}
+
+.kt-report-kpi-card.kt-kpi-green .kt-report-kpi-val {
+    color: var(--text-accent);
+}
+
+.kt-report-kpi-val {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-normal);
+    line-height: 1.2;
+}
+
+.kt-report-kpi-lbl {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+/* Actions Bar (Copy & Export) */
+.kt-report-actions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+}
+
+.kt-report-act-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+.kt-report-act-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+}
+
+.kt-btn-whatsapp {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent, #ffffff) !important;
+    border-color: var(--interactive-accent) !important;
+    font-weight: 600;
+}
+
+.kt-btn-whatsapp:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+/* Itemized Breakdown Section */
+.kt-report-breakdown-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 48vh;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.kt-report-breakdown-hdr h3 {
+    margin: 0 !important;
+    font-size: 12px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.kt-report-breakdown-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.kt-report-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    background: var(--background-secondary);
+    border-radius: 8px;
+    border: 1px dashed var(--background-modifier-border);
+}
+
+/* Day Blocks (Grouped by Date) */
+.kt-report-day-block {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.kt-report-day-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--background-secondary-alt);
+    border-bottom: 1px solid var(--background-modifier-border);
+    font-weight: 600;
+    font-size: 12.5px;
+}
+
+.kt-report-day-title {
+    color: var(--text-normal);
+}
+
+.kt-report-day-metrics {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-report-day-hours {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.kt-report-day-val {
+    background: var(--background-modifier-hover);
+    color: var(--text-accent);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.kt-report-day-items {
+    display: flex;
+    flex-direction: column;
+}
+
+.kt-report-item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    gap: 12px;
+    transition: background-color 0.1s ease;
+}
+
+.kt-report-item-row:last-child {
+    border-bottom: none;
+}
+
+.kt-report-item-row:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-item-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-report-item-chk {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.kt-report-item-row.is-done .kt-report-item-chk {
+    color: var(--text-accent);
+}
+
+.kt-report-item-time-range {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 500;
+    background: var(--background-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    flex-shrink: 0;
+}
+
+.kt-report-item-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-normal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-report-item-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.kt-report-item-col {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--background-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.kt-report-item-dur {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-report-item-earned {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-accent);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.kt-report-item-status {
+    font-size: 10.5px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--background-modifier-hover);
+    color: var(--text-muted);
+}
+
+.kt-report-item-status.is-done {
+    color: var(--text-accent);
+}
+
+/* Task Blocks (Grouped by Task) */
+.kt-report-task-block {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-report-task-block:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-task-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 12px;
+}
+
+.kt-report-task-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-report-task-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-normal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-report-task-dates {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--background-primary);
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    flex-shrink: 0;
+}
+
+.kt-report-task-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* ================================================================
+   QUICK CREATE TASK MODAL (TIMEBLOCKING EMPTY SLOT CLICK)
+   ================================================================ */
+
+.kt-quick-create-modal {
+    background: var(--background-primary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+.kt-quick-create-input {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    transition: all 0.15s ease;
+    box-sizing: border-box;
+}
+
+.kt-quick-create-input:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.25);
+    background: var(--background-primary);
+}
+
+.kt-untimed-quick-select-wrap {
+    border: 1px dashed var(--background-modifier-border);
+    transition: border-color 0.15s ease;
+}
+
+.kt-untimed-quick-select-wrap:hover {
+    border-color: var(--interactive-accent);
+}
+
+/* ================================================================
+   FINANCIAL CONTROL (FINANÇAS & ORÇAMENTO MENSAL)
+   ================================================================ */
+
+.kt-finances-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+/* 1. Header Bar */
+.kt-fin-header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 18px;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    gap: 16px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.kt-fin-year-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--background-primary);
+    padding: 2px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-nav-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 2px 6px !important;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.15s ease;
+}
+
+.kt-fin-nav-btn:hover {
+    color: var(--text-normal);
+}
+
+.kt-fin-year-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-normal);
+    min-width: 44px;
+    text-align: center;
+    letter-spacing: 0.5px;
+}
+
+.kt-fin-month-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--background-primary);
+    padding: 3px 5px;
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-month-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px !important;
+    border-radius: 6px !important;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-month-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover) !important;
+}
+
+.kt-fin-month-btn.is-selected {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent, #ffffff) !important;
+    font-weight: 600;
+}
+
+.kt-fin-month-btn.is-current:not(.is-selected) {
+    color: var(--interactive-accent);
+    font-weight: 600;
+}
+
+.kt-fin-actions-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-fin-act-btn {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-act-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--text-muted);
+}
+
+/* 2. Split Layout */
+.kt-fin-split-layout {
+    display: grid;
+    grid-template-columns: minmax(480px, 1.2fr) minmax(380px, 1fr);
+    flex: 1;
+    overflow: hidden;
+    background: var(--background-primary);
+}
+
+@media (max-width: 980px) {
+    .kt-fin-split-layout {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+}
+
+/* Left Column */
+.kt-fin-left-col {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--background-modifier-border);
+    overflow: hidden;
+    background: var(--background-primary);
+    position: relative;
+}
+
+/* Floating Multi-Selection Bar */
+.kt-fin-selection-floating-bar {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--background-secondary-alt, var(--background-secondary));
+    border: 1px solid var(--interactive-accent);
+    border-radius: 30px;
+    padding: 8px 18px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(10px);
+    animation: ktFinBarFadeIn 0.18s ease-out;
+}
+
+@keyframes ktFinBarFadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 14px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
+
+.kt-fin-bar-stats {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-fin-bar-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--interactive-accent);
+    color: #ffffff;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.kt-fin-bar-sum {
+    color: var(--text-normal);
+    font-family: var(--font-monospace, monospace);
+    font-weight: 700;
+}
+
+.kt-fin-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-left: 1px solid var(--background-modifier-border);
+    padding-left: 10px;
+}
+
+.kt-fin-bar-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 14px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    cursor: pointer;
+    transition: all 0.12s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-fin-bar-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+}
+
+.kt-fin-bar-btn.mod-warning:hover {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: #ffffff;
+}
+
+.kt-fin-subtab-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    flex-wrap: wrap;
+}
+
+.kt-fin-subtab-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-fin-subtab-btn {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-subtab-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-subtab-btn.is-active {
+    background: var(--background-primary);
+    border-color: var(--background-modifier-border);
+    color: var(--text-normal);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.kt-fin-search-box {
+    display: flex;
+    align-items: center;
+    position: relative;
+    min-width: 220px;
+    max-width: 340px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.kt-fin-search-box:focus-within {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.kt-fin-search-icon {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-right: 6px;
+    user-select: none;
+    display: flex;
+    align-items: center;
+}
+
+.kt-fin-search-input {
+    flex: 1;
+    border: none !important;
+    background: transparent !important;
+    font-size: 12px !important;
+    color: var(--text-normal) !important;
+    padding: 3px 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+    min-width: 0;
+}
+
+.kt-fin-search-clear {
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+
+.kt-fin-search-clear:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-tables-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.kt-fin-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.kt-fin-section-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: -16px;
+    z-index: 15;
+    background: var(--background-primary);
+    padding: 10px 0 8px 0;
+    margin-top: -6px;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s ease;
+}
+
+.kt-fin-section-hdr h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-fin-add-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* Financial Tables */
+.kt-fin-table-wrap {
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--background-secondary);
+}
+
+.kt-fin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.kt-fin-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: var(--background-secondary-alt, var(--background-secondary));
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    vertical-align: middle;
+}
+
+.kt-fin-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.kt-fin-table tbody tr {
+    cursor: pointer;
+    transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.kt-fin-table tbody tr:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-table tbody tr.is-selected {
+    background: var(--background-modifier-hover) !important;
+    box-shadow: inset 3.5px 0 0 var(--interactive-accent) !important;
+}
+
+@keyframes ktRowFlashPulse {
+    0% {
+        background-color: var(--interactive-accent);
+        color: #ffffff;
+        box-shadow: 0 0 12px var(--interactive-accent);
+    }
+    35% {
+        background-color: var(--interactive-accent-hover, var(--interactive-accent));
+    }
+    100% {
+        background-color: var(--background-modifier-hover);
+    }
+}
+
+.kt-fin-table tbody tr.kt-row-flash {
+    animation: ktRowFlashPulse 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.kt-td-date {
+    width: 110px;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.kt-td-val {
+    width: 110px;
+    font-weight: 600;
+    font-family: var(--font-monospace, monospace);
+    white-space: nowrap;
+}
+
+.kt-td-desc {
+    flex: 1;
+    font-weight: 500;
+}
+
+.kt-td-cat {
+    width: 120px;
+}
+
+.kt-td-actions {
+    width: 65px;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.kt-th-actions {
+    text-align: right !important;
+}
+
+.kt-fin-row-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 2px 5px !important;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px !important;
+}
+
+.kt-fin-row-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover) !important;
+}
+
+.kt-fin-row-btn.mod-warning:hover {
+    color: var(--text-error, #ef4444);
+}
+
+/* Pills and Badges */
+.kt-pill-interactive {
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+}
+
+.kt-pill-interactive:hover {
+    filter: brightness(1.2);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+
+.kt-fin-installment-pill {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3b82f6;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+.kt-fin-date-pill {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: var(--font-monospace, monospace);
+}
+
+.kt-fin-fixed-pill {
+    background: var(--background-modifier-hover);
+    color: var(--text-muted);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+.kt-fin-cat-pill {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.kt-fin-split-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 4px;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-split-badge.is-pending {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.kt-fin-split-badge.is-pending:hover {
+    background: rgba(239, 68, 68, 0.25);
+    transform: translateY(-1px);
+}
+
+.kt-fin-split-badge.is-settled {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.kt-fin-fixed-badge {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+/* Split & Highlight styling */
+.kt-row-split {
+    background: rgba(239, 68, 68, 0.03);
+}
+
+.kt-val-split {
+    color: #ef4444 !important;
+    font-weight: 700;
+}
+
+.kt-desc-split {
+    color: var(--text-normal) !important;
+    font-weight: 600;
+}
+
+.kt-val-green {
+    color: #22c55e !important;
+    font-weight: 700;
+}
+
+.kt-td-empty {
+    text-align: center;
+    padding: 24px 16px !important;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Right Column (Balanço Mensal / Orçamento) */
+.kt-fin-right-col {
+    overflow-y: auto;
+    padding: 16px;
+    background: var(--background-secondary);
+    display: flex;
+    flex-direction: column;
+}
+
+.kt-fin-budget-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 12px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.kt-fin-budget-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.kt-fin-budget-hdr h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-fin-edit-budget-btn {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    cursor: pointer;
+}
+
+.kt-fin-edit-budget-btn:hover {
+    background: var(--background-modifier-hover);
+}
+
+/* KPI Box Row */
+.kt-fin-balance-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}
+
+.kt-fin-balance-kpi-row.kt-kpi-4-cols {
+    grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 1200px) {
+    .kt-fin-balance-kpi-row.kt-kpi-4-cols {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.kt-fin-kpi-box {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 4px;
+}
+
+.kt-fin-kpi-val-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-fin-kpi-val {
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--text-normal);
+    font-family: var(--font-monospace, monospace);
+}
+
+.kt-fin-edit-init-btn {
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+}
+
+.kt-fin-edit-init-btn:hover {
+    opacity: 1;
+    color: var(--interactive-accent);
+}
+
+.kt-fin-kpi-lbl {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.kt-box-orange .kt-fin-kpi-val {
+    color: #f97316;
+}
+
+.kt-box-green .kt-fin-kpi-val {
+    color: #22c55e;
+}
+
+.kt-box-red .kt-fin-kpi-val {
+    color: #ef4444;
+}
+
+/* Mini Modals & Calendar Picker */
+.kt-fin-mini-modal {
+    border-radius: 12px !important;
+}
+
+.kt-fin-cal-day-btn {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    transition: all 0.15s ease;
+}
+
+.kt-fin-cal-day-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+}
+
+.kt-fin-cal-day-btn.is-selected {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent, #ffffff) !important;
+    border-color: var(--interactive-accent) !important;
+}
+
+.kt-btn-full {
+    width: 100%;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+
+/* Progress Bars */
+.kt-fin-progress-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    background: var(--background-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-prog-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kt-fin-prog-left {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.kt-fin-prog-title {
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-fin-prog-meta {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-fin-prog-track {
+    height: 8px;
+    background: var(--background-primary);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-prog-fill {
+    height: 100%;
+    background: var(--interactive-accent);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.kt-fin-prog-fill.is-over {
+    background: #ef4444;
+}
+
+.kt-fin-prog-fill.is-green {
+    background: #22c55e;
+}
+
+/* Comparison Tables */
+.kt-fin-table-title {
+    margin: 10px 0 4px 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-fin-comp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.kt-fin-comp-table th {
+    text-align: right;
+    padding: 6px 10px;
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-comp-table th:first-child {
+    text-align: left;
+}
+
+.kt-fin-comp-table td {
+    text-align: right;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    font-family: var(--font-monospace, monospace);
+    font-size: 12px;
+}
+
+.kt-fin-comp-table td.kt-td-cat-name {
+    text-align: left;
+    font-family: var(--font-text);
+    font-weight: 500;
+    color: var(--text-normal);
+}
+
+.kt-fin-tot-row td {
+    font-weight: 700;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-diff-pos {
+    color: #22c55e;
+    font-weight: 600;
+}
+
+.kt-diff-neg {
+    color: #ef4444;
+    font-weight: 600;
+}
+
+/* ================================================================
+   GOOGLE SHEETS / GOOGLE CALENDAR STYLE FLOATING POPOVER
+   ================================================================ */
+.kt-gcal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9998;
+    background: transparent;
+}
+
+.kt-gcal-popover {
+    position: fixed;
+    z-index: 9999;
+    width: 240px;
+    background: var(--background-primary, #1e1e1e);
+    border: 1px solid var(--background-modifier-border, #333333);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0,0,0,0.15);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    user-select: none;
+    animation: kt-popover-fade-in 0.12s ease-out;
+}
+
+@keyframes kt-popover-fade-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.kt-gcal-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 4px;
+}
+
+.kt-gcal-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+    text-transform: capitalize;
+}
+
+.kt-gcal-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.kt-gcal-nav-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 2px 6px !important;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px !important;
+    line-height: 1;
+}
+
+.kt-gcal-nav-btn:hover {
+    background: var(--background-modifier-hover) !important;
+    color: var(--text-normal);
+}
+
+.kt-gcal-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    padding-bottom: 2px;
+}
+
+.kt-gcal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+
+.kt-gcal-day {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    width: 28px;
+    margin: auto;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-normal);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+
+.kt-gcal-day:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-gcal-day-muted {
+    color: var(--text-faint, #666666) !important;
+    opacity: 0.55;
+}
+
+.kt-gcal-day.is-selected {
+    background: #1a73e8 !important;
+    color: #ffffff !important;
+    font-weight: 700;
+}
+
+.kt-gcal-day.is-today:not(.is-selected) {
+    border: 1px solid #1a73e8;
+    color: #1a73e8;
+    font-weight: 700;
+}
+
+.kt-gcal-ftr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 6px;
+    border-top: 1px solid var(--background-modifier-border);
+    margin-top: 2px;
+}
+
+.kt-gcal-link-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 2px 4px !important;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1a73e8 !important;
+    cursor: pointer;
+}
+
+.kt-gcal-link-btn:hover {
+    text-decoration: underline;
+}
+
+.kt-gcal-fixo-link {
+    color: var(--text-muted) !important;
+    font-weight: 500;
+}
+
+.kt-gcal-fixo-link:hover {
+    color: var(--text-normal) !important;
+}
+
+/* ================================================================
+   COBRANÇAS DO MÊS POR PESSOA (SIDEBAR SECTION)
+   ================================================================ */
+.kt-fin-people-split-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.kt-fin-person-box {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kt-fin-person-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.kt-fin-person-name-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-fin-person-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-fin-person-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.kt-fin-person-badge.is-pending {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+.kt-fin-person-badge.is-settled {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+}
+
+.kt-fin-person-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    padding-left: 4px;
+}
+
+.kt-fin-person-item-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-fin-pitem-desc {
+    color: var(--text-normal);
+}
+
+.kt-fin-pitem-val {
+    font-family: var(--font-monospace, monospace);
+    font-weight: 600;
+}
+
+.kt-fin-person-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.kt-fin-person-copy-btn {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--background-primary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    color: var(--text-normal);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-person-copy-btn:hover {
+    background: var(--background-modifier-hover) !important;
+    border-color: var(--interactive-accent) !important;
+    color: var(--interactive-accent);
+}
+
+.kt-fin-person-settle-btn {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(34, 197, 94, 0.1) !important;
+    border: 1px solid rgba(34, 197, 94, 0.3) !important;
+    color: #22c55e !important;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-person-settle-btn:hover {
+    background: rgba(34, 197, 94, 0.2) !important;
+}
+
+/* ================================================================
+   INSTALLMENT FLOATING POPOVER (GOOGLE SHEETS STYLE)
+   ================================================================ */
+.kt-installment-popover {
+    width: 210px !important;
+}
+
+.kt-inst-step-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--background-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-inst-display {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a73e8;
+}
+
+.kt-inst-input-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 4px 0 2px 0;
+}
+
+.kt-inst-lbl {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-inst-input-row input {
+    text-align: center;
+    font-weight: 600;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+/* ================================================================
+   FINANCES UNDO IMPORT TOAST & 3-DOTS MORE MENU
+   ================================================================ */
+.kt-fin-undo-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 10000;
+    min-width: 320px;
+    max-width: 480px;
+    background: var(--background-primary);
+    border: 1px solid var(--interactive-accent);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: ktToastSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes ktToastSlideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.kt-fin-undo-toast-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-fin-undo-toast-text {
+    font-size: 13px;
+    color: var(--text-normal);
+    line-height: 1.4;
+}
+
+.kt-fin-undo-toast-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-fin-undo-btn {
+    background: var(--interactive-accent) !important;
+    color: var(--text-on-accent) !important;
+    font-weight: 600 !important;
+    font-size: 12px !important;
+    padding: 4px 10px !important;
+    border-radius: 6px !important;
+    cursor: pointer !important;
+    white-space: nowrap;
+    border: none !important;
+    transition: opacity 0.15s ease !important;
+}
+
+.kt-fin-undo-btn:hover {
+    opacity: 0.9;
+}
+
+.kt-fin-undo-close-btn {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-muted) !important;
+    font-size: 13px !important;
+    padding: 4px 6px !important;
+    cursor: pointer !important;
+    border-radius: 4px !important;
+}
+
+.kt-fin-undo-close-btn:hover {
+    color: var(--text-normal) !important;
+    background: var(--background-modifier-hover) !important;
+}
+
+.kt-fin-undo-progress-wrap {
+    width: 100%;
+    height: 3px;
+    background: var(--background-modifier-border);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.kt-fin-undo-progress-bar {
+    height: 100%;
+    background: var(--interactive-accent);
+    width: 100%;
+    transition: width 0.1s linear;
+}
+
+/* 3-Dots More Menu */
+.kt-fin-more-btn {
+    font-size: 14px;
+    font-weight: 700;
+    padding: 4px 10px !important;
+    border-radius: 6px;
+    letter-spacing: 1px;
+}
+
+.kt-fin-more-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 1000;
+    min-width: 220px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    padding: 6px 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.kt-fin-more-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-size: 12.5px;
+    color: var(--text-normal);
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    text-align: left;
+    width: 100%;
+    transition: background 0.1s ease;
+}
+
+.kt-fin-more-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-more-item.mod-danger {
+    color: #ef4444;
+}
+
+.kt-fin-more-item.mod-danger:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.kt-fin-more-divider {
+    height: 1px;
+    background: var(--background-modifier-border);
+    margin: 4px 0;
+}
+
+
+
+
