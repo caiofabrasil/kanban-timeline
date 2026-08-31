@@ -4601,8 +4601,16 @@ class FinanceEntryModal extends obsidian.Modal {
         this.onSave     = onSave;
         this.onDelete   = onDelete;
 
-        const monthPad = String(month).padStart(2, '0');
-        const defaultDate = `${year}-${monthPad}-01`;
+        const today = new Date();
+        let defaultDate;
+        if (today.getFullYear() === year && (today.getMonth() + 1) === month) {
+            defaultDate = formatIsoDate(today);
+        } else {
+            const maxDays = new Date(year, month, 0).getDate();
+            const dayNum = Math.min(today.getDate(), maxDays);
+            const monthPad = String(month).padStart(2, '0');
+            defaultDate = `${year}-${monthPad}-${String(dayNum).padStart(2, '0')}`;
+        }
 
         this.modeVal        = item ? (item.type || mode) : mode;
         this.valueVal       = item ? (typeof item.value === 'number' ? item.value.toFixed(2).replace('.', ',') : String(item.value || '')) : '';
@@ -4623,9 +4631,6 @@ class FinanceEntryModal extends obsidian.Modal {
         contentEl.addClass('kt-card-edit-modal');
 
         const isEdit = !!item;
-        const monthPad = String(month).padStart(2, '0');
-        const defaultDate = `${year}-${monthPad}-01`;
-
         contentEl.createEl('h2', { text: isEdit ? `Editar ${this.modeVal === 'income' ? 'Renda' : 'Despesa'}` : `Nova ${this.modeVal === 'income' ? 'Renda' : 'Despesa'}` });
 
         // 1. Tipo (Despesa / Renda)
@@ -4829,6 +4834,164 @@ class FinanceEntryModal extends obsidian.Modal {
         };
 
         saveBtn.onclick = submit;
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinancePlannedItemModal extends obsidian.Modal {
+    constructor(app, plugin, item, year, month, categories, incomeCategories, onSave, onDelete) {
+        super(app);
+        this.app              = app;
+        this.plugin           = plugin;
+        this.item             = item || null;
+        this.year             = year;
+        this.month            = month;
+        this.categories       = categories || [];
+        this.incomeCategories = incomeCategories || [];
+        this.onSave           = onSave;
+        this.onDelete         = onDelete;
+
+        const today = new Date();
+        let defaultDate;
+        if (today.getFullYear() === year && (today.getMonth() + 1) === month) {
+            defaultDate = formatIsoDate(today);
+        } else {
+            const maxDays = new Date(year, month, 0).getDate();
+            const dayNum = Math.min(today.getDate(), maxDays);
+            const monthPad = String(month).padStart(2, '0');
+            defaultDate = `${year}-${monthPad}-${String(dayNum).padStart(2, '0')}`;
+        }
+
+        this.typeVal  = item ? item.type : 'expense';
+        this.valueVal = item ? (typeof item.value === 'number' ? item.value.toFixed(2).replace('.', ',') : String(item.value || '')) : '';
+        this.descVal  = item ? (item.description || '') : '';
+        this.catVal   = item ? (item.category || (this.typeVal === 'income' ? this.incomeCategories[0] : this.categories[0]) || 'Outros') : (this.categories[0] || 'Outros');
+        this.dateVal  = item ? (item.date || defaultDate) : defaultDate;
+    }
+
+    onOpen() {
+        const { contentEl, item } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        const isEdit = !!item;
+        contentEl.createEl('h2', { text: isEdit ? 'Editar Previsão / Gasto Planejado' : 'Nova Previsão / Gasto Planejado' });
+
+        // 1. Tipo de Previsão (Despesa Planejada vs Receita/Entrada Prevista)
+        new obsidian.Setting(contentEl)
+            .setName('Tipo de Previsão')
+            .addDropdown(d => {
+                d.addOption('expense', '🔴 Despesa Prevista (Gasto Planejado)');
+                d.addOption('income', '🟢 Receita Prevista (Entrada Planejada)');
+                d.setValue(this.typeVal);
+                d.onChange(v => {
+                    this.typeVal = v;
+                    const catList = this.typeVal === 'income' ? this.incomeCategories : this.categories;
+                    this.catVal = catList[0] || 'Outros';
+                    this.onOpen();
+                });
+            });
+
+        // 2. Valor
+        new obsidian.Setting(contentEl)
+            .setName('Valor Estimado (R$)')
+            .addText(t => {
+                t.setPlaceholder('Ex: 500,00')
+                 .setValue(this.valueVal)
+                 .onChange(v => this.valueVal = v);
+                t.inputEl.style.fontSize = '16px';
+                t.inputEl.style.fontWeight = '700';
+                setTimeout(() => t.inputEl.focus(), 30);
+            });
+
+        // 3. Descrição
+        new obsidian.Setting(contentEl)
+            .setName('Descrição da Previsão')
+            .addText(t => {
+                t.setPlaceholder('Ex: Freela Projeto X, Compra Monitor, Conserto Carro...')
+                 .setValue(this.descVal)
+                 .onChange(v => this.descVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        // 4. Categoria
+        const catList = this.typeVal === 'income' ? this.incomeCategories : this.categories;
+        const catSetting = new obsidian.Setting(contentEl)
+            .setName('Categoria');
+        
+        catSetting.addDropdown(d => {
+            catList.forEach(c => d.addOption(c, c));
+            if (!catList.includes(this.catVal)) {
+                d.addOption(this.catVal, this.catVal);
+            }
+            d.setValue(this.catVal);
+            d.onChange(v => this.catVal = v);
+        });
+
+        // 5. Data Prevista
+        new obsidian.Setting(contentEl)
+            .setName('Data Prevista')
+            .setDesc('Quando você prevê que este gasto ou entrada irá ocorrer')
+            .addText(t => {
+                t.setValue(this.dateVal).onChange(v => this.dateVal = v.trim());
+                t.inputEl.style.width = '140px';
+            });
+
+        // Footer Actions
+        const footer = contentEl.createDiv('kt-fin-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+        footer.style.marginTop = '20px';
+
+        const leftGroup = footer.createDiv();
+        if (isEdit && this.onDelete) {
+            const delBtn = leftGroup.createEl('button', { cls: 'mod-warning', text: '🗑️ Excluir' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(item);
+            };
+        }
+
+        const rightGroup = footer.createDiv();
+        rightGroup.style.display = 'flex';
+        rightGroup.style.gap = '8px';
+
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: isEdit ? 'Salvar Alterações' : 'Salvar Previsão' });
+        saveBtn.onclick = () => {
+            const cleanVal = parseFinanceCurrencyInput(this.valueVal);
+            if (cleanVal <= 0) {
+                new obsidian.Notice('⚠️ Digite um valor válido.');
+                return;
+            }
+
+            const cleanDesc = this.descVal.trim();
+            if (!cleanDesc) {
+                new obsidian.Notice('⚠️ Digite uma descrição para a previsão.');
+                return;
+            }
+
+            const result = {
+                id: item ? item.id : `plan-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                type: this.typeVal,
+                value: cleanVal,
+                description: cleanDesc,
+                category: this.catVal,
+                date: this.dateVal || formatIsoDate(new Date())
+            };
+
+            this.close();
+            this.onSave(result);
+        };
     }
 
     onClose() {
@@ -5519,6 +5682,2573 @@ class FinanceConfirmModal extends obsidian.Modal {
         confirmBtn.onclick = () => {
             this.close();
             this.onConfirm();
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
+// HEALTH TRACKER CATALOG & MODALS
+// ================================================================
+
+const HEALTH_BIOMARKER_CATALOG = [
+    // Hormônios
+    { key: 'testosterone_total', name: 'Testosterona Total', category: 'Hormônios', unit: 'ng/dL', refMin: 300, refMax: 900 },
+    { key: 'testosterone_free', name: 'Testosterona Livre', category: 'Hormônios', unit: 'ng/dL', refMin: 8.0, refMax: 26.0 },
+    { key: 'testosterone_bio', name: 'Testosterona Biodisponível', category: 'Hormônios', unit: 'ng/dL', refMin: 82, refMax: 626 },
+    { key: 'dht', name: 'DHT (Dihidrotestosterona)', category: 'Hormônios', unit: 'pg/mL', refMin: 143, refMax: 842 },
+    { key: 'estradiol', name: 'Estradiol (E2)', category: 'Hormônios', unit: 'pg/mL', refMin: 11, refMax: 44 },
+    { key: 'estrone', name: 'Estrona', category: 'Hormônios', unit: 'pg/mL', refMin: 0, refMax: 174 },
+    { key: 'progesterone', name: 'Progesterona', category: 'Hormônios', unit: 'ng/mL', refMin: 0.28, refMax: 1.22 },
+    { key: 'cortisol_morning', name: 'Cortisol (Manhã)', category: 'Hormônios', unit: 'mcg/dL', refMin: 5.3, refMax: 22.5 },
+    { key: 'tsh', name: 'TSH', category: 'Hormônios', unit: 'mUI/L', refMin: 0.4, refMax: 4.3 },
+    { key: 't4_free', name: 'T4 Livre', category: 'Hormônios', unit: 'ng/dL', refMin: 0.89, refMax: 1.76 },
+    { key: 't3_free', name: 'T3 Livre', category: 'Hormônios', unit: 'pg/mL', refMin: 2.3, refMax: 4.2 },
+    { key: 't3_reverse', name: 'T3 Reverso', category: 'Hormônios', unit: 'ng/dL', refMin: 31, refMax: 95 },
+    { key: 'prolactin', name: 'Prolactina', category: 'Hormônios', unit: 'ng/mL', refMin: 2.1, refMax: 17.7 },
+    { key: 'dhea_s', name: 'DHEA-S / DHEA', category: 'Hormônios', unit: 'ng/mL', refMin: 1.33, refMax: 6.48 },
+    { key: 'shbg', name: 'SHBG', category: 'Hormônios', unit: 'nmol/L', refMin: 10, refMax: 57 },
+    { key: 'fsh', name: 'FSH', category: 'Hormônios', unit: 'mUI/mL', refMin: 1.4, refMax: 18.1 },
+    { key: 'lh', name: 'LH', category: 'Hormônios', unit: 'mUI/mL', refMin: 1.5, refMax: 9.3 },
+    { key: 'acth', name: 'ACTH', category: 'Hormônios', unit: 'pg/mL', refMin: 0, refMax: 46 },
+
+    // Vitaminas & Minerais
+    { key: 'vitamin_d', name: 'Vitamina D (25-OH)', category: 'Vitaminas & Minerais', unit: 'ng/mL', refMin: 30, refMax: 60 },
+    { key: 'vitamin_b12', name: 'Vitamina B12', category: 'Vitaminas & Minerais', unit: 'pg/mL', refMin: 350, refMax: 900 },
+    { key: 'vitamin_a', name: 'Vitamina A', category: 'Vitaminas & Minerais', unit: 'mg/L', refMin: 0.3, refMax: 0.7 },
+    { key: 'vitamin_c', name: 'Vitamina C', category: 'Vitaminas & Minerais', unit: 'mg/dL', refMin: 0.2, refMax: 2.1 },
+    { key: 'ferritin', name: 'Ferritina', category: 'Vitaminas & Minerais', unit: 'ng/mL', refMin: 30, refMax: 300 },
+    { key: 'serum_iron', name: 'Ferro Sérico', category: 'Vitaminas & Minerais', unit: 'mcg/dL', refMin: 65, refMax: 175 },
+    { key: 'magnesium', name: 'Magnésio', category: 'Vitaminas & Minerais', unit: 'mg/dL', refMin: 1.6, refMax: 2.6 },
+    { key: 'zinc', name: 'Zinco Sanguíneo', category: 'Vitaminas & Minerais', unit: 'mcg/dL', refMin: 60, refMax: 120 },
+    { key: 'copper', name: 'Cobre', category: 'Vitaminas & Minerais', unit: 'mcg/dL', refMin: 70, refMax: 140 },
+    { key: 'calcium', name: 'Cálcio', category: 'Vitaminas & Minerais', unit: 'mg/dL', refMin: 8.3, refMax: 10.6 },
+    { key: 'phosphorus', name: 'Fósforo', category: 'Vitaminas & Minerais', unit: 'mg/dL', refMin: 2.4, refMax: 5.1 },
+    { key: 'potassium', name: 'Potássio', category: 'Vitaminas & Minerais', unit: 'mmol/L', refMin: 3.5, refMax: 5.1 },
+    { key: 'sodium', name: 'Sódio', category: 'Vitaminas & Minerais', unit: 'mmol/L', refMin: 136, refMax: 145 },
+    { key: 'folic_acid', name: 'Ácido Fólico', category: 'Vitaminas & Minerais', unit: 'ng/mL', refMin: 5.38, refMax: 20 },
+
+    // Lipídios & Glicemia
+    { key: 'cholesterol_total', name: 'Colesterol Total', category: 'Lipídios & Glicemia', unit: 'mg/dL', refMin: 120, refMax: 190 },
+    { key: 'cholesterol_ldl', name: 'Colesterol LDL', category: 'Lipídios & Glicemia', unit: 'mg/dL', refMin: 0, refMax: 100 },
+    { key: 'cholesterol_hdl', name: 'Colesterol HDL', category: 'Lipídios & Glicemia', unit: 'mg/dL', refMin: 40, refMax: 90 },
+    { key: 'triglycerides', name: 'Triglicerídeos', category: 'Lipídios & Glicemia', unit: 'mg/dL', refMin: 0, refMax: 150 },
+    { key: 'fasting_glucose', name: 'Glicemia de Jejum', category: 'Lipídios & Glicemia', unit: 'mg/dL', refMin: 70, refMax: 99 },
+    { key: 'hba1c', name: 'Hemoglobina Glicada (HbA1c)', category: 'Lipídios & Glicemia', unit: '%', refMin: 4.0, refMax: 5.7 },
+    { key: 'fasting_insulin', name: 'Insulina de Jejum', category: 'Lipídios & Glicemia', unit: 'uUI/mL', refMin: 2.6, refMax: 12.0 },
+    { key: 'homa_ir', name: 'Índice HOMA-IR', category: 'Lipídios & Glicemia', unit: '', refMin: 0, refMax: 2.7 },
+
+    // Hemograma & Inflamação
+    { key: 'hemoglobin', name: 'Hemoglobina', category: 'Hemograma & Inflamação', unit: 'g/dL', refMin: 13.0, refMax: 17.0 },
+    { key: 'hematocrit', name: 'Hematócrito', category: 'Hemograma & Inflamação', unit: '%', refMin: 40, refMax: 50 },
+    { key: 'leukocytes', name: 'Leucócitos', category: 'Hemograma & Inflamação', unit: '/mm³', refMin: 4000, refMax: 10000 },
+    { key: 'platelets', name: 'Plaquetas', category: 'Hemograma & Inflamação', unit: 'mil/mm³', refMin: 150, refMax: 450 },
+    { key: 'crp', name: 'PCR Ultrassensível', category: 'Hemograma & Inflamação', unit: 'mg/dL', refMin: 0, refMax: 0.20 },
+    { key: 'homocysteine', name: 'Homocisteína', category: 'Hemograma & Inflamação', unit: 'umol/L', refMin: 0, refMax: 15.0 },
+    { key: 'vhs', name: 'VHS (1ª hora)', category: 'Hemograma & Inflamação', unit: 'mm', refMin: 0, refMax: 15 },
+
+    // Fígado & Rins
+    { key: 'creatinine', name: 'Creatinina', category: 'Fígado & Rins', unit: 'mg/dL', refMin: 0.70, refMax: 1.30 },
+    { key: 'urea', name: 'Ureia', category: 'Fígado & Rins', unit: 'mg/dL', refMin: 19, refMax: 49 },
+    { key: 'ast_tgo', name: 'TGO / AST', category: 'Fígado & Rins', unit: 'U/L', refMin: 0, refMax: 34 },
+    { key: 'alt_tgp', name: 'TGP / ALT', category: 'Fígado & Rins', unit: 'U/L', refMin: 10, refMax: 49 },
+    { key: 'gamma_gt', name: 'Gama GT', category: 'Fígado & Rins', unit: 'U/L', refMin: 0, refMax: 73 },
+    { key: 'alkaline_phosphatase', name: 'Fosfatase Alcalina', category: 'Fígado & Rins', unit: 'U/L', refMin: 46, refMax: 116 },
+    { key: 'uric_acid', name: 'Ácido Úrico', category: 'Fígado & Rins', unit: 'mg/dL', refMin: 3.8, refMax: 8.6 },
+
+    // Bioimpedância & Composição Corporal
+    { key: 'weight', name: 'Peso', category: 'Bioimpedância', unit: 'kg', refMin: 0, refMax: 0 },
+    { key: 'body_fat_pct', name: 'Gordura Corporal (% BF)', category: 'Bioimpedância', unit: '%', refMin: 10, refMax: 20 },
+    { key: 'muscle_mass', name: 'Massa Muscular Esquelética', category: 'Bioimpedância', unit: 'kg', refMin: 0, refMax: 0 },
+    { key: 'fat_mass', name: 'Massa Gorda', category: 'Bioimpedância', unit: 'kg', refMin: 0, refMax: 0 },
+    { key: 'visceral_fat', name: 'Gordura Visceral', category: 'Bioimpedância', unit: 'nível', refMin: 1, refMax: 9 },
+    { key: 'body_water_pct', name: 'Água Corporal Total', category: 'Bioimpedância', unit: '%', refMin: 50, refMax: 65 },
+    { key: 'bmr', name: 'Taxa Metabólica Basal', category: 'Bioimpedância', unit: 'kcal', refMin: 0, refMax: 0 }
+];
+
+// ================================================================
+// HEALTH TRACKER PDF TEXT EXTRACTOR & BIOMARKER PARSER
+// ================================================================
+
+function extractBiomarkersFromText(text) {
+    if (!text || typeof text !== 'string') return [];
+    
+    const normalized = text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ');
+    const results = [];
+
+    const matchVal = (regexes) => {
+        for (const re of regexes) {
+            const m = normalized.match(re);
+            if (m && m[1]) {
+                const cleanValStr = m[1].replace('.', '').replace(',', '.');
+                const val = parseFloat(cleanValStr);
+                if (!isNaN(val)) return val;
+            }
+        }
+        return null;
+    };
+
+    const patterns = {
+        testosterone_total: [
+            /testosterona\s*(?:total)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i,
+            /testosterona\s*[:\.]?\s*(\d+[\.,]\d+|\d+)\s*ng\/d[lL]/i
+        ],
+        testosterone_free: [
+            /testosterona\s*livre(?:\s*calculada)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        testosterone_bio: [
+            /testosterona\s*biodispon[ií]vel\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        dht: [
+            /(?:dihidrotestosterona|dht)\s*(?:\(dht\))?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        estradiol: [
+            /estradiol\s*(?:\(e2\)|e2)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i,
+            /17\s*-\s*beta\s*estradiol\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        estrone: [
+            /estrona\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        progesterone: [
+            /progesterona\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        fsh: [
+            /(?:fsh\s*-\s*horm[oô]nio\s*fol[ií]culo\s*estimulante|fsh)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        lh: [
+            /(?:horm[oô]nio\s*luteinizante\s*\(lh\)|lh)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        shbg: [
+            /(?:shbg\s*\(globulina\s*transportadora|shbg)\s*(?:\([^)]*\))?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        dhea_s: [
+            /(?:dehidroepiandrosterona\s*\(dhea\)|dhea\s*-\s*s|dhea)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        cortisol_morning: [
+            /cortisol\s*(?:manh[aã]|basal|s[eé]rico)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        tsh: [
+            /(?:horm[oô]nio\s*tireoestimulante\s*ultrassens[ií]vel\s*\(tsh\)|tsh)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        t4_free: [
+            /(?:tiroxina\s*livre\s*\(t4\s*livre\)|t4\s*livre|tiroxina\s*livre)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        t3_free: [
+            /(?:t3\s*livre\s*\(triiodotironina\s*livre\)|t3\s*livre)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        t3_reverse: [
+            /t3\s*reverso\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        prolactin: [
+            /prolactina\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        acth: [
+            /(?:adrenocorticotr[oó]fico\s*\(acth\)|acth)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        vitamin_d: [
+            /(?:25-hidroxivitamina\s*d\s*\(vitamina\s*d\)|25-hidroxivitamina\s*d|vitamina\s*d)\s*(?:\(25-oh\)|25-oh)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        vitamin_b12: [
+            /(?:vitamina\s*b-?12(?:,\s*dosagem)?|cobalamina)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        vitamin_a: [
+            /vitamina\s*a\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        vitamin_c: [
+            /vitamina\s*c\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        ferritin: [
+            /ferritina\s*(?:s[eé]rica)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        serum_iron: [
+            /ferro\s*(?:s[eé]rico)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        magnesium: [
+            /magn[eé]sio\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        zinc: [
+            /(?:zinco\s*sangu[ií]neo|zinco(?:\s*s[eé]rico)?)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        copper: [
+            /cobre\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        calcium: [
+            /c[aá]lcio\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        phosphorus: [
+            /f[oó]sforo\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        potassium: [
+            /pot[aá]ssio\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        sodium: [
+            /s[oó]dio\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        folic_acid: [
+            /(?:[aá]cido\s*f[oó]lico|folato)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        cholesterol_total: [
+            /colesterol\s*total\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        cholesterol_ldl: [
+            /(?:colesterol\s+)?ldl(?:\s*-\s*colesterol)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i,
+            /colesterol\s*ldl\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        cholesterol_hdl: [
+            /(?:hdl\s*-\s*colesterol|colesterol\s*hdl)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        triglycerides: [
+            /(?:triglic[eé]rides?|triglicer[ií]deos?)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        fasting_glucose: [
+            /(?:glicose\s*de\s*jejum|glicemia(?:\s*(?:em\s*jejum|de\s*jejum))?|glicose)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        hba1c: [
+            /(?:hemoglobina\s*glicada(?:\s*-\s*hba1c)?|hba1c)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        fasting_insulin: [
+            /insulina(?:\s*com\s*[ií]ndice\s*homa|\s*basal|\s*em\s*jejum)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        homa_ir: [
+            /homa\s*-\s*ir\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        hemoglobin: [
+            /hemoglobina\s*[:\.]?\s*(\d+[\.,]\d+|\d+)\s*(?:g\/d[lL])?/i
+        ],
+        hematocrit: [
+            /hemat[oó]crito\s*[:\.]?\s*(\d+[\.,]\d+|\d+)\s*%/i
+        ],
+        leukocytes: [
+            /leuc[oó]citos\s*(?:\d+\s+)?(\d+[\.,]?\d*)/i
+        ],
+        platelets: [
+            /(?:contagem\s*de\s*plaquetas|plaquetas)\s*[:\.]?\s*(\d+[\.,]?\d*)/i
+        ],
+        crp: [
+            /(?:prote[ií]na\s*c\s*reativa\s*ultra\s*sens[ií]vel|pcr\s*ultra\s*sens[ií]vel|pcr)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        homocysteine: [
+            /homociste[ií]na\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        vhs: [
+            /hemossedimenta[cç][aã]o\s*\(vhs\)\s*1[aª]\s*hora\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        creatinine: [
+            /creatinina\s*(?:s[eé]rica)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        urea: [
+            /ur[eé]ia\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        ast_tgo: [
+            /(?:transaminase\s*oxalac[eé]tica\s*-\s*tgo|ast|tgo)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        alt_tgp: [
+            /(?:transaminase\s*pir[uú]vica\s*-\s*tgp|alt|tgp)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        gamma_gt: [
+            /(?:gama\s*-\s*glutamil\s*transferase|gama\s*gt|ggt)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        alkaline_phosphatase: [
+            /fosfatase\s*alcalina\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        uric_acid: [
+            /[aá]cido\s*[uú]rico\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        weight: [
+            /peso\s*(?:corporal)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)\s*(?:kg)?/i
+        ],
+        body_fat_pct: [
+            /(?:percentual\s*de\s*gordura|gordura\s*corporal|%bf|%gordura)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)\s*%/i
+        ],
+        muscle_mass: [
+            /(?:massa\s*muscular\s*esquel[eé]tica|massa\s*muscular)\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        fat_mass: [
+            /massa\s*gorda\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        visceral_fat: [
+            /gordura\s*visceral\s*(?:n[ií]vel)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)/i
+        ],
+        body_water_pct: [
+            /[aá]gua\s*corporal\s*(?:total)?\s*[:\.]?\s*(\d+[\.,]\d+|\d+)\s*%/i
+        ]
+    };
+
+    HEALTH_BIOMARKER_CATALOG.forEach(catalogItem => {
+        const regexList = patterns[catalogItem.key];
+        if (regexList) {
+            const val = matchVal(regexList);
+            if (val !== null && !isNaN(val)) {
+                results.push({
+                    key: catalogItem.key,
+                    name: catalogItem.name,
+                    category: catalogItem.category,
+                    value: val,
+                    unit: catalogItem.unit,
+                    refMin: catalogItem.refMin,
+                    refMax: catalogItem.refMax
+                });
+            }
+        }
+    });
+
+    return results;
+}
+
+// ================================================================
+// PURE JS MD5, RC4 & PDF REVISION 2/3 DECRYPTOR
+// ================================================================
+
+function pdfMd5(bytes) {
+    function safe_add(x, y) {
+        const lsw = (x & 0xFFFF) + (y & 0xFFFF);
+        const msw = (x >> 16) + (y >> 16) + (lsw >> 16);
+        return (msw << 16) | (lsw & 0xFFFF);
+    }
+    function rol(num, cnt) { return (num << cnt) | (num >>> (32 - cnt)); }
+    function cmn(q, a, b, x, s, t) { return safe_add(rol(safe_add(safe_add(a, q), safe_add(x, t)), s), b); }
+    function ff(a, b, c, d, x, s, t) { return cmn((b & c) | ((~b) & d), a, b, x, s, t); }
+    function gg(a, b, c, d, x, s, t) { return cmn((b & d) | (c & (~d)), a, b, x, s, t); }
+    function hh(a, b, c, d, x, s, t) { return cmn(b ^ c ^ d, a, b, x, s, t); }
+    function ii(a, b, c, d, x, s, t) { return cmn(c ^ (b | (~d)), a, b, x, s, t); }
+
+    const nblk = ((bytes.length + 8) >> 6) + 1;
+    const blks = new Array(nblk * 16).fill(0);
+    for (let i = 0; i < bytes.length; i++) {
+        blks[i >> 2] |= bytes[i] << ((i % 4) * 8);
+    }
+    blks[bytes.length >> 2] |= 0x80 << ((bytes.length % 4) * 8);
+    blks[nblk * 16 - 2] = bytes.length * 8;
+
+    let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+    for (let i = 0; i < blks.length; i += 16) {
+        const olda = a, oldb = b, oldc = c, oldd = d;
+        a = ff(a, b, c, d, blks[i], 7, -680876936);
+        d = ff(d, a, b, c, blks[i+1], 12, -389564586);
+        c = ff(c, d, a, b, blks[i+2], 17, 606105819);
+        b = ff(b, c, d, a, blks[i+3], 22, -1044525330);
+        a = ff(a, b, c, d, blks[i+4], 7, -176418897);
+        d = ff(d, a, b, c, blks[i+5], 12, 1200080426);
+        c = ff(c, d, a, b, blks[i+6], 17, -1473231341);
+        b = ff(b, c, d, a, blks[i+7], 22, -45705983);
+        a = ff(a, b, c, d, blks[i+8], 7, 1770035416);
+        d = ff(d, a, b, c, blks[i+9], 12, -1958414417);
+        c = ff(c, d, a, b, blks[i+10], 17, -42063);
+        b = ff(b, c, d, a, blks[i+11], 22, -1990404162);
+        a = ff(a, b, c, d, blks[i+12], 7, 1804603682);
+        d = ff(d, a, b, c, blks[i+13], 12, -40341101);
+        c = ff(c, d, a, b, blks[i+14], 17, -1502002290);
+        b = ff(b, c, d, a, blks[i+15], 22, 1236535329);
+
+        a = gg(a, b, c, d, blks[i+1], 5, -165796510);
+        d = gg(d, a, b, c, blks[i+6], 9, -1069501632);
+        c = gg(c, d, a, b, blks[i+11], 14, 643717713);
+        b = gg(b, c, d, a, blks[i], 20, -373897302);
+        a = gg(a, b, c, d, blks[i+5], 5, -701558691);
+        d = gg(d, a, b, c, blks[i+10], 9, 38016083);
+        c = gg(c, d, a, b, blks[i+15], 14, -660478335);
+        b = gg(b, c, d, a, blks[i+4], 20, -405537848);
+        a = gg(a, b, c, d, blks[i+9], 5, 568446438);
+        d = gg(d, a, b, c, blks[i+14], 9, -1019803690);
+        c = gg(c, d, a, b, blks[i+3], 14, -187363961);
+        b = gg(b, c, d, a, blks[i+8], 20, 1163531501);
+        a = gg(a, b, c, d, blks[i+13], 5, -1444681467);
+        d = gg(d, a, b, c, blks[i+2], 9, -51403784);
+        c = gg(c, d, a, b, blks[i+7], 14, 1735328473);
+        b = gg(b, c, d, a, blks[i+12], 20, -1926607734);
+
+        a = hh(a, b, c, d, blks[i+5], 4, -378558);
+        d = hh(d, a, b, c, blks[i+8], 11, -2022574463);
+        c = hh(c, d, a, b, blks[i+11], 16, 1839030562);
+        b = hh(b, c, d, a, blks[i+14], 23, -35309556);
+        a = hh(a, b, c, d, blks[i+1], 4, -1530992060);
+        d = hh(d, a, b, c, blks[i+4], 11, 1272893353);
+        c = hh(c, d, a, b, blks[i+7], 16, -155497632);
+        b = hh(b, c, d, a, blks[i+10], 23, -1094730640);
+        a = hh(a, b, c, d, blks[i+13], 4, 681279174);
+        d = hh(d, a, b, c, blks[i], 11, -358537222);
+        c = hh(c, d, a, b, blks[i+3], 16, -722521979);
+        b = hh(b, c, d, a, blks[i+6], 23, 76029189);
+        a = hh(a, b, c, d, blks[i+9], 4, -640364487);
+        d = hh(d, a, b, c, blks[i+12], 11, -421815835);
+        c = hh(c, d, a, b, blks[i+15], 16, 530742520);
+        b = hh(b, c, d, a, blks[i+2], 23, -995338651);
+
+        a = ii(a, b, c, d, blks[i], 6, -198630844);
+        d = ii(d, a, b, c, blks[i+7], 10, 1126891415);
+        c = ii(c, d, a, b, blks[i+14], 15, -1416354905);
+        b = ii(b, c, d, a, blks[i+5], 21, -57434055);
+        a = ii(a, b, c, d, blks[i+12], 6, 1700485571);
+        d = ii(d, a, b, c, blks[i+3], 10, -1894986606);
+        c = ii(c, d, a, b, blks[i+10], 15, -1051523);
+        b = ii(b, c, d, a, blks[i+1], 21, -2054922799);
+        a = ii(a, b, c, d, blks[i+8], 6, 1873313359);
+        d = ii(d, a, b, c, blks[i+15], 10, -30611744);
+        c = ii(c, d, a, b, blks[i+6], 15, -1560198380);
+        b = ii(b, c, d, a, blks[i+13], 21, 1309151649);
+        a = ii(a, b, c, d, blks[i+4], 6, -145523070);
+        d = ii(d, a, b, c, blks[i+11], 10, -1120210379);
+        c = ii(c, d, a, b, blks[i+2], 15, 718787259);
+        b = ii(b, c, d, a, blks[i+9], 21, -343485551);
+
+        a = safe_add(a, olda);
+        b = safe_add(b, oldb);
+        c = safe_add(c, oldc);
+        d = safe_add(d, oldd);
+    }
+
+    const res = new Uint8Array(16);
+    const words = [a, b, c, d];
+    for (let i = 0; i < 16; i++) {
+        res[i] = (words[i >> 2] >> ((i % 4) * 8)) & 0xFF;
+    }
+    return res;
+}
+
+function pdfRc4(key, data) {
+    const s = new Array(256);
+    for (let i = 0; i < 256; i++) s[i] = i;
+    let j = 0;
+    for (let i = 0; i < 256; i++) {
+        j = (j + s[i] + key[i % key.length]) & 0xFF;
+        const tmp = s[i]; s[i] = s[j]; s[j] = tmp;
+    }
+    let i = 0; j = 0;
+    const out = new Uint8Array(data.length);
+    for (let k = 0; k < data.length; k++) {
+        i = (i + 1) & 0xFF;
+        j = (j + s[i]) & 0xFF;
+        const tmp = s[i]; s[i] = s[j]; s[j] = tmp;
+        out[k] = data[k] ^ s[(s[i] + s[j]) & 0xFF];
+    }
+    return out;
+}
+
+const PDF_STANDARD_PADDING = new Uint8Array([
+    0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41,
+    0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08,
+    0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80,
+    0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a
+]);
+
+function parsePdfRawString(str) {
+    const bytes = [];
+    for (let i = 0; i < str.length; i++) {
+        if (str[i] === '\\') {
+            i++;
+            if (i >= str.length) break;
+            const c = str[i];
+            if (c === 'n') bytes.push(10);
+            else if (c === 'r') bytes.push(13);
+            else if (c === 't') bytes.push(9);
+            else if (c === 'b') bytes.push(8);
+            else if (c === 'f') bytes.push(12);
+            else if (c === '(' || c === ')' || c === '\\') bytes.push(c.charCodeAt(0));
+            else if (/[0-7]/.test(c)) {
+                let oct = c;
+                if (i + 1 < str.length && /[0-7]/.test(str[i+1])) { oct += str[++i]; }
+                if (i + 1 < str.length && /[0-7]/.test(str[i+1])) { oct += str[++i]; }
+                bytes.push(parseInt(oct, 8));
+            } else {
+                bytes.push(c.charCodeAt(0));
+            }
+        } else {
+            bytes.push(str.charCodeAt(i));
+        }
+    }
+    return new Uint8Array(bytes);
+}
+
+function parseHexPdf(hexStr) {
+    const clean = hexStr.replace(/[^0-9A-Fa-f]/g, '');
+    const bytes = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < clean.length; i += 2) {
+        bytes[i / 2] = parseInt(clean.substr(i, 2), 16);
+    }
+    return bytes;
+}
+
+function uint8ToStr(bytes) {
+    let s = '';
+    const chunk = 32768;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+    }
+    return s;
+}
+
+function findSequence(buffer, sequence, fromIndex = 0) {
+    for (let i = fromIndex; i <= buffer.length - sequence.length; i++) {
+        let found = true;
+        for (let j = 0; j < sequence.length; j++) {
+            if (buffer[i + j] !== sequence[j]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) return i;
+    }
+    return -1;
+}
+
+async function decompressPdfStream(bytes) {
+    if (!bytes || bytes.length === 0) return null;
+    if (typeof window !== 'undefined' && typeof window.require === 'function') {
+        try {
+            const zlib = window.require('zlib');
+            if (zlib) {
+                try {
+                    const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                    return new Uint8Array(zlib.inflateSync(buf));
+                } catch (e1) {
+                    try {
+                        const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                        return new Uint8Array(zlib.inflateRawSync(buf));
+                    } catch (e2) {}
+                }
+            }
+        } catch (e) {}
+    }
+    if (typeof DecompressionStream !== 'undefined') {
+        try {
+            const raw = (bytes.length > 2 && bytes[0] === 0x78) ? bytes.subarray(2, bytes.length - 4) : bytes;
+            const ds = new DecompressionStream('deflate-raw');
+            const writer = ds.writable.getWriter();
+            writer.write(raw);
+            writer.close();
+            const r = new Response(ds.readable);
+            return new Uint8Array(await r.arrayBuffer());
+        } catch(e1) {
+            try {
+                const ds2 = new DecompressionStream('deflate');
+                const writer2 = ds2.writable.getWriter();
+                writer2.write(bytes);
+                writer2.close();
+                const r2 = new Response(ds2.readable);
+                return new Uint8Array(await r2.arrayBuffer());
+            } catch(e2) {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
+async function extractTextFromPdfFile(file, app) {
+    if (!file) return '';
+    try {
+        let arrayBuffer;
+        if (file instanceof File) {
+            arrayBuffer = await file.arrayBuffer();
+        } else if (file.path && app?.vault) {
+            arrayBuffer = await app.vault.readBinary(file);
+        }
+        if (!arrayBuffer) return '';
+
+        const uint8 = new Uint8Array(arrayBuffer);
+        const rawPdfStr = uint8ToStr(uint8);
+
+        // 1. Check for Encryption in Trailer / Encrypt Dictionary
+        let masterKey = null;
+        let keyLen = 5;
+        const encryptRefMatch = rawPdfStr.match(/\/Encrypt\s+(\d+)\s+(\d+)\s+R/);
+        const idMatch = rawPdfStr.match(/\/ID\s*\[\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*\]/);
+
+        if (encryptRefMatch) {
+            const encObjNum = encryptRefMatch[1];
+            const encObjRegex = new RegExp(`${encObjNum}\\s+0\\s+obj([\\s\\S]*?)endobj`);
+            const encObjMatch = rawPdfStr.match(encObjRegex);
+            if (encObjMatch) {
+                const encDict = encObjMatch[1];
+                const oMatch = encDict.match(/\/O\s*\(([\s\S]*?)\)/) || encDict.match(/\/O\s*<([0-9a-fA-F]+)>/);
+                const pMatch = encDict.match(/\/P\s+(-?\d+)/);
+                const rMatch = encDict.match(/\/R\s+(\d+)/);
+                const lengthMatch = encDict.match(/\/Length\s+(\d+)/);
+
+                if (oMatch && pMatch && idMatch) {
+                    const oBytes = oMatch[1].startsWith('<') ? parseHexPdf(oMatch[1]) : parsePdfRawString(oMatch[1]);
+                    const pInt = parseInt(pMatch[1], 10);
+                    const idFirstBytes = parseHexPdf(idMatch[1]);
+                    keyLen = lengthMatch ? parseInt(lengthMatch[1], 10) / 8 : 5;
+                    const r = rMatch ? parseInt(rMatch[1], 10) : 2;
+
+                    const pwBytes = new Uint8Array(32);
+                    for (let i = 0; i < 32; i++) pwBytes[i] = PDF_STANDARD_PADDING[i];
+
+                    const pBytes = new Uint8Array([
+                        pInt & 0xFF,
+                        (pInt >> 8) & 0xFF,
+                        (pInt >> 16) & 0xFF,
+                        (pInt >> 24) & 0xFF
+                    ]);
+
+                    const concatBuf = new Uint8Array(32 + oBytes.length + 4 + idFirstBytes.length);
+                    let off = 0;
+                    concatBuf.set(pwBytes, off); off += 32;
+                    concatBuf.set(oBytes, off); off += oBytes.length;
+                    concatBuf.set(pBytes, off); off += 4;
+                    concatBuf.set(idFirstBytes, off);
+
+                    let hash = pdfMd5(concatBuf);
+                    if (r >= 3) {
+                        for (let i = 0; i < 50; i++) {
+                            hash = pdfMd5(hash.subarray(0, keyLen));
+                        }
+                    }
+                    masterKey = hash.subarray(0, keyLen);
+                }
+            }
+        }
+
+        // 2. Iterate all streams and decrypt / decompress
+        let fullExtractedText = '';
+        const streamSeq = [115, 116, 114, 101, 97, 109]; // 'stream'
+        const endstreamSeq = [101, 110, 100, 115, 116, 114, 101, 97, 109]; // 'endstream'
+
+        let idx = 0;
+        while (idx < uint8.length) {
+            const sIdx = findSequence(uint8, streamSeq, idx);
+            if (sIdx === -1) break;
+
+            // Detect object number before this stream
+            const preceding = rawPdfStr.substring(Math.max(0, sIdx - 3000), sIdx);
+            const allObjs = [...preceding.matchAll(/(\d+)\s+(\d+)\s+obj/g)];
+            const lastObj = allObjs.length > 0 ? allObjs[allObjs.length - 1] : null;
+            const objNum = lastObj ? parseInt(lastObj[1], 10) : 0;
+            const genNum = lastObj ? parseInt(lastObj[2], 10) : 0;
+
+            let start = sIdx + 6;
+            if (uint8[start] === 13) start++;
+            if (uint8[start] === 10) start++;
+
+            const eIdx = findSequence(uint8, endstreamSeq, start);
+            if (eIdx === -1) break;
+
+            let end = eIdx;
+            if (end > start && uint8[end - 1] === 10) end--;
+            if (end > start && uint8[end - 1] === 13) end--;
+
+            let streamBytes = uint8.subarray(start, end);
+
+            // Decrypt with RC4 if masterKey exists
+            if (masterKey && objNum > 0) {
+                const keyBuf = new Uint8Array(masterKey.length + 5);
+                keyBuf.set(masterKey, 0);
+                keyBuf[masterKey.length] = objNum & 0xFF;
+                keyBuf[masterKey.length + 1] = (objNum >> 8) & 0xFF;
+                keyBuf[masterKey.length + 2] = (objNum >> 16) & 0xFF;
+                keyBuf[masterKey.length + 3] = genNum & 0xFF;
+                keyBuf[masterKey.length + 4] = (genNum >> 8) & 0xFF;
+                const objKey = pdfMd5(keyBuf).subarray(0, Math.min(masterKey.length + 5, 16));
+                streamBytes = pdfRc4(objKey, streamBytes);
+            }
+
+            // Decompress
+            const decomp = await decompressPdfStream(streamBytes);
+            const streamText = decomp ? uint8ToStr(decomp) : uint8ToStr(streamBytes);
+
+            // Extract (text) Tj
+            const tjMatches = streamText.match(/\(([^)]+)\)\s*Tj/g);
+            if (tjMatches) {
+                tjMatches.forEach(t => {
+                    const sub = t.match(/\(([^)]+)\)\s*Tj/);
+                    if (sub && sub[1]) fullExtractedText += sub[1] + ' ';
+                });
+            }
+
+            // Extract [(t)(e)(x)(t)] TJ
+            const tjArr = streamText.match(/\[([^\]]+)\]\s*TJ/g);
+            if (tjArr) {
+                tjArr.forEach(t => {
+                    const parts = t.match(/\(([^)]*)\)/g);
+                    if (parts) {
+                        parts.forEach(p => {
+                            fullExtractedText += p.slice(1, -1);
+                        });
+                        fullExtractedText += ' ';
+                    }
+                });
+            }
+
+            // Extract Hex <00410042> Tj
+            const hexMatches = streamText.match(/<([0-9a-fA-F]+)>\s*Tj/g);
+            if (hexMatches) {
+                hexMatches.forEach(h => {
+                    const sub = h.match(/<([0-9a-fA-F]+)>\s*Tj/);
+                    if (sub && sub[1]) {
+                        const hex = sub[1];
+                        let s = '';
+                        if (hex.length >= 4 && hex.startsWith('00')) {
+                            for (let k = 0; k < hex.length; k += 4) {
+                                s += String.fromCharCode(parseInt(hex.substr(k, 4), 16));
+                            }
+                        } else {
+                            for (let k = 0; k < hex.length; k += 2) {
+                                s += String.fromCharCode(parseInt(hex.substr(k, 2), 16));
+                            }
+                        }
+                        fullExtractedText += s + ' ';
+                    }
+                });
+            }
+
+            // Plain words
+            const words = streamText.match(/[A-Za-zÀ-ÿ0-9,.:% \/\-]{3,}/g);
+            if (words) {
+                fullExtractedText += ' ' + words.join(' ');
+            }
+
+            idx = eIdx + 9;
+        }
+
+        const rawMatches = rawPdfStr.match(/[A-Za-zÀ-ÿ0-9,.:% \/\-]{4,}/g);
+        if (rawMatches) {
+            fullExtractedText += ' ' + rawMatches.join(' ');
+        }
+
+        return fullExtractedText;
+    } catch (err) {
+        console.warn('Erro ao ler PDF:', err);
+        return '';
+    }
+}
+
+function extractLabAndDateFromPdfText(text) {
+    let date = '';
+    let lab = '';
+
+    if (!text || typeof text !== 'string') return { date, lab };
+
+    // Match Date (e.g. Data de Coleta/Recebimento: 31/01/2026 or Coleta: 31/01/2026)
+    const dateMatch = text.match(/(?:Data\s*(?:da\s*coleta|de\s*coleta|de\s*recebimento|de\s*realiza[cç][aã]o|do\s*exame)?|Coleta|Recebimento|Realizado\s*em)\s*[:\.]?\s*(\d{2})[\/\-](\d{2})[\/\-](\d{4})/i);
+    if (dateMatch) {
+        date = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    }
+
+    // Match Laboratory
+    if (text.match(/lustosa/i)) {
+        lab = 'Laboratório Lustosa';
+    } else if (text.match(/hermes\s*pardini/i)) {
+        lab = 'Hermes Pardini';
+    } else if (text.match(/sabin/i)) {
+        lab = 'Laboratório Sabin';
+    } else if (text.match(/fleury/i)) {
+        lab = 'Grupo Fleury';
+    } else if (text.match(/lavoisier/i)) {
+        lab = 'Lavoisier';
+    } else if (text.match(/dasa/i)) {
+        lab = 'DASA';
+    } else if (text.match(/lab\s*diniz/i)) {
+        lab = 'Lab Diniz';
+    } else if (text.match(/s[aã]o\s*marcos/i)) {
+        lab = 'Laboratório São Marcos';
+    }
+
+    return { date, lab };
+}
+
+async function linkExamPdfToKanban(app, pdfPath, examTitle, examDate) {
+    if (!pdfPath || !app?.vault) return;
+    try {
+        const kanbanFiles = app.vault.getMarkdownFiles().filter(f => f.path.toLowerCase().includes('kanban'));
+        const file = kanbanFiles.length > 0 ? kanbanFiles[0] : app.vault.getAbstractFileByPath('Kanban.md');
+        if (!file) return;
+
+        let content = await app.vault.read(file);
+        const linkStr = `![[${pdfPath}]]`;
+        if (content.includes(pdfPath) || content.includes(linkStr)) {
+            return; // already linked
+        }
+
+        const cardText = `- [ ] ${examTitle || 'Exame'} (${examDate || ''}) ${linkStr}\n`;
+        const sectionHeader = '## Exames & Laudos <!-- color: #0284c7 -->';
+
+        if (content.includes('## Exames & Laudos')) {
+            content = content.replace(/(## Exames & Laudos[^\n]*\n)/, `$1\n${cardText}`);
+        } else if (content.includes('%% kanban:settings')) {
+            content = content.replace('%% kanban:settings', `${sectionHeader}\n\n${cardText}\n\n%% kanban:settings`);
+        } else {
+            content += `\n\n${sectionHeader}\n\n${cardText}\n`;
+        }
+
+        await app.vault.modify(file, content);
+    } catch (err) {
+        console.warn('Erro ao vincular PDF no Kanban:', err);
+    }
+}
+
+// ================================================================
+// HEALTH MODALS (CLEAN & ALIGNED)
+// ================================================================
+
+class HealthProfileModal extends obsidian.Modal {
+    constructor(app, profile, onSave, onDelete) {
+        super(app);
+        this.profile = profile ? Object.assign({}, profile) : {
+            id: `profile-${Date.now()}`,
+            name: '',
+            type: 'human',
+            species: '',
+            breed: '',
+            birthDate: '',
+            bloodType: '',
+            microchip: '',
+            notes: '',
+            color: '#38bdf8'
+        };
+        this.isNew = !profile;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? 'Novo Perfil de Saúde' : 'Editar Perfil de Saúde' });
+
+        // Name
+        const nameField = contentEl.createDiv('kt-form-field');
+        nameField.createEl('label', { text: 'Nome do Perfil / Indivíduo:' });
+        const nameInput = nameField.createEl('input', { type: 'text', value: this.profile.name });
+        nameInput.placeholder = 'Ex: Caio, Ana, Kairi, Violeta';
+
+        // Type
+        const typeField = contentEl.createDiv('kt-form-field');
+        typeField.createEl('label', { text: 'Tipo de Perfil:' });
+        const typeSelect = typeField.createEl('select');
+        [
+            { id: 'human', label: 'Humano (Você / Família)' },
+            { id: 'pet', label: 'Pet (Cão / Gato / Outro animal)' }
+        ].forEach(opt => {
+            const el = typeSelect.createEl('option', { value: opt.id, text: opt.label });
+            if (opt.id === this.profile.type) el.selected = true;
+        });
+
+        // Pet Specific Group
+        const petGroup = contentEl.createDiv('kt-pet-group');
+        petGroup.style.display = this.profile.type === 'pet' ? 'flex' : 'none';
+        petGroup.style.flexDirection = 'column';
+        petGroup.style.gap = '8px';
+
+        const rowPet = petGroup.createDiv('kt-form-row');
+        const speciesField = rowPet.createDiv('kt-form-field');
+        speciesField.createEl('label', { text: 'Espécie:' });
+        const speciesInput = speciesField.createEl('input', { type: 'text', value: this.profile.species || '' });
+        speciesInput.placeholder = 'Ex: Felino, Canino';
+
+        const breedField = rowPet.createDiv('kt-form-field');
+        breedField.createEl('label', { text: 'Raça:' });
+        const breedInput = breedField.createEl('input', { type: 'text', value: this.profile.breed || '' });
+        breedInput.placeholder = 'Ex: SRD, Siamês, Golden';
+
+        const microchipField = petGroup.createDiv('kt-form-field');
+        microchipField.createEl('label', { text: 'Microchip / Registro:' });
+        const microchipInput = microchipField.createEl('input', { type: 'text', value: this.profile.microchip || '' });
+
+        typeSelect.onchange = () => {
+            petGroup.style.display = typeSelect.value === 'pet' ? 'flex' : 'none';
+        };
+
+        // Birth Date & Blood Type (Row)
+        const rowDates = contentEl.createDiv('kt-form-row');
+        const birthField = rowDates.createDiv('kt-form-field');
+        birthField.createEl('label', { text: 'Data de Nascimento:' });
+        const birthInput = birthField.createEl('input', { type: 'date', value: this.profile.birthDate || '' });
+
+        const bloodField = rowDates.createDiv('kt-form-field');
+        bloodField.createEl('label', { text: 'Tipo Sanguíneo:' });
+        const bloodInput = bloodField.createEl('input', { type: 'text', value: this.profile.bloodType || '' });
+        bloodInput.placeholder = 'Ex: O+, A-, DEA 1.1';
+
+        // Color Accent
+        const colorField = contentEl.createDiv('kt-form-field');
+        colorField.createEl('label', { text: 'Cor de Identificação:' });
+        const colorInput = colorField.createEl('input', { type: 'color', value: this.profile.color || '#38bdf8' });
+        colorInput.style.height = '36px';
+
+        // Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Observações / Alergias / Histórico:' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.profile.notes || '';
+        notesInput.rows = 2;
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir Perfil' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.profile.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Perfil' });
+        saveBtn.onclick = () => {
+            const name = nameInput.value.trim();
+            if (!name) {
+                new obsidian.Notice('Por favor, informe o nome do perfil.');
+                return;
+            }
+            this.profile.name = name;
+            this.profile.type = typeSelect.value;
+            this.profile.species = speciesInput.value.trim();
+            this.profile.breed = breedInput.value.trim();
+            this.profile.birthDate = birthInput.value;
+            this.profile.bloodType = bloodInput.value.trim();
+            this.profile.microchip = microchipInput.value.trim();
+            this.profile.color = colorInput.value;
+            this.profile.notes = notesInput.value.trim();
+
+            this.close();
+            this.onSave(this.profile);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthDailyLogModal extends obsidian.Modal {
+    constructor(app, profile, dateStr, currentLog, onSave) {
+        super(app);
+        this.profile = profile;
+        this.dateStr = dateStr || new Date().toISOString().split('T')[0];
+        this.log = currentLog ? Object.assign({}, currentLog) : {
+            weight: undefined,
+            water: 0,
+            sleepHours: undefined,
+            sleepQuality: 3,
+            mood: 3,
+            stress: 2,
+            energy: 3,
+            notes: ''
+        };
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: `Registro Diário — ${this.profile.name}` });
+
+        // Date
+        const dateField = contentEl.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data do Registro:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.dateStr });
+
+        // Row 1: Weight & Water
+        const row1 = contentEl.createDiv('kt-form-row');
+        const weightField = row1.createDiv('kt-form-field');
+        weightField.createEl('label', { text: 'Peso Corporal (kg):' });
+        const weightInput = weightField.createEl('input', { type: 'number', step: '0.1', value: this.log.weight || '' });
+        weightInput.placeholder = 'Ex: 82.5';
+
+        const waterField = row1.createDiv('kt-form-field');
+        waterField.createEl('label', { text: 'Água Ingerida (ml):' });
+        const waterInput = waterField.createEl('input', { type: 'number', step: '50', value: this.log.water || 0 });
+
+        // Row 2: Sleep Hours & Sleep Quality
+        const row2 = contentEl.createDiv('kt-form-row');
+        const sleepHoursField = row2.createDiv('kt-form-field');
+        sleepHoursField.createEl('label', { text: 'Horas de Sono:' });
+        const sleepHoursInput = sleepHoursField.createEl('input', { type: 'number', step: '0.5', value: this.log.sleepHours || '' });
+        sleepHoursInput.placeholder = 'Ex: 7.5';
+
+        const sleepQualField = row2.createDiv('kt-form-field');
+        sleepQualField.createEl('label', { text: 'Qualidade do Sono (1 a 5):' });
+        const sleepQualSelect = sleepQualField.createEl('select');
+        [
+            { v: 1, l: '1 - Muito Ruim / Interrompido' },
+            { v: 2, l: '2 - Ruim' },
+            { v: 3, l: '3 - Regular' },
+            { v: 4, l: '4 - Bom / Reparador' },
+            { v: 5, l: '5 - Excelente' }
+        ].forEach(opt => {
+            const el = sleepQualSelect.createEl('option', { value: String(opt.v), text: opt.l });
+            if (opt.v === (this.log.sleepQuality || 3)) el.selected = true;
+        });
+
+        // Row 3: Mood & Stress (Mental Health)
+        const row3 = contentEl.createDiv('kt-form-row');
+        const moodField = row3.createDiv('kt-form-field');
+        moodField.createEl('label', { text: 'Humor / Disposição (1 a 5):' });
+        const moodSelect = moodField.createEl('select');
+        [
+            { v: 1, l: '1 - Muito Baixo / Desanimado' },
+            { v: 2, l: '2 - Baixo' },
+            { v: 3, l: '3 - Neutro / Normal' },
+            { v: 4, l: '4 - Bom / Produtivo' },
+            { v: 5, l: '5 - Excelente / Radiante' }
+        ].forEach(opt => {
+            const el = moodSelect.createEl('option', { value: String(opt.v), text: opt.l });
+            if (opt.v === (this.log.mood || 3)) el.selected = true;
+        });
+
+        const stressField = row3.createDiv('kt-form-field');
+        stressField.createEl('label', { text: 'Nível de Estresse (1 a 5):' });
+        const stressSelect = stressField.createEl('select');
+        [
+            { v: 1, l: '1 - Muito Baixo / Relaxado' },
+            { v: 2, l: '2 - Baixo / Sob Controle' },
+            { v: 3, l: '3 - Moderado' },
+            { v: 4, l: '4 - Alto / Sob Pressão' },
+            { v: 5, l: '5 - Crítico / Risco Burnout' }
+        ].forEach(opt => {
+            const el = stressSelect.createEl('option', { value: String(opt.v), text: opt.l });
+            if (opt.v === (this.log.stress || 2)) el.selected = true;
+        });
+
+        // Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Notas do Dia / Gatilhos de Estresse / Treinos:' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.log.notes || '';
+        notesInput.rows = 2;
+        notesInput.placeholder = 'Ex: Reunião tensa à tarde, treino de pernas intenso...';
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '8px';
+        footer.style.marginTop = '16px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Salvar Registro' });
+        saveBtn.onclick = () => {
+            const date = dateInput.value;
+            if (!date) {
+                new obsidian.Notice('Por favor, informe a data.');
+                return;
+            }
+            this.log.weight = weightInput.value ? parseFloat(weightInput.value) : undefined;
+            this.log.water = waterInput.value ? parseInt(waterInput.value, 10) : 0;
+            this.log.sleepHours = sleepHoursInput.value ? parseFloat(sleepHoursInput.value) : undefined;
+            this.log.sleepQuality = parseInt(sleepQualSelect.value, 10);
+            this.log.mood = parseInt(moodSelect.value, 10);
+            this.log.stress = parseInt(stressSelect.value, 10);
+            this.log.notes = notesInput.value.trim();
+
+            this.close();
+            this.onSave(date, this.log);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthConsultationModal extends obsidian.Modal {
+    constructor(app, profile, consultation, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.isPet = profile?.type === 'pet';
+        this.consultation = consultation ? Object.assign({}, consultation) : {
+            id: `cons-${Date.now()}`,
+            date: new Date().toISOString().split('T')[0],
+            doctorName: '',
+            specialty: this.isPet ? 'Clínica Veterinária' : 'Clínico Geral',
+            clinicOrHospital: '',
+            problemOrReason: '',
+            diagnosis: '',
+            prescriptions: '',
+            requestedExams: '',
+            returnDate: '',
+            returnStatus: 'pending',
+            pdfPath: '',
+            notes: ''
+        };
+        this.isNew = !consultation;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '600px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? (this.isPet ? 'Nova Consulta Veterinária' : 'Nova Consulta Médica') : 'Editar Consulta' });
+
+        // Row 1: Date & Specialty
+        const row1 = contentEl.createDiv('kt-form-row');
+        const dateField = row1.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data da Consulta:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.consultation.date });
+
+        const specField = row1.createDiv('kt-form-field');
+        specField.createEl('label', { text: 'Especialidade:' });
+        const specInput = specField.createEl('input', { type: 'text', value: this.consultation.specialty });
+        specInput.placeholder = this.isPet ? 'Ex: Veterinária, Dermatologia' : 'Ex: Psiquiatra, Cardiologista';
+
+        // Row 2: Doctor Name & Clinic
+        const row2 = contentEl.createDiv('kt-form-row');
+        const docField = row2.createDiv('kt-form-field');
+        docField.createEl('label', { text: this.isPet ? 'Veterinário(a):' : 'Médico(a) / Profissional:' });
+        const docInput = docField.createEl('input', { type: 'text', value: this.consultation.doctorName });
+        docInput.placeholder = 'Ex: Dr. Matheus';
+
+        const clinicField = row2.createDiv('kt-form-field');
+        clinicField.createEl('label', { text: 'Clínica / Hospital:' });
+        const clinicInput = clinicField.createEl('input', { type: 'text', value: this.consultation.clinicOrHospital || '' });
+        clinicInput.placeholder = 'Ex: Hospital Mater Dei, Clínica Alpha';
+
+        // Reason / Problem
+        const reasonField = contentEl.createDiv('kt-form-field');
+        reasonField.createEl('label', { text: 'Motivo / Queixa Principal:' });
+        const reasonInput = reasonField.createEl('input', { type: 'text', value: this.consultation.problemOrReason });
+        reasonInput.placeholder = 'Ex: Ansiedade e TDAH, checkup de rotina, dor lombar';
+
+        // Diagnosis / Laudo
+        const diagField = contentEl.createDiv('kt-form-field');
+        diagField.createEl('label', { text: 'Diagnóstico / Laudo / Parecer:' });
+        const diagInput = diagField.createEl('textarea');
+        diagInput.value = this.consultation.diagnosis || '';
+        diagInput.rows = 2;
+        diagInput.placeholder = 'Ex: Quadro de ansiedade generalizada com melhora progressiva...';
+
+        // Prescriptions / Receitas
+        const presField = contentEl.createDiv('kt-form-field');
+        presField.createEl('label', { text: 'Receita / Medicamentos / Conduta:' });
+        const presInput = presField.createEl('textarea');
+        presInput.value = this.consultation.prescriptions || '';
+        presInput.rows = 2;
+        presInput.placeholder = 'Ex: Medicamento X 50mg pela manhã, Vitamina D 50.000 UI semanal';
+
+        // Requested Exams & Return Date
+        const row3 = contentEl.createDiv('kt-form-row');
+        const examsField = row3.createDiv('kt-form-field');
+        examsField.createEl('label', { text: 'Exames Solicitados:' });
+        const examsInput = examsField.createEl('input', { type: 'text', value: Array.isArray(this.consultation.requestedExams) ? this.consultation.requestedExams.join(', ') : (this.consultation.requestedExams || '') });
+        examsInput.placeholder = 'Ex: Hemograma, Perfil Lipídico, TSH';
+
+        const returnField = row3.createDiv('kt-form-field');
+        returnField.createEl('label', { text: 'Data de Retorno Previsto:' });
+        const returnInput = returnField.createEl('input', { type: 'date', value: this.consultation.returnDate || '' });
+
+        // PDF Attachment Path in Vault
+        const pdfField = contentEl.createDiv('kt-form-field');
+        pdfField.createEl('label', { text: 'Arquivo de Laudo / PDF no Cofre (Opcional):' });
+        
+        const pdfRow = pdfField.createDiv('kt-health-pdf-row');
+
+        const pdfInput = pdfRow.createEl('input', { type: 'text', value: this.consultation.pdfPath || '' });
+        pdfInput.placeholder = 'Ex: Exames/Laudo_Consulta.pdf';
+        pdfInput.style.flex = '1';
+
+        const vaultPdfs = this.app.vault.getFiles().filter(f => f.extension.toLowerCase() === 'pdf' && (f.path.startsWith('Exames/') || f.path.toLowerCase().includes('exame') || f.path.toLowerCase().includes('laudo') || f.path.toLowerCase().includes('consulta')));
+        if (vaultPdfs.length > 0) {
+            const selectExisting = pdfRow.createEl('select');
+            selectExisting.style.width = '180px';
+            selectExisting.createEl('option', { value: '', text: 'Selecionar PDF...' });
+            vaultPdfs.forEach(p => {
+                selectExisting.createEl('option', { value: p.path, text: p.name });
+            });
+            selectExisting.onchange = () => {
+                if (selectExisting.value) {
+                    pdfInput.value = selectExisting.value;
+                }
+            };
+        }
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir Consulta' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.consultation.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Consulta' });
+        saveBtn.onclick = () => {
+            const reason = reasonInput.value.trim();
+            if (!reason) {
+                new obsidian.Notice('Por favor, informe o motivo ou queixa da consulta.');
+                return;
+            }
+            this.consultation.date = dateInput.value;
+            this.consultation.specialty = specInput.value.trim() || 'Clínico Geral';
+            this.consultation.doctorName = docInput.value.trim();
+            this.consultation.clinicOrHospital = clinicInput.value.trim();
+            this.consultation.problemOrReason = reason;
+            this.consultation.diagnosis = diagInput.value.trim();
+            this.consultation.prescriptions = presInput.value.trim();
+            this.consultation.requestedExams = examsInput.value.trim();
+            this.consultation.returnDate = returnInput.value;
+            this.consultation.returnStatus = returnInput.value ? 'scheduled' : 'none';
+            this.consultation.pdfPath = pdfInput.value.trim();
+
+            this.close();
+            this.onSave(this.consultation);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthExamModal extends obsidian.Modal {
+    constructor(app, profile, exam, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.exam = exam ? Object.assign({}, exam) : {
+            id: `exam-${Date.now()}`,
+            title: '',
+            date: new Date().toISOString().split('T')[0],
+            lab: '',
+            pdfPath: '',
+            notes: ''
+        };
+        this.isNew = !exam;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+        this.extractedResults = [];
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '640px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? 'Novo Exame / Importar Laudo PDF' : 'Editar Exame' });
+
+        // Title
+        const titleField = contentEl.createDiv('kt-form-field');
+        titleField.createEl('label', { text: 'Título do Exame / Laudo:' });
+        const titleInput = titleField.createEl('input', { type: 'text', value: this.exam.title });
+        titleInput.placeholder = 'Ex: Checkup Sabin 2026, Bioimpedância InBody, Hemograma';
+
+        // Row 1: Date & Lab
+        const row1 = contentEl.createDiv('kt-form-row');
+        const dateField = row1.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data da Coleta / Realização:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.exam.date });
+
+        const labField = row1.createDiv('kt-form-field');
+        labField.createEl('label', { text: 'Laboratório / Clínica / Hospital:' });
+        const labInput = labField.createEl('input', { type: 'text', value: this.exam.lab || '' });
+        labInput.placeholder = 'Ex: Hermes Pardini, Sabin, Lab Diniz, Lustosa';
+
+        // Row 2: PDF Selector & Dropzone
+        const pdfField = contentEl.createDiv('kt-form-field');
+        pdfField.createEl('label', { text: 'Arquivo PDF do Laudo (No Cofre do Obsidian):' });
+        
+        // Filter vault PDFs to only show files inside Exames/ or with exame/laudo in the path
+        const vaultPdfs = this.app.vault.getFiles().filter(f => f.extension.toLowerCase() === 'pdf' && (f.path.startsWith('Exames/') || f.path.toLowerCase().includes('exame') || f.path.toLowerCase().includes('laudo')));
+        const pdfRow = pdfField.createDiv('kt-health-pdf-row');
+
+        const pdfInput = pdfRow.createEl('input', { type: 'text', value: this.exam.pdfPath || '' });
+        pdfInput.placeholder = 'Ex: Exames/Laudo_Agosto_2026.pdf';
+        pdfInput.style.flex = '1';
+
+        if (vaultPdfs.length > 0) {
+            const selectExisting = pdfRow.createEl('select');
+            selectExisting.style.width = '180px';
+            selectExisting.createEl('option', { value: '', text: 'Selecionar PDF...' });
+            vaultPdfs.forEach(p => {
+                selectExisting.createEl('option', { value: p.path, text: p.name });
+            });
+            selectExisting.onchange = () => {
+                if (selectExisting.value) {
+                    pdfInput.value = selectExisting.value;
+                    if (!titleInput.value) {
+                        titleInput.value = selectExisting.value.split('/').pop().replace(/\.[^/.]+$/, '');
+                    }
+                    handleExtract('');
+                }
+            };
+        }
+
+        // Drag & Drop Zone for PDF
+        const dropzone = contentEl.createDiv('kt-health-dropzone');
+        dropzone.innerHTML = `
+            <div style="font-weight:600; font-size:13px; margin-bottom:4px;">📄 Arraste seu arquivo PDF aqui</div>
+            <div style="font-size:11.5px;">Ou selecione acima para extrair data, laboratório e todos os biomarcadores</div>
+        `;
+
+        const extractActionRow = contentEl.createDiv();
+        extractActionRow.style.display = 'flex';
+        extractActionRow.style.gap = '10px';
+        extractActionRow.style.marginBottom = '12px';
+
+        const extractBtn = extractActionRow.createEl('button', {
+            cls: 'kt-fin-smart-btn',
+            text: '⚡ Extrair Biomarcadores do PDF / Texto'
+        });
+
+        const pasteTextBtn = extractActionRow.createEl('button', {
+            cls: 'kt-fin-action-btn',
+            text: '📋 Colar Texto do Laudo'
+        });
+
+        const previewContainer = contentEl.createDiv();
+
+        const handleExtract = async (textToParse) => {
+            previewContainer.empty();
+            let text = textToParse;
+            if (!text && pdfInput.value) {
+                const cleanPath = pdfInput.value.trim();
+                let file = this.app.vault.getAbstractFileByPath(cleanPath);
+                if (!file) {
+                    file = this.app.vault.getFiles().find(f => f.path.toLowerCase() === cleanPath.toLowerCase() || f.name.toLowerCase() === cleanPath.toLowerCase() || f.path.toLowerCase().endsWith(cleanPath.toLowerCase()));
+                }
+                if (file) {
+                    new obsidian.Notice('Lendo e descriptografando arquivo PDF do cofre...');
+                    text = await extractTextFromPdfFile(file, this.app);
+                }
+            }
+
+            if (!text) {
+                new obsidian.Notice('Nenhum texto ou PDF selecionado para extração. Arraste um arquivo ou selecione do cofre.');
+                return;
+            }
+
+            // Auto-detect Date & Lab from extracted text
+            const detected = extractLabAndDateFromPdfText(text);
+            if (detected.date) {
+                dateInput.value = detected.date;
+                this.exam.date = detected.date;
+            }
+            if (detected.lab && !labInput.value) {
+                labInput.value = detected.lab;
+                this.exam.lab = detected.lab;
+            }
+            if (!titleInput.value) {
+                titleInput.value = (detected.lab ? detected.lab + ' ' : 'Laudo ') + (detected.date || '');
+            }
+
+            const extracted = extractBiomarkersFromText(text);
+            if (extracted.length === 0) {
+                new obsidian.Notice('Nenhum biomarcador reconhecido automaticamente. Tente colar o texto do laudo.');
+                return;
+            }
+
+            this.extractedResults = extracted;
+            new obsidian.Notice(`✓ ${extracted.length} biomarcadores encontrados no laudo!`);
+
+            const previewWrap = previewContainer.createDiv('kt-health-extract-preview');
+            const previewHdr = previewWrap.createDiv();
+            previewHdr.style.padding = '8px 12px';
+            previewHdr.style.background = 'var(--background-secondary-alt)';
+            previewHdr.style.fontWeight = '600';
+            previewHdr.style.fontSize = '12px';
+            previewHdr.setText(`Biomarcadores Encontrados (${extracted.length}) — Confirme os valores:`);
+
+            const tbl = previewWrap.createEl('table', { cls: 'kt-fin-table' });
+            const thead = tbl.createEl('thead');
+            const thr = thead.createEl('tr');
+            thr.createEl('th', { text: 'Importar' });
+            thr.createEl('th', { text: 'Biomarcador' });
+            thr.createEl('th', { text: 'Valor' });
+            thr.createEl('th', { text: 'Unidade' });
+            thr.createEl('th', { text: 'Faixa Ideal' });
+
+            const tbody = tbl.createEl('tbody');
+            extracted.forEach((item) => {
+                const tr = tbody.createEl('tr');
+                
+                const checkTd = tr.createEl('td');
+                const chk = checkTd.createEl('input', { type: 'checkbox' });
+                chk.checked = true;
+                item.enabled = true;
+                chk.onchange = () => { item.enabled = chk.checked; };
+
+                tr.createEl('td', { text: item.name });
+
+                const valTd = tr.createEl('td');
+                const valInp = valTd.createEl('input', { type: 'number', step: 'any', value: String(item.value) });
+                valInp.style.width = '90px';
+                valInp.onchange = () => { item.value = parseFloat(valInp.value); };
+
+                tr.createEl('td', { text: item.unit });
+
+                const refStr = (item.refMin !== undefined && item.refMax !== undefined) ? `${item.refMin} – ${item.refMax}` : '—';
+                tr.createEl('td', { text: refStr, style: 'color:var(--text-muted); font-size:11.5px;' });
+            });
+        };
+
+        // File drop handler on dropzone
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.addClass('is-dragover');
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.removeClass('is-dragover'));
+        dropzone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropzone.removeClass('is-dragover');
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (file.name.toLowerCase().endsWith('.pdf')) {
+                    new obsidian.Notice(`Importando "${file.name}" para o cofre...`);
+                    let vaultPath = `Exames/${file.name}`;
+                    try {
+                        const folderName = 'Exames';
+                        if (!(await this.app.vault.adapter.exists(folderName))) {
+                            await this.app.vault.createFolder(folderName);
+                        }
+                        const arrayBuffer = await file.arrayBuffer();
+                        if (await this.app.vault.adapter.exists(vaultPath)) {
+                            await this.app.vault.adapter.writeBinary(vaultPath, arrayBuffer);
+                        } else {
+                            await this.app.vault.createBinary(vaultPath, arrayBuffer);
+                        }
+                        pdfInput.value = vaultPath;
+                        this.exam.pdfPath = vaultPath;
+                        new obsidian.Notice(`✓ PDF salvo em "${vaultPath}"!`);
+                    } catch (saveErr) {
+                        console.warn('Erro ao salvar PDF no cofre:', saveErr);
+                    }
+
+                    if (!titleInput.value) titleInput.value = file.name.replace(/\.pdf$/i, '');
+                    const txt = await extractTextFromPdfFile(file, this.app);
+                    await handleExtract(txt);
+                } else {
+                    new obsidian.Notice('Por favor, arraste um arquivo PDF.');
+                }
+            }
+        });
+
+        extractBtn.onclick = () => handleExtract('');
+
+        pasteTextBtn.onclick = () => {
+            const pasteArea = previewContainer.createDiv('kt-form-field');
+            pasteArea.createEl('label', { text: 'Cole o texto do laudo / resultado do exame abaixo:' });
+            const ta = pasteArea.createEl('textarea');
+            ta.rows = 5;
+            ta.placeholder = 'Cole aqui o texto copiado do PDF do laboratório...';
+
+            const confirmPasteBtn = pasteArea.createEl('button', { cls: 'kt-fin-smart-btn', text: 'Analisar Texto Colado' });
+            confirmPasteBtn.style.marginTop = '6px';
+            confirmPasteBtn.onclick = () => handleExtract(ta.value);
+        };
+
+        // Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Observações / Laudo Geral:' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.exam.notes || '';
+        notesInput.rows = 2;
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir Exame' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.exam.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Exame' });
+        saveBtn.onclick = async () => {
+            const title = titleInput.value.trim() || 'Exame de Laboratório';
+            this.exam.title = title;
+            this.exam.date = dateInput.value;
+            this.exam.lab = labInput.value.trim();
+            this.exam.pdfPath = pdfInput.value.trim();
+            this.exam.notes = notesInput.value.trim();
+
+            if (this.exam.pdfPath) {
+                await linkExamPdfToKanban(this.app, this.exam.pdfPath, this.exam.title, this.exam.date);
+            }
+
+            const enabledBiomarkers = (this.extractedResults || [])
+                .filter(b => b.enabled)
+                .map(b => ({
+                    id: `bm-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                    examId: this.exam.id,
+                    date: this.exam.date,
+                    metricKey: b.key,
+                    metricName: b.name,
+                    category: b.category,
+                    value: b.value,
+                    unit: b.unit,
+                    refMin: b.refMin,
+                    refMax: b.refMax,
+                    notes: this.exam.lab ? `Exame: ${this.exam.lab}` : ''
+                }));
+
+            this.close();
+            this.onSave(this.exam, enabledBiomarkers);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthExamDetailsModal extends obsidian.Modal {
+    constructor(app, profile, exam, profileData, onEdit, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.exam = exam;
+        this.profileData = profileData;
+        this.onEdit = onEdit;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '840px';
+        this.modalEl.style.maxWidth = '95vw';
+        contentEl.addClass('kt-card-edit-modal', 'kt-health-details-modal');
+
+        // Header with Title and Actions
+        const header = contentEl.createDiv('kt-health-details-header');
+        const headerLeft = header.createDiv();
+        headerLeft.createEl('div', { cls: 'kt-health-details-title', text: this.exam.title || 'Laudo / Exame' });
+
+        const metaRow = headerLeft.createDiv('kt-health-details-meta-row');
+        metaRow.createSpan({ cls: 'kt-health-details-meta-item', text: `📅 Data da Coleta: ${this.exam.date || 'Não informada'}` });
+        if (this.exam.lab) {
+            metaRow.createSpan({ cls: 'kt-health-details-meta-item', text: `🏥 Laboratório: ${this.exam.lab}` });
+        }
+        metaRow.createSpan({ cls: 'kt-health-details-meta-item', text: `👤 Perfil: ${this.profile.name}` });
+
+        const headerActions = header.createDiv();
+        headerActions.style.display = 'flex';
+        headerActions.style.gap = '8px';
+        headerActions.style.alignItems = 'center';
+
+        if (this.exam.pdfPath) {
+            const openPdfBtn = headerActions.createEl('button', {
+                cls: 'kt-fin-add-btn',
+                text: '📄 Abrir PDF'
+            });
+            openPdfBtn.onclick = () => {
+                this.app.workspace.openLinkText(this.exam.pdfPath, '', false);
+            };
+        }
+
+        const editBtn = headerActions.createEl('button', {
+            cls: 'kt-fin-more-btn',
+            text: '✎ Editar'
+        });
+        editBtn.onclick = () => {
+            this.close();
+            if (this.onEdit) this.onEdit();
+        };
+
+        // Filter linked biomarkers (matching examId, or matching exam date if examId missing)
+        const linkedBiomarkers = (this.profileData.biomarkers || []).filter(b => b.examId === this.exam.id || (!b.examId && b.date === this.exam.date));
+
+        let normalCount = 0;
+        let outCount = 0;
+        linkedBiomarkers.forEach(b => {
+            const catItem = HEALTH_BIOMARKER_CATALOG.find(c => c.key === b.metricKey);
+            const refMin = b.refMin !== undefined ? b.refMin : catItem?.refMin;
+            const refMax = b.refMax !== undefined ? b.refMax : catItem?.refMax;
+            const isOut = (refMin !== undefined && refMin > 0 && b.value < refMin) || (refMax !== undefined && refMax > 0 && b.value > refMax);
+            if (isOut) outCount++;
+            else normalCount++;
+        });
+
+        // Summary KPI Cards
+        const kpiRow = contentEl.createDiv('kt-health-details-kpi-row');
+        
+        const kpiTotal = kpiRow.createDiv('kt-health-details-kpi-card');
+        kpiTotal.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Total de Biomarcadores' });
+        kpiTotal.createSpan({ cls: 'kt-health-details-kpi-value', text: String(linkedBiomarkers.length) });
+
+        const kpiNormal = kpiRow.createDiv('kt-health-details-kpi-card');
+        kpiNormal.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Dentro da Faixa Ideal' });
+        const normVal = kpiNormal.createSpan({ cls: 'kt-health-details-kpi-value', text: String(normalCount) });
+        normVal.style.color = '#10b981';
+
+        const kpiOut = kpiRow.createDiv('kt-health-details-kpi-card');
+        kpiOut.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Alterados / Atenção' });
+        const outVal = kpiOut.createSpan({ cls: 'kt-health-details-kpi-value', text: String(outCount) });
+        outVal.style.color = outCount > 0 ? '#ef4444' : 'var(--text-muted)';
+
+        // Search / Filter Input
+        const filterRow = contentEl.createDiv();
+        filterRow.style.display = 'flex';
+        filterRow.style.justifyContent = 'space-between';
+        filterRow.style.alignItems = 'center';
+        filterRow.style.marginTop = '4px';
+
+        const searchInp = filterRow.createEl('input', { type: 'text', placeholder: 'Filtrar biomarcador neste exame...' });
+        searchInp.style.width = '260px';
+        searchInp.style.padding = '6px 10px';
+        searchInp.style.fontSize = '12px';
+
+        const countLabel = filterRow.createSpan();
+        countLabel.style.fontSize = '11.5px';
+        countLabel.style.color = 'var(--text-muted)';
+
+        const tableWrap = contentEl.createDiv('kt-health-details-table-wrap');
+
+        const renderTable = (query = '') => {
+            tableWrap.empty();
+            if (linkedBiomarkers.length === 0) {
+                const empty = tableWrap.createDiv('kt-td-empty');
+                empty.setText('Nenhum biomarcador foi vinculado diretamente a este exame. Você pode editar o exame e clicar em "Extrair Biomarcadores".');
+                countLabel.setText('');
+                return;
+            }
+
+            const q = query.toLowerCase().trim();
+            const filtered = linkedBiomarkers.filter(b => {
+                if (!q) return true;
+                const name = (b.metricName || b.metricKey || '').toLowerCase();
+                const cat = (b.category || '').toLowerCase();
+                return name.includes(q) || cat.includes(q);
+            });
+
+            countLabel.setText(`Exibindo ${filtered.length} de ${linkedBiomarkers.length} biomarcadores`);
+
+            if (filtered.length === 0) {
+                const empty = tableWrap.createDiv('kt-td-empty');
+                empty.setText('Nenhum biomarcador corresponde à busca.');
+                return;
+            }
+
+            const table = tableWrap.createEl('table', { cls: 'kt-health-details-table' });
+            const thead = table.createEl('thead');
+            const thr = thead.createEl('tr');
+            thr.createEl('th', { text: 'Biomarcador' });
+            thr.createEl('th', { text: 'Categoria' });
+            thr.createEl('th', { text: 'Resultado' });
+            thr.createEl('th', { text: 'Unidade' });
+            thr.createEl('th', { text: 'Faixa de Referência' });
+            thr.createEl('th', { text: 'Status' });
+
+            const tbody = table.createEl('tbody');
+            filtered.forEach(b => {
+                const catItem = HEALTH_BIOMARKER_CATALOG.find(c => c.key === b.metricKey);
+                const refMin = b.refMin !== undefined ? b.refMin : catItem?.refMin;
+                const refMax = b.refMax !== undefined ? b.refMax : catItem?.refMax;
+                const isOut = (refMin !== undefined && refMin > 0 && b.value < refMin) || (refMax !== undefined && refMax > 0 && b.value > refMax);
+                const isLow = isOut && (refMin !== undefined && b.value < refMin);
+
+                const tr = tbody.createEl('tr');
+                
+                // Name
+                const tdName = tr.createEl('td');
+                tdName.style.fontWeight = '600';
+                tdName.setText(b.metricName || catItem?.name || b.metricKey);
+
+                // Category
+                tr.createEl('td', { text: b.category || catItem?.category || 'Geral', style: 'color:var(--text-muted);' });
+
+                // Result Value
+                const tdVal = tr.createEl('td');
+                tdVal.style.fontWeight = '700';
+                tdVal.style.fontSize = '13px';
+                tdVal.style.color = isOut ? (isLow ? '#ef4444' : '#f59e0b') : '#10b981';
+                tdVal.setText(String(b.value));
+
+                // Unit
+                tr.createEl('td', { text: b.unit || catItem?.unit || '—' });
+
+                // Reference Range
+                const refStr = (refMin !== undefined && refMax !== undefined && (refMin > 0 || refMax > 0))
+                    ? `${refMin} – ${refMax}`
+                    : (refMax ? `Até ${refMax}` : '—');
+                tr.createEl('td', { text: refStr, style: 'color:var(--text-muted); font-size:11.5px;' });
+
+                // Status Pill
+                const tdStatus = tr.createEl('td');
+                const badge = tdStatus.createSpan({
+                    cls: isOut ? 'kt-health-badge is-danger' : 'kt-health-badge is-completed',
+                    text: isOut ? (isLow ? 'Abaixo' : 'Acima') : 'Normal'
+                });
+                badge.style.fontSize = '10.5px';
+            });
+        };
+
+        searchInp.oninput = () => renderTable(searchInp.value);
+        renderTable('');
+
+        // Notes if present
+        if (this.exam.notes) {
+            const notesBlock = contentEl.createDiv();
+            notesBlock.style.background = 'var(--background-secondary-alt)';
+            notesBlock.style.border = '1px solid var(--background-modifier-border)';
+            notesBlock.style.borderRadius = '6px';
+            notesBlock.style.padding = '10px 12px';
+            notesBlock.style.fontSize = '12px';
+            notesBlock.style.marginTop = '10px';
+            notesBlock.createEl('div', { text: 'Observações / Laudo Geral:', style: 'font-weight:600; margin-bottom:4px; color:var(--text-muted);' });
+            notesBlock.createEl('div', { text: this.exam.notes, style: 'color:var(--text-normal); line-height:1.4;' });
+        }
+
+        // Close button
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.marginTop = '14px';
+        const closeBtn = footer.createEl('button', { cls: 'kt-fin-action-btn', text: 'Fechar' });
+        closeBtn.onclick = () => this.close();
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthBiomarkerModal extends obsidian.Modal {
+    constructor(app, profile, biomarker, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.biomarker = biomarker ? Object.assign({}, biomarker) : {
+            id: `bm-${Date.now()}`,
+            date: new Date().toISOString().split('T')[0],
+            metricKey: 'testosterone_total',
+            metricName: 'Testosterona Total',
+            category: 'Hormônios',
+            value: 0,
+            unit: 'ng/dL',
+            refMin: 300,
+            refMax: 900,
+            notes: ''
+        };
+        this.isNew = !biomarker;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? 'Registrar Biomarcador / Medição' : 'Editar Biomarcador' });
+
+        // Metric Preset Selector with Search
+        const presetField = contentEl.createDiv('kt-form-field');
+        presetField.createEl('label', { text: 'Biomarcador / Exame Padrão:' });
+
+        const searchRow = presetField.createDiv();
+        searchRow.style.display = 'flex';
+        searchRow.style.gap = '8px';
+        searchRow.style.marginBottom = '6px';
+
+        const filterInp = searchRow.createEl('input', { type: 'text', placeholder: '🔍 Digite para buscar exame (ex: testo, estradiol, glicose)...' });
+        filterInp.style.flex = '1';
+
+        const presetSelect = presetField.createEl('select');
+
+        // Date & Value (Row)
+        const row1 = contentEl.createDiv('kt-form-row');
+        const dateField = row1.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data do Exame:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.biomarker.date });
+
+        const valField = row1.createDiv('kt-form-field');
+        valField.createEl('label', { text: 'Valor Medido:' });
+        const valInput = valField.createEl('input', { type: 'number', step: 'any', value: this.biomarker.value || '' });
+
+        // Unit & Reference Range (Row)
+        const row2 = contentEl.createDiv('kt-form-row');
+        const unitField = row2.createDiv('kt-form-field');
+        unitField.createEl('label', { text: 'Unidade:' });
+        const unitInput = unitField.createEl('input', { type: 'text', value: this.biomarker.unit });
+
+        const minField = row2.createDiv('kt-form-field');
+        minField.createEl('label', { text: 'Ref. Mínimo:' });
+        const minInput = minField.createEl('input', { type: 'number', step: 'any', value: this.biomarker.refMin !== undefined ? this.biomarker.refMin : '' });
+
+        const maxField = row2.createDiv('kt-form-field');
+        maxField.createEl('label', { text: 'Ref. Máximo:' });
+        const maxInput = maxField.createEl('input', { type: 'number', step: 'any', value: this.biomarker.refMax !== undefined ? this.biomarker.refMax : '' });
+
+        const populateOptions = (filterText = '') => {
+            presetSelect.innerHTML = '';
+            const q = filterText.toLowerCase().trim();
+            const filteredCatalog = HEALTH_BIOMARKER_CATALOG.filter(b => {
+                if (!q) return true;
+                return b.name.toLowerCase().includes(q) || b.category.toLowerCase().includes(q) || b.key.toLowerCase().includes(q);
+            });
+
+            const cats = {};
+            filteredCatalog.forEach(b => {
+                if (!cats[b.category]) cats[b.category] = [];
+                cats[b.category].push(b);
+            });
+
+            Object.entries(cats).forEach(([catName, list]) => {
+                const optGroup = presetSelect.createEl('optgroup', { attr: { label: catName } });
+                list.forEach(b => {
+                    const opt = optGroup.createEl('option', { value: b.key, text: `${b.name} (${b.unit})` });
+                    if (b.key === this.biomarker.metricKey) opt.selected = true;
+                });
+            });
+
+            if (filteredCatalog.length > 0 && q) {
+                presetSelect.value = filteredCatalog[0].key;
+                presetSelect.onchange();
+            }
+        };
+
+        filterInp.oninput = () => populateOptions(filterInp.value);
+        populateOptions('');
+
+        presetSelect.onchange = () => {
+            const found = HEALTH_BIOMARKER_CATALOG.find(b => b.key === presetSelect.value);
+            if (found) {
+                this.biomarker.metricKey = found.key;
+                this.biomarker.metricName = found.name;
+                this.biomarker.category = found.category;
+                unitInput.value = found.unit;
+                minInput.value = found.refMin !== undefined ? String(found.refMin) : '';
+                maxInput.value = found.refMax !== undefined ? String(found.refMax) : '';
+            }
+        };
+
+        // Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Observações / Laboratório:' });
+        const notesInput = notesField.createEl('input', { type: 'text', value: this.biomarker.notes || '' });
+        notesInput.placeholder = 'Ex: Laboratório Hermes Pardini, jejum de 12h';
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.biomarker.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Medição' });
+        saveBtn.onclick = () => {
+            const val = parseFloat(valInput.value);
+            if (isNaN(val)) {
+                new obsidian.Notice('Por favor, informe um valor numérico válido.');
+                return;
+            }
+            const found = HEALTH_BIOMARKER_CATALOG.find(b => b.key === presetSelect.value);
+            this.biomarker.date = dateInput.value;
+            this.biomarker.metricKey = presetSelect.value;
+            this.biomarker.metricName = found ? found.name : presetSelect.value;
+            this.biomarker.category = found ? found.category : 'Outros';
+            this.biomarker.value = val;
+            this.biomarker.unit = unitInput.value.trim();
+            this.biomarker.refMin = minInput.value ? parseFloat(minInput.value) : undefined;
+            this.biomarker.refMax = maxInput.value ? parseFloat(maxInput.value) : undefined;
+            this.biomarker.notes = notesInput.value.trim();
+
+            this.close();
+            this.onSave(this.biomarker);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthBiomarkerExpandedModal extends obsidian.Modal {
+    constructor(app, profile, metricKey, catItem, entries, profileData, onSavePoint, onDeletePoint) {
+        super(app);
+        this.profile = profile;
+        this.metricKey = metricKey;
+        this.catItem = catItem;
+        this.entries = (entries || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+        this.profileData = profileData;
+        this.onSavePoint = onSavePoint;
+        this.onDeletePoint = onDeletePoint;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '880px';
+        this.modalEl.style.maxWidth = '95vw';
+        contentEl.addClass('kt-card-edit-modal', 'kt-health-details-modal');
+
+        const latest = this.entries[this.entries.length - 1] || {};
+        const refMin = latest.refMin !== undefined ? latest.refMin : this.catItem.refMin;
+        const refMax = latest.refMax !== undefined ? latest.refMax : this.catItem.refMax;
+
+        // Header
+        const header = contentEl.createDiv('kt-health-details-header');
+        const hLeft = header.createDiv();
+        hLeft.createEl('div', { cls: 'kt-health-details-title', text: `${this.catItem.name || latest.metricName || this.metricKey}` });
+        
+        const metaRow = hLeft.createDiv('kt-health-details-meta-row');
+        metaRow.createSpan({ cls: 'kt-health-details-meta-item', text: `📁 Categoria: ${this.catItem.category || 'Geral'}` });
+        metaRow.createSpan({ cls: 'kt-health-details-meta-item', text: `📏 Unidade: ${this.catItem.unit || latest.unit || '—'}` });
+        const refStr = (refMin !== undefined && refMax !== undefined && (refMin > 0 || refMax > 0)) ? `${refMin} – ${refMax}` : (refMax ? `Até ${refMax}` : '—');
+        metaRow.createSpan({ cls: 'kt-health-details-meta-item', text: `🎯 Faixa Ideal: ${refStr}` });
+
+        const hRight = header.createDiv();
+        hRight.style.display = 'flex';
+        hRight.style.gap = '8px';
+
+        const addPointBtn = hRight.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Nova Medição' });
+        addPointBtn.onclick = () => {
+            new HealthBiomarkerModal(this.app, this.profile, {
+                metricKey: this.metricKey,
+                metricName: this.catItem.name || latest.metricName,
+                category: this.catItem.category || 'Geral',
+                unit: this.catItem.unit || latest.unit,
+                refMin: refMin,
+                refMax: refMax
+            }, async (saved) => {
+                if (this.onSavePoint) await this.onSavePoint(saved);
+                this.entries.push(saved);
+                this.entries.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+                this.renderContent();
+            }).open();
+        };
+
+        this.bodyContainer = contentEl.createDiv();
+        this.renderContent();
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.marginTop = '14px';
+        const closeBtn = footer.createEl('button', { cls: 'kt-fin-action-btn', text: 'Fechar' });
+        closeBtn.onclick = () => this.close();
+    }
+
+    renderContent() {
+        if (this.bodyContainer.empty) this.bodyContainer.empty();
+        else this.bodyContainer.innerHTML = '';
+        const latest = this.entries[this.entries.length - 1] || {};
+        const prev = this.entries.length > 1 ? this.entries[this.entries.length - 2] : null;
+        const refMin = latest.refMin !== undefined ? latest.refMin : this.catItem.refMin;
+        const refMax = latest.refMax !== undefined ? latest.refMax : this.catItem.refMax;
+
+        // KPI Summary Cards
+        const kpiRow = this.bodyContainer.createDiv('kt-health-details-kpi-row');
+        kpiRow.style.gridTemplateColumns = 'repeat(4, 1fr)';
+
+        const valList = this.entries.map(e => e.value).filter(v => typeof v === 'number' && !isNaN(v));
+        const minVal = valList.length > 0 ? Math.min(...valList) : '-';
+        const maxVal = valList.length > 0 ? Math.max(...valList) : '-';
+        const avgVal = valList.length > 0 ? (valList.reduce((a, b) => a + b, 0) / valList.length).toFixed(1) : '-';
+        const delta = (prev && latest.value !== undefined && prev.value !== undefined) ? (latest.value - prev.value).toFixed(2) : null;
+
+        // Card 1: Último Valor
+        const card1 = kpiRow.createDiv('kt-health-details-kpi-card');
+        card1.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Última Medição' });
+        const c1Val = card1.createSpan({ cls: 'kt-health-details-kpi-value', text: latest.value !== undefined ? `${latest.value} ${latest.unit || ''}` : '-' });
+        if (delta !== null) {
+            const dSign = parseFloat(delta) > 0 ? `+${delta}` : delta;
+            card1.createSpan({ cls: 'kt-health-entry-meta', text: `Variação: ${dSign} vs anterior` });
+        }
+
+        // Card 2: Média
+        const card2 = kpiRow.createDiv('kt-health-details-kpi-card');
+        card2.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Média Histórica' });
+        card2.createSpan({ cls: 'kt-health-details-kpi-value', text: avgVal !== '-' ? `${avgVal} ${latest.unit || ''}` : '-' });
+
+        // Card 3: Mínimo
+        const card3 = kpiRow.createDiv('kt-health-details-kpi-card');
+        card3.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Mínimo Histórico' });
+        card3.createSpan({ cls: 'kt-health-details-kpi-value', text: minVal !== '-' ? `${minVal}` : '-' });
+
+        // Card 4: Máximo
+        const card4 = kpiRow.createDiv('kt-health-details-kpi-card');
+        card4.createSpan({ cls: 'kt-health-details-kpi-label', text: 'Máximo Histórico' });
+        card4.createSpan({ cls: 'kt-health-details-kpi-value', text: maxVal !== '-' ? `${maxVal}` : '-' });
+
+        // Large Evolution Chart
+        const chartWrap = this.bodyContainer.createDiv('kt-health-expanded-chart-wrap');
+        chartWrap.style.marginTop = '14px';
+        this.renderLargeChartSvg(chartWrap, this.entries, refMin, refMax);
+
+        // History Table
+        const tableHeader = this.bodyContainer.createEl('h4', { text: `Histórico Completo de Medições (${this.entries.length})` });
+        tableHeader.style.marginTop = '16px';
+        tableHeader.style.marginBottom = '8px';
+
+        const tableWrap = this.bodyContainer.createDiv('kt-health-details-table-wrap');
+        tableWrap.style.maxHeight = '220px';
+
+        const table = tableWrap.createEl('table', { cls: 'kt-health-details-table' });
+        const thead = table.createEl('thead');
+        const thr = thead.createEl('tr');
+        thr.createEl('th', { text: 'Data' });
+        thr.createEl('th', { text: 'Valor' });
+        thr.createEl('th', { text: 'Unidade' });
+        thr.createEl('th', { text: 'Status' });
+        thr.createEl('th', { text: 'Exame / Origem' });
+        thr.createEl('th', { text: 'Observações' });
+        thr.createEl('th', { text: 'Ações', style: 'text-align:right;' });
+
+        const tbody = table.createEl('tbody');
+        const revEntries = this.entries.slice().reverse();
+        revEntries.forEach(entry => {
+            const tr = tbody.createEl('tr');
+            tr.createEl('td', { text: entry.date || '—', style: 'font-weight:600;' });
+
+            const isPointOut = (refMin !== undefined && refMin > 0 && entry.value < refMin) || (refMax !== undefined && refMax > 0 && entry.value > refMax);
+            const isPointLow = isPointOut && (refMin !== undefined && entry.value < refMin);
+
+            const tdVal = tr.createEl('td', { text: String(entry.value), style: 'font-weight:700;' });
+            tdVal.style.color = isPointOut ? (isPointLow ? '#ef4444' : '#f59e0b') : '#10b981';
+
+            tr.createEl('td', { text: entry.unit || this.catItem.unit || '—' });
+
+            const tdStat = tr.createEl('td');
+            tdStat.createSpan({
+                cls: isPointOut ? 'kt-health-badge is-danger' : 'kt-health-badge is-completed',
+                text: isPointOut ? (isPointLow ? 'Abaixo' : 'Acima') : 'Normal'
+            });
+
+            // Exam source
+            const linkedExam = (this.profileData.exams || []).find(e => e.id === entry.examId || e.date === entry.date);
+            const tdSrc = tr.createEl('td');
+            if (linkedExam) {
+                const examLink = tdSrc.createSpan({ text: linkedExam.title || 'Laudo', style: 'cursor:pointer; text-decoration:underline; color:var(--interactive-accent);' });
+                examLink.onclick = () => {
+                    this.close();
+                    new HealthExamDetailsModal(this.app, this.profile, linkedExam, this.profileData).open();
+                };
+            } else {
+                tdSrc.setText('Medição Manual');
+            }
+
+            tr.createEl('td', { text: entry.notes || '—', style: 'color:var(--text-muted); font-size:11.5px;' });
+
+            const tdAct = tr.createEl('td', { style: 'text-align:right;' });
+            const editBtn = tdAct.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+            editBtn.onclick = () => {
+                new HealthBiomarkerModal(this.app, this.profile, entry, async (saved) => {
+                    if (this.onSavePoint) await this.onSavePoint(saved);
+                    const idx = this.entries.findIndex(e => e.id === entry.id);
+                    if (idx !== -1) this.entries[idx] = saved;
+                    this.entries.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+                    this.renderContent();
+                }, async (delId) => {
+                    if (this.onDeletePoint) await this.onDeletePoint(delId);
+                    this.entries = this.entries.filter(e => e.id !== delId);
+                    this.renderContent();
+                }).open();
+            };
+
+            const delBtn = tdAct.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.onclick = async () => {
+                if (this.onDeletePoint) await this.onDeletePoint(entry.id);
+                this.entries = this.entries.filter(e => e.id !== entry.id);
+                this.renderContent();
+            };
+        });
+    }
+
+    renderLargeChartSvg(container, entries, refMin, refMax) {
+        if (!entries || entries.length === 0) return;
+        const width = 810;
+        const height = 216;
+        const padX = 50;
+        const padY = 28;
+
+        const values = entries.map(e => e.value);
+        let min = Math.min(...values);
+        let max = Math.max(...values);
+
+        if (refMin !== undefined && refMin > 0) min = Math.min(min, refMin);
+        if (refMax !== undefined && refMax > 0) max = Math.max(max, refMax);
+
+        const spread = (max - min) || 1;
+        min -= spread * 0.15;
+        max += spread * 0.15;
+
+        const getX = (idx) => entries.length === 1 ? width / 2 : padX + (idx / (entries.length - 1)) * (width - padX * 2);
+        const getY = (val) => height - padY - ((val - min) / (max - min)) * (height - padY * 2);
+
+        let svg = `<svg viewBox="0 0 ${width} ${height}" class="kt-health-expanded-chart-svg" xmlns="http://www.w3.org/2000/svg">`;
+
+        // Reference ideal green band
+        if (refMin !== undefined && refMax !== undefined && (refMin > 0 || refMax > 0)) {
+            const yTop = Math.max(padY, getY(refMax));
+            const yBottom = Math.min(height - padY, getY(refMin));
+            const bandHeight = Math.max(2, yBottom - yTop);
+            svg += `<rect x="${padX - 10}" y="${yTop}" width="${width - padX * 2 + 20}" height="${bandHeight}" fill="rgba(16, 185, 129, 0.12)" rx="4" />`;
+            svg += `<line x1="${padX - 10}" y1="${yTop}" x2="${width - padX + 10}" y2="${yTop}" stroke="rgba(16, 185, 129, 0.4)" stroke-dasharray="3,3" stroke-width="1"/>`;
+            svg += `<line x1="${padX - 10}" y1="${yBottom}" x2="${width - padX + 10}" y2="${yBottom}" stroke="rgba(16, 185, 129, 0.4)" stroke-dasharray="3,3" stroke-width="1"/>`;
+            svg += `<text x="${width - padX + 14}" y="${yTop + 4}" font-size="10" fill="#10b981" font-weight="600">Max ${refMax}</text>`;
+            svg += `<text x="${width - padX + 14}" y="${yBottom + 4}" font-size="10" fill="#10b981" font-weight="600">Min ${refMin}</text>`;
+        }
+
+        // Connecting Line & Area
+        if (entries.length > 1) {
+            let pathD = `M ${getX(0)} ${getY(entries[0].value)}`;
+            let areaD = `M ${getX(0)} ${getY(entries[0].value)}`;
+            for (let i = 1; i < entries.length; i++) {
+                pathD += ` L ${getX(i)} ${getY(entries[i].value)}`;
+                areaD += ` L ${getX(i)} ${getY(entries[i].value)}`;
+            }
+            areaD += ` L ${getX(entries.length - 1)} ${height - padY} L ${getX(0)} ${height - padY} Z`;
+            svg += `<path d="${areaD}" fill="rgba(56, 189, 248, 0.08)" />`;
+            svg += `<path d="${pathD}" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+        }
+
+        // Data points & text labels
+        entries.forEach((e, idx) => {
+            const cx = getX(idx);
+            const cy = getY(e.value);
+            const isOutPoint = (refMin !== undefined && refMin > 0 && e.value < refMin) || (refMax !== undefined && refMax > 0 && e.value > refMax);
+            const dotColor = isOutPoint ? '#ef4444' : '#38bdf8';
+
+            svg += `<circle cx="${cx}" cy="${cy}" r="5" fill="${dotColor}" stroke="#1e293b" stroke-width="2" />`;
+            svg += `<text x="${cx}" y="${cy - 9}" font-size="11.5" font-weight="700" fill="var(--text-normal, #f8fafc)" text-anchor="middle">${e.value}</text>`;
+            
+            const dateStr = (e.date || '').slice(5); // MM-DD
+            svg += `<text x="${cx}" y="${height - 8}" font-size="10" fill="var(--text-muted, #94a3b8)" text-anchor="middle">${dateStr}</text>`;
+        });
+
+        svg += `</svg>`;
+        container.innerHTML = svg;
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthBioimpedanceModal extends obsidian.Modal {
+    constructor(app, profile, bio, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.bio = bio ? Object.assign({}, bio) : {
+            id: `bio-${Date.now()}`,
+            date: new Date().toISOString().split('T')[0],
+            weight: undefined,
+            muscleMass: undefined,
+            fatMass: undefined,
+            bodyFatPct: undefined,
+            bmi: undefined,
+            visceralFat: undefined,
+            bodyWater: undefined,
+            bmr: undefined,
+            inbodyScore: undefined,
+            imagePath: '',
+            notes: ''
+        };
+        this.isNew = !bio;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '640px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? 'Nova Avaliação de Bioimpedância / InBody' : 'Editar Bioimpedância' });
+
+        // Row 1: Date & InBody Score
+        const row1 = contentEl.createDiv('kt-form-row');
+        const dateField = row1.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data da Avaliação:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.bio.date });
+
+        const scoreField = row1.createDiv('kt-form-field');
+        scoreField.createEl('label', { text: 'Pontuação InBody (0 a 100 pontos):' });
+        const scoreInput = scoreField.createEl('input', { type: 'number', step: '1', value: this.bio.inbodyScore || '' });
+        scoreInput.placeholder = 'Ex: 75';
+
+        // Row 2: Weight, Muscle Mass, Body Fat %
+        const row2 = contentEl.createDiv('kt-form-row');
+        const weightField = row2.createDiv('kt-form-field');
+        weightField.createEl('label', { text: 'Peso Corporal (kg):' });
+        const weightInput = weightField.createEl('input', { type: 'number', step: '0.1', value: this.bio.weight || '' });
+        weightInput.placeholder = 'Ex: 73.8';
+
+        const muscleField = row2.createDiv('kt-form-field');
+        muscleField.createEl('label', { text: 'Massa Muscular Esquelética (kg):' });
+        const muscleInput = muscleField.createEl('input', { type: 'number', step: '0.1', value: this.bio.muscleMass || '' });
+        muscleInput.placeholder = 'Ex: 31.9';
+
+        const fatPctField = row2.createDiv('kt-form-field');
+        fatPctField.createEl('label', { text: 'Gordura Corporal (% / PGC):' });
+        const fatPctInput = fatPctField.createEl('input', { type: 'number', step: '0.1', value: this.bio.bodyFatPct || '' });
+        fatPctInput.placeholder = 'Ex: 23.2';
+
+        // Row 3: Fat Mass, Visceral Fat, Body Water, BMR
+        const row3 = contentEl.createDiv('kt-form-row');
+        const fatMassField = row3.createDiv('kt-form-field');
+        fatMassField.createEl('label', { text: 'Massa Gorda (kg):' });
+        const fatMassInput = fatMassField.createEl('input', { type: 'number', step: '0.1', value: this.bio.fatMass || '' });
+        fatMassInput.placeholder = 'Ex: 17.1';
+
+        const viscField = row3.createDiv('kt-form-field');
+        viscField.createEl('label', { text: 'Gordura Visceral (Nível):' });
+        const viscInput = viscField.createEl('input', { type: 'number', step: '1', value: this.bio.visceralFat || '' });
+        viscInput.placeholder = 'Ex: 7';
+
+        const waterField = row3.createDiv('kt-form-field');
+        waterField.createEl('label', { text: 'Água Corporal Total (L):' });
+        const waterInput = waterField.createEl('input', { type: 'number', step: '0.1', value: this.bio.bodyWater || '' });
+        waterInput.placeholder = 'Ex: 41.5';
+
+        const bmrField = row3.createDiv('kt-form-field');
+        bmrField.createEl('label', { text: 'TMB (kcal):' });
+        const bmrInput = bmrField.createEl('input', { type: 'number', step: '1', value: this.bio.bmr || '' });
+        bmrInput.placeholder = 'Ex: 1594';
+
+        // Image / File Attachment Dropzone
+        const imgField = contentEl.createDiv('kt-form-field');
+        imgField.createEl('label', { text: 'Foto / Imagem do Laudo InBody (JPG, PNG, WebP ou PDF):' });
+
+        const imgRow = imgField.createDiv('kt-health-pdf-row');
+        const imgInput = imgRow.createEl('input', { type: 'text', value: this.bio.imagePath || '' });
+        imgInput.placeholder = 'Ex: Exames/InBody_17_06_2025.jpg';
+        imgInput.style.flex = '1';
+
+        const vaultImages = this.app.vault.getFiles().filter(f => ['jpg', 'jpeg', 'png', 'webp', 'pdf'].includes(f.extension.toLowerCase()));
+        if (vaultImages.length > 0) {
+            const selectImg = imgRow.createEl('select');
+            selectImg.style.width = '180px';
+            selectImg.createEl('option', { value: '', text: 'Selecionar Imagem...' });
+            vaultImages.forEach(p => {
+                selectImg.createEl('option', { value: p.path, text: p.name });
+            });
+            selectImg.onchange = () => {
+                if (selectImg.value) {
+                    imgInput.value = selectImg.value;
+                    updatePreview();
+                }
+            };
+        }
+
+        // Dropzone
+        const dropzone = contentEl.createDiv('kt-health-dropzone');
+        dropzone.innerHTML = `
+            <div style="font-weight:600; font-size:13px; margin-bottom:4px;">🖼️ Arraste a foto ou imagem do seu InBody aqui</div>
+            <div style="font-size:11.5px;">O arquivo será salvo automaticamente na pasta Exames/ do seu cofre</div>
+        `;
+
+        const previewBox = contentEl.createDiv();
+        previewBox.style.textAlign = 'center';
+        previewBox.style.marginTop = '8px';
+
+        const updatePreview = () => {
+            if (previewBox.empty) previewBox.empty();
+            else previewBox.innerHTML = '';
+            const p = imgInput.value.trim();
+            if (p) {
+                if (p.toLowerCase().endsWith('.pdf')) {
+                    previewBox.createEl('div', { text: `📄 Arquivo PDF vinculado: ${p}`, style: 'font-size:12px; color:var(--interactive-accent); font-weight:600;' });
+                } else {
+                    const img = previewBox.createEl('img', { cls: 'kt-health-bio-thumb' });
+                    img.style.maxHeight = '140px';
+                    img.style.width = 'auto';
+                    img.style.margin = '0 auto';
+                    img.src = this.app.vault.adapter.getResourcePath(p);
+                }
+            }
+        };
+
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.addClass('is-dragover');
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.removeClass('is-dragover'));
+        dropzone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropzone.removeClass('is-dragover');
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                new obsidian.Notice(`Importando "${file.name}" para o cofre...`);
+                let vaultPath = `Exames/${file.name}`;
+                try {
+                    const folderName = 'Exames';
+                    if (!(await this.app.vault.adapter.exists(folderName))) {
+                        await this.app.vault.createFolder(folderName);
+                    }
+                    const arrayBuffer = await file.arrayBuffer();
+                    if (await this.app.vault.adapter.exists(vaultPath)) {
+                        await this.app.vault.adapter.writeBinary(vaultPath, arrayBuffer);
+                    } else {
+                        await this.app.vault.createBinary(vaultPath, arrayBuffer);
+                    }
+                    imgInput.value = vaultPath;
+                    this.bio.imagePath = vaultPath;
+                    updatePreview();
+                    new obsidian.Notice(`✓ Imagem salva em "${vaultPath}"!`);
+                } catch (saveErr) {
+                    console.warn('Erro ao salvar imagem no cofre:', saveErr);
+                }
+            }
+        });
+
+        updatePreview();
+
+        // Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Observações / Contexto da Avaliação:' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.bio.notes || '';
+        notesInput.rows = 2;
+        notesInput.placeholder = 'Ex: Realizado em jejum pela manhã na clínica, início do protocolo de treino';
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir Avaliação' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.bio.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Avaliação' });
+        saveBtn.onclick = () => {
+            this.bio.date = dateInput.value;
+            this.bio.weight = weightInput.value ? parseFloat(weightInput.value) : undefined;
+            this.bio.muscleMass = muscleInput.value ? parseFloat(muscleInput.value) : undefined;
+            this.bio.bodyFatPct = fatPctInput.value ? parseFloat(fatPctInput.value) : undefined;
+            this.bio.fatMass = fatMassInput.value ? parseFloat(fatMassInput.value) : undefined;
+            this.bio.visceralFat = viscInput.value ? parseInt(viscInput.value, 10) : undefined;
+            this.bio.bodyWater = waterInput.value ? parseFloat(waterInput.value) : undefined;
+            this.bio.bmr = bmrInput.value ? parseInt(bmrInput.value, 10) : undefined;
+            this.bio.inbodyScore = scoreInput.value ? parseInt(scoreInput.value, 10) : undefined;
+            this.bio.imagePath = imgInput.value.trim();
+            this.bio.notes = notesInput.value.trim();
+
+            this.close();
+            this.onSave(this.bio);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthImageViewerModal extends obsidian.Modal {
+    constructor(app, imagePath, title) {
+        super(app);
+        this.imagePath = imagePath;
+        this.title = title || 'Visualização da Avaliação';
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '880px';
+        this.modalEl.style.maxWidth = '95vw';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const header = contentEl.createDiv('kt-health-details-header');
+        header.createEl('div', { cls: 'kt-health-details-title', text: this.title });
+
+        const closeX = header.createEl('button', { cls: 'kt-fin-row-btn', text: '✕' });
+        closeX.onclick = () => this.close();
+
+        const imgBox = contentEl.createDiv();
+        imgBox.style.maxHeight = '75vh';
+        imgBox.style.overflow = 'auto';
+        imgBox.style.textAlign = 'center';
+        imgBox.style.marginTop = '12px';
+
+        if (this.imagePath.toLowerCase().endsWith('.pdf')) {
+            const linkBtn = imgBox.createEl('button', { cls: 'kt-fin-smart-btn', text: '📄 Abrir PDF no Obsidian' });
+            linkBtn.onclick = () => {
+                this.app.workspace.openLinkText(this.imagePath, '', false);
+                this.close();
+            };
+        } else {
+            const img = imgBox.createEl('img');
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+            img.style.borderRadius = '6px';
+            img.style.border = '1px solid var(--background-modifier-border)';
+            img.src = this.app.vault.adapter.getResourcePath(this.imagePath);
+        }
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthVaccineModal extends obsidian.Modal {
+    constructor(app, profile, vaccine, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.vaccine = vaccine ? Object.assign({}, vaccine) : {
+            id: `vac-${Date.now()}`,
+            name: profile?.type === 'pet' ? 'Vacina V10 / Quádrupla' : 'Vacina da Gripe',
+            applicationDate: new Date().toISOString().split('T')[0],
+            nextDueDate: '',
+            clinicOrVet: '',
+            batchNumber: '',
+            status: 'applied',
+            notes: ''
+        };
+        this.isNew = !vaccine;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? 'Registrar Vacina / Antiparasitário' : 'Editar Registro de Vacina' });
+
+        // Name
+        const nameField = contentEl.createDiv('kt-form-field');
+        nameField.createEl('label', { text: 'Nome da Vacina / Medicamento:' });
+        const nameInput = nameField.createEl('input', { type: 'text', value: this.vaccine.name });
+        nameInput.placeholder = this.profile.type === 'pet' ? 'Ex: V10, Antirrábica, Bravecto, Drontal' : 'Ex: Gripe Tetravalente, Tétano';
+
+        // Dates Row
+        const row1 = contentEl.createDiv('kt-form-row');
+        const appDateField = row1.createDiv('kt-form-field');
+        appDateField.createEl('label', { text: 'Data de Aplicação:' });
+        const appDateInput = appDateField.createEl('input', { type: 'date', value: this.vaccine.applicationDate });
+
+        const nextDateField = row1.createDiv('kt-form-field');
+        nextDateField.createEl('label', { text: 'Próxima Dose / Reforço:' });
+        const nextDateInput = nextDateField.createEl('input', { type: 'date', value: this.vaccine.nextDueDate || '' });
+
+        // Clinic & Batch Row
+        const row2 = contentEl.createDiv('kt-form-row');
+        const clinicField = row2.createDiv('kt-form-field');
+        clinicField.createEl('label', { text: 'Clínica / Veterinário / Posto:' });
+        const clinicInput = clinicField.createEl('input', { type: 'text', value: this.vaccine.clinicOrVet || '' });
+
+        const batchField = row2.createDiv('kt-form-field');
+        batchField.createEl('label', { text: 'Lote / Fabricante:' });
+        const batchInput = batchField.createEl('input', { type: 'text', value: this.vaccine.batchNumber || '' });
+
+        // Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Observações / Efeitos Adversos:' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.vaccine.notes || '';
+        notesInput.rows = 2;
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.vaccine.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Vacina' });
+        saveBtn.onclick = () => {
+            const name = nameInput.value.trim();
+            if (!name) {
+                new obsidian.Notice('Por favor, informe o nome da vacina.');
+                return;
+            }
+            this.vaccine.name = name;
+            this.vaccine.applicationDate = appDateInput.value;
+            this.vaccine.nextDueDate = nextDateInput.value;
+            this.vaccine.clinicOrVet = clinicInput.value.trim();
+            this.vaccine.batchNumber = batchInput.value.trim();
+            this.vaccine.notes = notesInput.value.trim();
+
+            this.close();
+            this.onSave(this.vaccine);
         };
     }
 
@@ -7582,6 +10312,8 @@ kanban-plugin: basic
             this.renderPostItsView(container);
         } else if (viewMode === 'finances') {
             this.renderFinancesView(container);
+        } else if (viewMode === 'health') {
+            this.renderHealthView(container);
         } else {
             this.renderGanttTimeline(container);
         }
@@ -7609,7 +10341,7 @@ kanban-plugin: basic
             this.savedGanttScrollLeft = prevGanttScroll.scrollLeft;
             this.savedGanttScrollTop = prevGanttScroll.scrollTop;
         }
-        if (this.viewMode === 'projects' || this.viewMode === 'habits' || this.viewMode === 'postits' || this.viewMode === 'finances') {
+        if (this.viewMode === 'projects' || this.viewMode === 'habits' || this.viewMode === 'postits' || this.viewMode === 'finances' || this.viewMode === 'health') {
             this.savedPageScrollTop = wrap.scrollTop;
         }
         const prevFinTablesScroll = wrap.querySelector('.kt-fin-tables-scroll');
@@ -7718,6 +10450,7 @@ kanban-plugin: basic
         const habitsTab   = tabs.createEl('button', { cls: 'kt-tab', text: 'Hábitos' });
         const postItsTab  = tabs.createEl('button', { cls: 'kt-tab', text: 'Post-its' });
         const financesTab = tabs.createEl('button', { cls: 'kt-tab', text: 'Finanças' });
+        const healthTab   = tabs.createEl('button', { cls: 'kt-tab', text: 'Saúde' });
 
         if (this.viewMode === 'calendar')  calendarTab.addClass('active');
         if (this.viewMode === 'gantt')     ganttTab.addClass('active');
@@ -7727,6 +10460,7 @@ kanban-plugin: basic
         if (this.viewMode === 'habits')    habitsTab.addClass('active');
         if (this.viewMode === 'postits')   postItsTab.addClass('active');
         if (this.viewMode === 'finances')  financesTab.addClass('active');
+        if (this.viewMode === 'health')    healthTab.addClass('active');
 
         // Make top tabs draggable into docking layout
         const makeTopTabDraggable = (btn, viewId) => {
@@ -7752,6 +10486,7 @@ kanban-plugin: basic
         makeTopTabDraggable(habitsTab, 'habits');
         makeTopTabDraggable(postItsTab, 'postits');
         makeTopTabDraggable(financesTab, 'finances');
+        makeTopTabDraggable(healthTab, 'health');
 
         const switchMainView = async (vMode) => {
             this.viewMode = vMode;
@@ -7804,6 +10539,7 @@ kanban-plugin: basic
         };
         postItsTab.onclick  = () => switchMainView('postits');
         financesTab.onclick = () => switchMainView('finances');
+        healthTab.onclick   = () => switchMainView('health');
 
         // Navigation (for Gantt, Calendar, Timeblocking & Habits)
         const showNav = this.hasActiveDockView('gantt') || this.hasActiveDockView('calendar') || this.hasActiveDockView('timeblock') || this.hasActiveDockView('habits');
@@ -9153,11 +11889,96 @@ kanban-plugin: basic
         });
     }
 
+    getAssociatedTagForColumn(columnName) {
+        if (!columnName) return null;
+        const colClean = columnName.trim();
+        const colLower = colClean.toLowerCase();
+
+        // 1. Direct hashtag in column title (e.g. "Tarefas #Lojinha" or "#Lojinha")
+        const tagMatch = colClean.match(/#([A-Za-z0-9_\-\/]+)/);
+        if (tagMatch) {
+            return `#${tagMatch[1]}`;
+        }
+
+        // 2. Matching configured project in settings
+        const customProjects = this.plugin.settings.projects || [];
+        for (const proj of customProjects) {
+            // Check explicitly assigned columns
+            if (Array.isArray(proj.columns)) {
+                for (const c of proj.columns) {
+                    if ((c || '').toLowerCase().trim() === colLower) {
+                        return proj.tag ? (proj.tag.startsWith('#') ? proj.tag : `#${proj.tag}`) : `#${proj.name}`;
+                    }
+                }
+            }
+            // Check project name or tag matching column name
+            const pName = (proj.name || '').toLowerCase().trim();
+            const pTag = (proj.tag || '').replace(/^#/, '').toLowerCase().trim();
+            if (pName && (colLower === pName || colLower.includes(pName) || pName.includes(colLower))) {
+                return proj.tag ? (proj.tag.startsWith('#') ? proj.tag : `#${proj.tag}`) : `#${proj.name}`;
+            }
+            if (pTag && (colLower === pTag || colLower.includes(pTag) || pTag.includes(colLower))) {
+                return proj.tag ? (proj.tag.startsWith('#') ? proj.tag : `#${proj.tag}`) : `#${proj.name}`;
+            }
+        }
+
+        // 3. Check existing tags across cards that match the column name
+        const colWord = colLower.replace(/[\s\-_]+/g, '');
+        if (Array.isArray(this.cards) && this.cards.length > 0) {
+            const colCards = this.cards.filter(c => (c.column || '').toLowerCase().trim() === colLower);
+            const tagCounts = {};
+            for (const c of colCards) {
+                if (Array.isArray(c.tags)) {
+                    for (const t of c.tags) {
+                        const cleanT = t.replace(/^#/, '').toLowerCase().replace(/[\s\-_]+/g, '');
+                        if (cleanT === colWord || (cleanT.length >= 3 && colWord.includes(cleanT))) {
+                            return t.startsWith('#') ? t : `#${t}`;
+                        }
+                        tagCounts[t] = (tagCounts[t] || 0) + 1;
+                    }
+                }
+            }
+            // If majority of cards in this column share a tag, use it
+            if (colCards.length > 0) {
+                for (const [t, count] of Object.entries(tagCounts)) {
+                    if (count / colCards.length >= 0.5) {
+                        return t.startsWith('#') ? t : `#${t}`;
+                    }
+                }
+            }
+            for (const card of this.cards) {
+                if (Array.isArray(card.tags)) {
+                    for (const tag of card.tags) {
+                        const cleanTag = tag.replace(/^#/, '').toLowerCase().replace(/[\s\-_]+/g, '');
+                        if (cleanTag === colWord || (cleanTag.length >= 3 && colWord.includes(cleanTag))) {
+                            return tag.startsWith('#') ? tag : `#${tag}`;
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
     async addCardToColumn(columnName, cardTitle) {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
+
+        let finalTitle = cardTitle.trim();
+        const assocTag = this.getAssociatedTagForColumn(columnName);
+
+        if (assocTag) {
+            const cleanTag = assocTag.replace(/^#/, '').toLowerCase();
+            const tagRegex = new RegExp(`(?:^|\\s)#${cleanTag}(?:\\s|$)`, 'i');
+            if (!tagRegex.test(finalTitle)) {
+                const tagToAdd = assocTag.startsWith('#') ? assocTag : `#${assocTag}`;
+                finalTitle = `${finalTitle} ${tagToAdd}`;
+            }
+        }
+
         let content = await this.app.vault.read(file);
-        content = this.parser.addCardToColumn(content, columnName, cardTitle);
+        content = this.parser.addCardToColumn(content, columnName, finalTitle);
         await this.app.vault.modify(file, content);
         new obsidian.Notice(`➕ Card adicionado em "${columnName}"`);
     }
@@ -11718,9 +14539,13 @@ kanban-plugin: basic
                 initialBalance: null,
                 plannedExpenses: {},
                 plannedIncome: {},
+                plannedItems: [],
                 expenses: [],
                 income: []
             };
+        }
+        if (!fin.months[key].plannedItems) {
+            fin.months[key].plannedItems = [];
         }
         return fin.months[key];
     }
@@ -11767,6 +14592,9 @@ kanban-plugin: basic
             if (Array.isArray(monthData.income)) {
                 monthData.income = monthData.income.filter(inc => inc && typeof inc.value === 'number' && !isNaN(inc.value));
             }
+            if (Array.isArray(monthData.plannedItems)) {
+                monthData.plannedItems = monthData.plannedItems.filter(p => p && typeof p.value === 'number' && !isNaN(p.value));
+            }
         });
     }
 
@@ -11788,6 +14616,26 @@ kanban-plugin: basic
         // 1. Top Header Bar (Year, Months Navigation, Actions)
         this.renderFinancesHeader(finContainer, selYear, selMonth, monthData, curr);
 
+        // Top Main View Mode Switcher (Lançamentos vs Central de Análise)
+        if (!this.financesMainViewTab) this.financesMainViewTab = 'overview';
+
+        const mainSwitcher = finContainer.createDiv('kt-fin-main-switcher');
+        const mainTabs = [
+            { id: 'overview',  label: 'Lançamentos & Resumo' },
+            { id: 'analytics', label: 'Analise Financeira' }
+        ];
+
+        mainTabs.forEach(mt => {
+            const btn = mainSwitcher.createEl('button', {
+                cls: `kt-fin-main-tab-btn ${this.financesMainViewTab === mt.id ? 'is-active' : ''}`,
+                text: mt.label
+            });
+            btn.onclick = () => {
+                this.financesMainViewTab = mt.id;
+                this.render();
+            };
+        });
+
         // 2. Calculations
         const initialBal = this.getInheritedInitialBalance(selYear, selMonth);
         const totalExpReal = (monthData.expenses || []).reduce((acc, e) => acc + (e.value || 0), 0);
@@ -11795,6 +14643,17 @@ kanban-plugin: basic
         const finalBal = initialBal + totalIncReal - totalExpReal;
         const monthSavings = totalIncReal - totalExpReal;
         const savingsPct = initialBal > 0 ? ((monthSavings / initialBal) * 100).toFixed(1) : 0;
+
+        if (this.financesMainViewTab === 'analytics') {
+            this.renderFinancesAnalyticsView(finContainer, selYear, selMonth, monthData, curr);
+            return;
+        }
+
+        const plannedItems = monthData.plannedItems || [];
+        const plannedExpItems = plannedItems.filter(p => p.type !== 'income');
+        const plannedIncItems = plannedItems.filter(p => p.type === 'income');
+        const totalPlannedExp = plannedExpItems.reduce((acc, p) => acc + (p.value || 0), 0);
+        const totalPlannedInc = plannedIncItems.reduce((acc, p) => acc + (p.value || 0), 0);
 
         // 3. Two-Column Split Layout
         const splitLayout = finContainer.createDiv('kt-fin-split-layout');
@@ -11809,9 +14668,10 @@ kanban-plugin: basic
         const subTabLeft = subTabWrap.createDiv('kt-fin-subtab-left');
 
         const tabs = [
-            { id: 'all',      label: 'Visão Completa (Ambos)' },
+            { id: 'all',      label: 'Visão Completa' },
             { id: 'income',   label: `Renda (${formatCurrency(totalIncReal, curr)})`, count: (monthData.income || []).length },
-            { id: 'expenses', label: `Despesas (${formatCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length }
+            { id: 'expenses', label: `Despesas (${formatCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length },
+            { id: 'planned',  label: `💡 Planejado (${plannedItems.length})`, count: plannedItems.length }
         ];
 
         tabs.forEach(t => {
@@ -11923,13 +14783,16 @@ kanban-plugin: basic
         }
 
         if (this.finLeftSubTab === 'all') {
-            // Renda por cima, depois despesas
+            // Renda por cima, depois despesas, depois planejamento
             this.renderFinancesIncomeTable(tablesContainer, selYear, selMonth, monthData, curr);
             this.renderFinancesExpensesTable(tablesContainer, selYear, selMonth, monthData, curr);
+            this.renderFinancesPlannedTable(tablesContainer, selYear, selMonth, monthData, curr);
         } else if (this.finLeftSubTab === 'income') {
             this.renderFinancesIncomeTable(tablesContainer, selYear, selMonth, monthData, curr);
         } else if (this.finLeftSubTab === 'expenses') {
             this.renderFinancesExpensesTable(tablesContainer, selYear, selMonth, monthData, curr);
+        } else if (this.finLeftSubTab === 'planned') {
+            this.renderFinancesPlannedTable(tablesContainer, selYear, selMonth, monthData, curr);
         }
 
         // Apply search filter if query exists
@@ -12492,7 +15355,44 @@ kanban-plugin: basic
 
             // 4. Categoria
             const tdCat = tr.createEl('td', { cls: 'kt-td-cat' });
-            tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: exp.category || 'Outros' });
+            const catPill = tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: exp.category || 'Outros' });
+            catPill.title = 'Clique para alterar categoria';
+            catPill.onclick = (e) => {
+                e.stopPropagation();
+                const menu = new obsidian.Menu();
+                (fin.categories || ['Outros']).forEach(cat => {
+                    const isSelected = cat === (exp.category || 'Outros');
+                    menu.addItem(item => {
+                        item.setTitle(`${isSelected ? '✓ ' : '   '}${cat}`)
+                            .onClick(async () => {
+                                exp.category = cat;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Categoria alterada para "${cat}"`);
+                            });
+                    });
+                });
+                menu.addSeparator();
+                menu.addItem(item => {
+                    item.setTitle('＋ Nova Categoria...')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newCat = prompt('Nome da nova categoria de despesa:');
+                            if (newCat && newCat.trim()) {
+                                const clean = newCat.trim();
+                                if (!fin.categories.includes(clean)) {
+                                    fin.categories.push(clean);
+                                }
+                                exp.category = clean;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Nova categoria "${clean}" criada e aplicada!`);
+                            }
+                        });
+                });
+                const rect = catPill.getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+            };
 
             // 5. Ações (Editar & Excluir)
             const tdAct = tr.createEl('td', { cls: 'kt-td-actions' });
@@ -12671,7 +15571,44 @@ kanban-plugin: basic
 
             // 4. Categoria
             const tdCat = tr.createEl('td', { cls: 'kt-td-cat' });
-            tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: inc.category || 'Pagamento' });
+            const catPill = tdCat.createSpan({ cls: 'kt-fin-cat-pill', text: inc.category || 'Pagamento' });
+            catPill.title = 'Clique para alterar categoria';
+            catPill.onclick = (e) => {
+                e.stopPropagation();
+                const menu = new obsidian.Menu();
+                (fin.incomeCategories || ['Pagamento', 'Outros']).forEach(cat => {
+                    const isSelected = cat === (inc.category || 'Pagamento');
+                    menu.addItem(item => {
+                        item.setTitle(`${isSelected ? '✓ ' : '   '}${cat}`)
+                            .onClick(async () => {
+                                inc.category = cat;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Categoria alterada para "${cat}"`);
+                            });
+                    });
+                });
+                menu.addSeparator();
+                menu.addItem(item => {
+                    item.setTitle('＋ Nova Categoria...')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newCat = prompt('Nome da nova categoria de renda:');
+                            if (newCat && newCat.trim()) {
+                                const clean = newCat.trim();
+                                if (!fin.incomeCategories.includes(clean)) {
+                                    fin.incomeCategories.push(clean);
+                                }
+                                inc.category = clean;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Nova categoria "${clean}" criada e aplicada!`);
+                            }
+                        });
+                });
+                const rect = catPill.getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+            };
 
             // 5. Ações
             const tdAct = tr.createEl('td', { cls: 'kt-td-actions' });
@@ -12717,6 +15654,262 @@ kanban-plugin: basic
                 monthData.income = monthData.income.filter(x => x.id !== inc.id);
                 await this.plugin.saveSettings();
                 this.render();
+            };
+        });
+    }
+
+    async confirmPlannedItem(item, year, month, monthData) {
+        monthData.plannedItems = (monthData.plannedItems || []).filter(x => x.id !== item.id);
+
+        const isIncome = item.type === 'income';
+        const newItem = {
+            id: `fin-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: item.date || formatIsoDate(new Date()),
+            value: item.value,
+            description: item.description,
+            category: item.category || 'Outros',
+            isFixed: false,
+            installment: ''
+        };
+
+        if (isIncome) {
+            if (!monthData.income) monthData.income = [];
+            monthData.income.push(newItem);
+            new obsidian.Notice(`✓ Entrada "${newItem.description}" (${formatCurrency(newItem.value, this.plugin.settings.finances.currency || 'R$')}) efetivada e movida para a Renda!`);
+        } else {
+            if (!monthData.expenses) monthData.expenses = [];
+            monthData.expenses.push(newItem);
+            new obsidian.Notice(`✓ Despesa "${newItem.description}" (${formatCurrency(newItem.value, this.plugin.settings.finances.currency || 'R$')}) efetivada e movida para os Gastos!`);
+        }
+
+        this.reconcileFinancesMonths();
+        await this.plugin.saveSettings();
+        this.pendingFinancesScrollToItemId = newItem.id;
+        this.financesSelectedItemId = newItem.id;
+        this.render();
+    }
+
+    renderFinancesPlannedTable(parent, year, month, monthData, curr) {
+        const fin = this.plugin.settings.finances;
+        const section = parent.createDiv('kt-fin-section kt-fin-planned-section');
+
+        const secHdr = section.createDiv('kt-fin-section-hdr');
+        const titleWrap = secHdr.createDiv();
+        titleWrap.style.display = 'flex';
+        titleWrap.style.alignItems = 'center';
+        titleWrap.style.gap = '8px';
+        titleWrap.createEl('h3', { text: '💡 Despesas & Entradas Planejadas (Previsões)' });
+
+        const plannedItems = monthData.plannedItems || [];
+        const plannedExpTotal = plannedItems.filter(x => x.type !== 'income').reduce((acc, x) => acc + (x.value || 0), 0);
+        const plannedIncTotal = plannedItems.filter(x => x.type === 'income').reduce((acc, x) => acc + (x.value || 0), 0);
+
+        if (plannedItems.length > 0) {
+            const badge = titleWrap.createSpan({ cls: 'kt-fin-planned-summary-badge' });
+            badge.setText(`Gastos Previstos: ${formatCurrency(plannedExpTotal, curr)} • Entradas Previstas: ${formatCurrency(plannedIncTotal, curr)}`);
+        }
+
+        const addPlanBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn mod-cta', text: '＋ Nova Previsão / Gasto Planejado' });
+        addPlanBtn.onclick = () => {
+            new FinancePlannedItemModal(
+                this.app,
+                this.plugin,
+                null,
+                year,
+                month,
+                fin.categories,
+                fin.incomeCategories,
+                async (newItem) => {
+                    if (!monthData.plannedItems) monthData.plannedItems = [];
+                    monthData.plannedItems.push(newItem);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`✓ Previsão "${newItem.description}" adicionada!`);
+                }
+            ).open();
+        };
+
+        const importHabitsBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn', text: '⚡ Importar Gastos Recorrentes' });
+        importHabitsBtn.title = 'Preencher previsões automaticamente com base nos seus hábitos recorrentes e médias mensais';
+        importHabitsBtn.onclick = async () => {
+            const habits = this.calculateRecurringHabitEstimates(year);
+            if (habits.length === 0) {
+                new obsidian.Notice('Nenhum gasto recorrente identificado ainda para importar.');
+                return;
+            }
+            if (!monthData.plannedItems) monthData.plannedItems = [];
+
+            // Clean up any previously imported fixed, installment or non-recurring artifacts
+            monthData.plannedItems = monthData.plannedItems.filter(p => {
+                const desc = (p.description || '').toLowerCase();
+                return !desc.includes('computador caio') && !desc.includes('parcela carro') && !desc.includes('trem vit') && !desc.includes('festival') && !desc.includes('diamantina') && !desc.includes('[fixo]');
+            });
+
+            let addedCount = 0;
+            habits.slice(0, 15).forEach(m => {
+                const existing = monthData.plannedItems.find(p => p.description.toLowerCase() === m.name.toLowerCase());
+                if (existing) {
+                    existing.value = m.monthlyAvgCost;
+                    existing.category = m.category;
+                } else {
+                    monthData.plannedItems.push({
+                        id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                        type: 'expense',
+                        value: m.monthlyAvgCost,
+                        description: m.name,
+                        category: m.category,
+                        date: ''
+                    });
+                    addedCount++;
+                }
+            });
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ ${habits.length} hábitos recorrentes importados para o planejamento de ${month}/${year}!`);
+        };
+
+        const tableWrap = section.createDiv('kt-fin-table-wrap');
+        const table = tableWrap.createEl('table', { cls: 'kt-fin-table kt-fin-planned-table' });
+
+        const thead = table.createEl('thead');
+        const thr = thead.createEl('tr');
+        thr.createEl('th', { text: 'Tipo' });
+        thr.createEl('th', { text: 'Data Prevista' });
+        thr.createEl('th', { text: 'Valor' });
+        thr.createEl('th', { text: 'Descrição' });
+        thr.createEl('th', { text: 'Categoria' });
+        thr.createEl('th', { text: 'Ações', cls: 'kt-th-actions' });
+
+        const tbody = table.createEl('tbody');
+
+        if (plannedItems.length === 0) {
+            const emptyTr = tbody.createEl('tr');
+            const td = emptyTr.createEl('td', { cls: 'kt-td-empty', attr: { colspan: '6' } });
+            td.setText('Nenhum gasto ou entrada planejada para este mês. Adicione previsões para planejar seus gastos antes de realizá-los.');
+            return;
+        }
+
+        // Sort by date ascending
+        const sorted = plannedItems.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+        sorted.forEach(item => {
+            const isIncome = item.type === 'income';
+            const tr = tbody.createEl('tr', { cls: `kt-row-planned ${isIncome ? 'is-planned-income' : 'is-planned-expense'}` });
+            tr.setAttribute('data-item-id', item.id);
+            tr.setAttribute('data-search-text', `${item.description} ${item.category} ${item.value} ${item.date}`.toLowerCase());
+
+            // 1. Tipo Badge
+            const typeTd = tr.createEl('td', { cls: 'kt-td-planned-type' });
+            const typeBadge = typeTd.createSpan({ cls: `kt-planned-type-badge ${isIncome ? 'is-income' : 'is-expense'}` });
+            typeBadge.setText(isIncome ? '🟢 Entrada Prevista' : '🔴 Gasto Planejado');
+
+            // 2. Data
+            const dateTd = tr.createEl('td', { cls: 'kt-td-date' });
+            dateTd.setText(item.date || '-');
+
+            // 3. Valor
+            const valTd = tr.createEl('td', { cls: `kt-td-val ${isIncome ? 'kt-val-green' : 'kt-val-red'}` });
+            valTd.setText(`${isIncome ? '+' : '-'}${formatCurrency(item.value, curr)}`);
+
+            // 4. Descrição
+            const descTd = tr.createEl('td', { cls: 'kt-td-desc' });
+            descTd.setText(item.description);
+
+            // 5. Categoria
+            const catTd = tr.createEl('td', { cls: 'kt-td-cat' });
+            const catPill = catTd.createSpan({ cls: 'kt-fin-cat-pill' });
+            catPill.setText(item.category || 'Outros');
+            catPill.title = 'Clique para alterar categoria';
+            catPill.onclick = (e) => {
+                e.stopPropagation();
+                const catList = isIncome ? (fin.incomeCategories || ['Pagamento', 'Outros']) : (fin.categories || ['Outros']);
+                const menu = new obsidian.Menu();
+                catList.forEach(cat => {
+                    const isSelected = cat === (item.category || 'Outros');
+                    menu.addItem(mItem => {
+                        mItem.setTitle(`${isSelected ? '✓ ' : '   '}${cat}`)
+                            .onClick(async () => {
+                                item.category = cat;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Categoria da previsão alterada para "${cat}"`);
+                            });
+                    });
+                });
+                menu.addSeparator();
+                menu.addItem(mItem => {
+                    mItem.setTitle('＋ Nova Categoria...')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newCat = prompt(`Nome da nova categoria de ${isIncome ? 'renda' : 'despesa'}:`);
+                            if (newCat && newCat.trim()) {
+                                const clean = newCat.trim();
+                                if (isIncome) {
+                                    if (!fin.incomeCategories.includes(clean)) fin.incomeCategories.push(clean);
+                                } else {
+                                    if (!fin.categories.includes(clean)) fin.categories.push(clean);
+                                }
+                                item.category = clean;
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Nova categoria "${clean}" criada e aplicada!`);
+                            }
+                        });
+                });
+                const rect = catPill.getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+            };
+
+            // 6. Ações (Confirmar / Efetivar -> passar para gastos/renda, Editar, Excluir)
+            const actTd = tr.createEl('td', { cls: 'kt-td-actions' });
+            const actWrap = actTd.createDiv('kt-fin-act-wrap');
+
+            // Botão Confirmar / Efetivar
+            const confirmBtn = actWrap.createEl('button', { cls: 'kt-fin-confirm-plan-btn', text: '✓ Efetivar' });
+            confirmBtn.title = isIncome ? 'Confirmar e passar para Renda realizada' : 'Confirmar e passar para Gastos realizados';
+            confirmBtn.onclick = async (e) => {
+                e.stopPropagation();
+                await this.confirmPlannedItem(item, year, month, monthData);
+            };
+
+            // Botão Editar
+            const editBtn = actWrap.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+            editBtn.title = 'Editar previsão';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                new FinancePlannedItemModal(
+                    this.app,
+                    this.plugin,
+                    item,
+                    year,
+                    month,
+                    fin.categories,
+                    fin.incomeCategories,
+                    async (updatedItem) => {
+                        const idx = (monthData.plannedItems || []).findIndex(x => x.id === item.id);
+                        if (idx !== -1) monthData.plannedItems[idx] = updatedItem;
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Previsão "${updatedItem.description}" atualizada.`);
+                    },
+                    async (delItem) => {
+                        monthData.plannedItems = (monthData.plannedItems || []).filter(x => x.id !== delItem.id);
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Previsão "${delItem.description}" excluída.`);
+                    }
+                ).open();
+            };
+
+            // Botão Excluir
+            const delBtn = actWrap.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.title = 'Excluir previsão';
+            delBtn.onclick = async (e) => {
+                e.stopPropagation();
+                monthData.plannedItems = (monthData.plannedItems || []).filter(x => x.id !== item.id);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Previsão "${item.description}" excluída.`);
             };
         });
     }
@@ -12828,12 +16021,21 @@ kanban-plugin: basic
         const isCtrlOrMeta = event.ctrlKey || event.metaKey;
         const isShift = event.shiftKey;
 
-        const renderedTrs = Array.from(this.containerEl.querySelectorAll('.kt-fin-table tbody tr[data-item-id]'));
-        const allItemIds = renderedTrs.map(tr => tr.getAttribute('data-item-id')).filter(Boolean);
+        // Get all rendered TRs
+        const allTrs = Array.from(this.containerEl.querySelectorAll('.kt-fin-table tbody tr[data-item-id]'));
 
-        if (isShift && this.financesLastClickedId && allItemIds.includes(this.financesLastClickedId)) {
-            const lastIdx = allItemIds.indexOf(this.financesLastClickedId);
-            const curIdx = allItemIds.indexOf(itemId);
+        // Filter ONLY currently visible TRs (not hidden by search or tab)
+        const visibleTrs = allTrs.filter(tr => {
+            if (tr.style.display === 'none') return false;
+            const sec = tr.closest('.kt-fin-section');
+            if (sec && sec.style.display === 'none') return false;
+            return true;
+        });
+        const visibleItemIds = visibleTrs.map(tr => tr.getAttribute('data-item-id')).filter(Boolean);
+
+        if (isShift && this.financesLastClickedId && visibleItemIds.includes(this.financesLastClickedId) && visibleItemIds.includes(itemId)) {
+            const lastIdx = visibleItemIds.indexOf(this.financesLastClickedId);
+            const curIdx = visibleItemIds.indexOf(itemId);
             const start = Math.min(lastIdx, curIdx);
             const end = Math.max(lastIdx, curIdx);
 
@@ -12841,7 +16043,7 @@ kanban-plugin: basic
                 this.financesSelectedIds.clear();
             }
             for (let i = start; i <= end; i++) {
-                this.financesSelectedIds.add(allItemIds[i]);
+                this.financesSelectedIds.add(visibleItemIds[i]);
             }
         } else if (isCtrlOrMeta) {
             if (this.financesSelectedIds.has(itemId)) {
@@ -12860,7 +16062,7 @@ kanban-plugin: basic
         this.financesSelectedItemId = this.financesSelectedIds.size > 0 ? (this.financesLastClickedId || Array.from(this.financesSelectedIds)[0]) : null;
 
         // Update CSS classes
-        renderedTrs.forEach(tr => {
+        allTrs.forEach(tr => {
             const id = tr.getAttribute('data-item-id');
             if (this.financesSelectedIds.has(id)) {
                 tr.addClass('is-selected');
@@ -13017,6 +16219,1062 @@ kanban-plugin: basic
         });
     }
 
+    getFinanceCategoryColor(category) {
+        const BUSINESS_DARK_PALETTE = {
+            'moradia':     '#3b82f6', // Tech Blue
+            'lazer':       '#06b6d4', // Cyan Teal
+            'serviços':    '#6366f1', // Indigo Slate
+            'servicos':    '#6366f1',
+            'transporte':  '#0284c7', // Sky Blue
+            'saúde':       '#10b981', // Emerald Green
+            'saude':       '#10b981',
+            'alimentação': '#14b8a6', // Teal Mint
+            'alimentacao': '#14b8a6',
+            'gatas':       '#8b5cf6', // Deep Iris
+            'viagem':      '#38bdf8', // Ice Blue
+            'compras':     '#059669', // Dark Mint
+            'streamings':  '#4f46e5', // Deep Blue
+            'outros':      '#64748b', // Slate Grey
+            'pagamento':   '#10b981', // Emerald
+            'poupança':    '#0ea5e9', // Sky Blue
+            'poupanca':    '#0ea5e9',
+            'bônus':       '#3b82f6',
+            'bonus':       '#3b82f6',
+            'juros':       '#6366f1'
+        };
+        if (!category) return '#64748b';
+        const key = category.toLowerCase().trim();
+        if (BUSINESS_DARK_PALETTE[key]) return BUSINESS_DARK_PALETTE[key];
+        
+        // Deterministic blue/green hue hash fallback (range 150 - 240 deg)
+        let hash = 0;
+        for (let i = 0; i < key.length; i++) hash = key.charCodeAt(i) + ((hash << 5) - hash);
+        const hue = 150 + Math.abs(hash % 90);
+        return `hsl(${hue}, 65%, 50%)`;
+    }
+
+    polarToCartesian(centerX, centerY, radius, angleInDegrees) {
+        const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+        return {
+            x: centerX + radius * Math.cos(angleInRadians),
+            y: centerY + radius * Math.sin(angleInRadians)
+        };
+    }
+
+    describeDonutSlice(centerX, centerY, outerR, innerR, startAngle, endAngle) {
+        if (endAngle - startAngle >= 359.99) {
+            return `M ${centerX} ${centerY - outerR} ` +
+                   `A ${outerR} ${outerR} 0 1 1 ${centerX} ${centerY + outerR} ` +
+                   `A ${outerR} ${outerR} 0 1 1 ${centerX} ${centerY - outerR} ` +
+                   `M ${centerX} ${centerY - innerR} ` +
+                   `A ${innerR} ${innerR} 0 1 0 ${centerX} ${centerY + innerR} ` +
+                   `A ${innerR} ${innerR} 0 1 0 ${centerX} ${centerY - innerR} Z`;
+        }
+
+        const startOuter = this.polarToCartesian(centerX, centerY, outerR, startAngle);
+        const endOuter   = this.polarToCartesian(centerX, centerY, outerR, endAngle);
+        const startInner = this.polarToCartesian(centerX, centerY, innerR, endAngle);
+        const endInner   = this.polarToCartesian(centerX, centerY, innerR, startAngle);
+
+        const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+
+        return [
+            `M ${startOuter.x} ${startOuter.y}`,
+            `A ${outerR} ${outerR} 0 ${largeArcFlag} 1 ${endOuter.x} ${endOuter.y}`,
+            `L ${startInner.x} ${startInner.y}`,
+            `A ${innerR} ${innerR} 0 ${largeArcFlag} 0 ${endInner.x} ${endInner.y}`,
+            'Z'
+        ].join(' ');
+    }
+
+    buildSmoothSplinePath(points) {
+        if (!points || points.length === 0) return '';
+        if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+        if (points.length === 2) return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+
+        let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+        for (let i = 0; i < points.length - 1; i++) {
+            const p0 = i > 0 ? points[i - 1] : points[0];
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const p3 = i < points.length - 2 ? points[i + 2] : p2;
+
+            const cp1x = p1.x + (p2.x - p0.x) / 6;
+            const cp1y = p1.y + (p2.y - p0.y) / 6;
+
+            const cp2x = p2.x - (p3.x - p1.x) / 6;
+            const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+            path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+        }
+        return path;
+    }
+
+    buildSmoothAreaPath(points, bottomY) {
+        const linePath = this.buildSmoothSplinePath(points);
+        if (!linePath) return '';
+        const first = points[0];
+        const last = points[points.length - 1];
+        return `${linePath} L ${last.x.toFixed(1)} ${bottomY.toFixed(1)} L ${first.x.toFixed(1)} ${bottomY.toFixed(1)} Z`;
+    }
+
+    renderEvolutionLineChart(container, selYear, selMonth, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        const card = container.createDiv('kt-fin-card');
+
+        if (!this.financesLineMetric) this.financesLineMetric = 'finalBalance';
+
+        const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+        const fullMonthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+        // Compute 12-month data series
+        const series = [];
+        let runningBal = this.getInheritedInitialBalance(selYear, 1);
+
+        for (let m = 1; m <= 12; m++) {
+            const mData = this.getFinancesMonthData(selYear, m);
+            const incList = mData.income || [];
+            const expList = mData.expenses || [];
+            const inc = incList.reduce((acc, i) => acc + (i.value || 0), 0);
+            const exp = expList.reduce((acc, e) => acc + (e.value || 0), 0);
+            const savings = inc - exp;
+            
+            if (mData.initialBalance != null) {
+                runningBal = mData.initialBalance + savings;
+            } else {
+                runningBal += savings;
+            }
+
+            let val = 0;
+            let hasData = false;
+
+            if (this.financesLineMetric === 'finalBalance') {
+                val = runningBal;
+                hasData = (incList.length > 0 || expList.length > 0 || mData.initialBalance != null);
+            } else if (this.financesLineMetric === 'savings') {
+                val = savings;
+                hasData = (incList.length > 0 || expList.length > 0);
+            } else if (this.financesLineMetric === 'income') {
+                val = inc;
+                hasData = (incList.length > 0);
+            } else if (this.financesLineMetric === 'expenses') {
+                val = exp;
+                hasData = (expList.length > 0);
+            } else if (this.financesLineMetric.startsWith('cat:')) {
+                const targetCat = this.financesLineMetric.replace('cat:', '');
+                const catExp = expList.filter(e => (e.category || 'Outros') === targetCat);
+                val = catExp.reduce((acc, e) => acc + (e.value || 0), 0);
+                hasData = (catExp.length > 0);
+            }
+
+            series.push({
+                month: m,
+                name: monthNames[m - 1],
+                fullName: fullMonthNames[m - 1],
+                value: val,
+                hasData,
+                inc,
+                exp,
+                savings,
+                bal: runningBal
+            });
+        }
+
+        const currentPoint = series[selMonth - 1] || series[0];
+        const prevPoint = selMonth > 1 ? series[selMonth - 2] : null;
+        const deltaVal = prevPoint ? currentPoint.value - prevPoint.value : 0;
+        const deltaPct = prevPoint && prevPoint.value !== 0 ? ((deltaVal / Math.abs(prevPoint.value)) * 100).toFixed(1) : null;
+
+        // Card Header with Title, Big KPI and Metric Switcher
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Evolução Temporal & Tendências' });
+
+        const kpiRow = titleGroup.createDiv('kt-fin-kpi-big');
+        kpiRow.createSpan({ text: formatCurrency(currentPoint.value, curr) });
+
+        if (deltaVal !== 0 && prevPoint && currentPoint.hasData) {
+            const isPos = deltaVal >= 0;
+            const deltaEl = kpiRow.createSpan({
+                cls: `kt-fin-kpi-delta ${isPos ? 'is-positive' : 'is-negative'}`,
+                text: `${isPos ? '+' : ''}${formatCurrency(deltaVal, curr)}${deltaPct ? ` (${isPos ? '+' : ''}${deltaPct}%)` : ''}`
+            });
+            deltaEl.title = `Comparado a ${prevPoint.name}/${selYear}`;
+        }
+
+        // Metric Select Dropdown
+        const selectMetric = cardHdr.createEl('select', { cls: 'kt-fin-metric-select' });
+        const metricOptions = [
+            { id: 'finalBalance', label: 'Montante Acumulado (Poupança)' },
+            { id: 'savings',      label: 'Economia Mensal (Saldo Líquido)' },
+            { id: 'income',       label: 'Renda Total' },
+            { id: 'expenses',     label: 'Gastos Totais' }
+        ];
+
+        const allCats = fin.categories || ['Moradia', 'Lazer', 'Serviços', 'Transporte', 'Saúde', 'Alimentação'];
+        allCats.forEach(c => {
+            metricOptions.push({ id: `cat:${c}`, label: `Gastos: ${c}` });
+        });
+
+        metricOptions.forEach(opt => {
+            const el = selectMetric.createEl('option', { value: opt.id, text: opt.label });
+            if (opt.id === this.financesLineMetric) el.selected = true;
+        });
+
+        selectMetric.onchange = () => {
+            this.financesLineMetric = selectMetric.value;
+            this.render();
+        };
+
+        // SVG Chart Construction (Proportional & Rich)
+        const chartWrap = card.createDiv('kt-fin-line-chart-wrap');
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 1000 280');
+        svg.classList.add('kt-fin-line-chart-svg');
+
+        // Linear Gradient Definition
+        const defs = document.createElementNS(svgNS, 'defs');
+        const grad = document.createElementNS(svgNS, 'linearGradient');
+        grad.setAttribute('id', 'ktFinLineGrad');
+        grad.setAttribute('x1', '0');
+        grad.setAttribute('y1', '0');
+        grad.setAttribute('x2', '0');
+        grad.setAttribute('y2', '1');
+
+        const stop1 = document.createElementNS(svgNS, 'stop');
+        stop1.setAttribute('offset', '0%');
+        stop1.setAttribute('stop-color', '#22c55e');
+        stop1.setAttribute('stop-opacity', '0.38');
+
+        const stop2 = document.createElementNS(svgNS, 'stop');
+        stop2.setAttribute('offset', '100%');
+        stop2.setAttribute('stop-color', '#22c55e');
+        stop2.setAttribute('stop-opacity', '0.0');
+
+        grad.appendChild(stop1);
+        grad.appendChild(stop2);
+        defs.appendChild(grad);
+        svg.appendChild(defs);
+
+        // Calculate Geometry Across 1000px Width (Aligned 1-to-1 with 12 Month Grid)
+        const padY = 25;
+        const chartH = 210;
+        const bottomY = padY + chartH;
+
+        const activeValues = series.filter(s => s.hasData).map(s => s.value);
+        let minVal = activeValues.length > 0 ? Math.min(...activeValues) : 0;
+        let maxVal = activeValues.length > 0 ? Math.max(...activeValues) : 100;
+
+        if (minVal === maxVal) {
+            minVal = minVal - 100;
+            maxVal = maxVal + 100;
+        } else {
+            const range = maxVal - minVal;
+            minVal = minVal - range * 0.1;
+            maxVal = maxVal + range * 0.1;
+        }
+
+        const points = series.map((s, idx) => {
+            const x = (idx + 0.5) * (1000 / 12);
+            const y = s.hasData ? (bottomY - ((s.value - minVal) / (maxVal - minVal)) * chartH) : bottomY;
+            return { x, y, data: s };
+        });
+
+        // Background Grid Lines
+        for (let g = 0; g <= 3; g++) {
+            const gy = padY + (g / 3) * chartH;
+            const gLine = document.createElementNS(svgNS, 'line');
+            gLine.setAttribute('x1', '20');
+            gLine.setAttribute('y1', String(gy));
+            gLine.setAttribute('x2', '980');
+            gLine.setAttribute('y2', String(gy));
+            gLine.classList.add('kt-fin-chart-grid-line');
+            svg.appendChild(gLine);
+        }
+
+        // Draw Zero Baseline Line if values span below and above 0
+        if (minVal < 0 && maxVal > 0) {
+            const yZero = bottomY - ((0 - minVal) / (maxVal - minVal)) * chartH;
+            const zeroLine = document.createElementNS(svgNS, 'line');
+            zeroLine.setAttribute('x1', '20');
+            zeroLine.setAttribute('y1', String(yZero));
+            zeroLine.setAttribute('x2', '980');
+            zeroLine.setAttribute('y2', String(yZero));
+            zeroLine.classList.add('kt-fin-chart-zero-line');
+            svg.appendChild(zeroLine);
+
+            const zeroTxt = document.createElementNS(svgNS, 'text');
+            zeroTxt.setAttribute('x', '26');
+            zeroTxt.setAttribute('y', String(yZero - 4));
+            zeroTxt.classList.add('kt-fin-chart-zero-label');
+            zeroTxt.textContent = 'R$ 0,00';
+            svg.appendChild(zeroTxt);
+        }
+
+        const activePoints = points.filter(p => p.data.hasData);
+
+        // Area Path (for months with actual data)
+        if (activePoints.length >= 2) {
+            const areaBaselineY = (minVal < 0 && maxVal > 0) ? (bottomY - ((0 - minVal) / (maxVal - minVal)) * chartH) : bottomY;
+            const areaPathStr = this.buildSmoothAreaPath(activePoints, areaBaselineY);
+            if (areaPathStr) {
+                const areaPath = document.createElementNS(svgNS, 'path');
+                areaPath.setAttribute('d', areaPathStr);
+                areaPath.classList.add('kt-fin-chart-area');
+                svg.appendChild(areaPath);
+            }
+        }
+
+        // Line Path (Solid for active data points)
+        if (activePoints.length >= 2) {
+            const linePathStr = this.buildSmoothSplinePath(activePoints);
+            if (linePathStr) {
+                const linePath = document.createElementNS(svgNS, 'path');
+                linePath.setAttribute('d', linePathStr);
+                linePath.classList.add('kt-fin-chart-line');
+                svg.appendChild(linePath);
+            }
+        }
+
+        // Future/Unregistered segment connector (Subtle dashed line)
+        if (activePoints.length > 0 && activePoints.length < points.length) {
+            const lastActiveIdx = points.indexOf(activePoints[activePoints.length - 1]);
+            if (lastActiveIdx >= 0 && lastActiveIdx < points.length - 1) {
+                const futurePoints = points.slice(lastActiveIdx);
+                let dDash = `M ${futurePoints[0].x.toFixed(1)} ${futurePoints[0].y.toFixed(1)}`;
+                for (let k = 1; k < futurePoints.length; k++) {
+                    dDash += ` L ${futurePoints[k].x.toFixed(1)} ${futurePoints[k].y.toFixed(1)}`;
+                }
+                const dashPath = document.createElementNS(svgNS, 'path');
+                dashPath.setAttribute('d', dDash);
+                dashPath.setAttribute('fill', 'none');
+                dashPath.setAttribute('stroke', '#166534');
+                dashPath.setAttribute('stroke-width', '1.5');
+                dashPath.setAttribute('stroke-dasharray', '4 4');
+                dashPath.setAttribute('opacity', '0.5');
+                svg.appendChild(dashPath);
+            }
+        }
+
+        // Tooltip element
+        let tooltipEl = null;
+
+        // Points (Circles)
+        points.forEach((pt) => {
+            const isSel = pt.data.month === selMonth;
+            const hasData = pt.data.hasData;
+            const isNeg = hasData && pt.data.value < 0;
+            const circle = document.createElementNS(svgNS, 'circle');
+            circle.setAttribute('cx', String(pt.x));
+            circle.setAttribute('cy', String(pt.y));
+
+            if (hasData) {
+                circle.setAttribute('r', isSel ? '6.5' : '4.5');
+                circle.classList.add('kt-fin-chart-dot');
+                if (isNeg) circle.classList.add('is-negative');
+                if (isSel) circle.classList.add('is-selected');
+            } else {
+                circle.setAttribute('r', '4');
+                circle.classList.add('kt-fin-chart-dot-nodata');
+                if (isSel) circle.classList.add('is-selected');
+            }
+
+            circle.addEventListener('mouseenter', () => {
+                circle.setAttribute('r', '7.5');
+                if (!tooltipEl) tooltipEl = chartWrap.createDiv('kt-fin-chart-tooltip');
+                if (hasData) {
+                    tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span class="kt-fin-tip-val">${formatCurrency(pt.data.value, curr)}</span>`;
+                } else {
+                    tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span style="color:var(--text-muted);font-size:11px;">(Sem lançamentos)</span>`;
+                }
+            });
+
+            circle.addEventListener('mouseleave', () => {
+                circle.setAttribute('r', hasData ? (isSel ? '6.5' : '4.5') : '4');
+                if (tooltipEl) {
+                    tooltipEl.remove();
+                    tooltipEl = null;
+                }
+            });
+
+            circle.addEventListener('click', () => {
+                if (pt.data.month !== selMonth) {
+                    this.plugin.settings.finances.selectedMonth = pt.data.month;
+                    this.render();
+                }
+            });
+
+            svg.appendChild(circle);
+        });
+
+        chartWrap.appendChild(svg);
+
+        // X-Axis Month Buttons
+        const xLabelsWrap = chartWrap.createDiv('kt-fin-chart-x-labels');
+        series.forEach(s => {
+            const btn = xLabelsWrap.createEl('button', {
+                cls: `kt-fin-chart-x-btn ${s.month === selMonth ? 'is-selected' : ''}`,
+                text: s.name
+            });
+            btn.onclick = () => {
+                if (s.month !== selMonth) {
+                    this.plugin.settings.finances.selectedMonth = s.month;
+                    this.render();
+                }
+            };
+        });
+    }
+
+    renderProminentCategoryPieChart(container, monthData, curr) {
+        const card = container.createDiv('kt-fin-card');
+
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Divisão de Gastos do Mês' });
+        titleGroup.createSpan({ cls: 'kt-fin-card-subtitle', text: 'Distribuição e peso de cada categoria no orçamento' });
+
+        const expenses = monthData.expenses || [];
+        const expByCat = {};
+        let totalExp = 0;
+
+        expenses.forEach(e => {
+            const cat = e.category || 'Outros';
+            const val = e.value || 0;
+            expByCat[cat] = (expByCat[cat] || 0) + val;
+            totalExp += val;
+        });
+
+        if (totalExp <= 0) {
+            const emptyDiv = card.createDiv('kt-td-empty');
+            emptyDiv.setText('Nenhum gasto registrado neste mês.');
+            return;
+        }
+
+        const sortedCats = Object.entries(expByCat)
+            .map(([category, value]) => ({
+                category,
+                value,
+                pct: (value / totalExp) * 100,
+                color: this.getFinanceCategoryColor(category)
+            }))
+            .sort((a, b) => b.value - a.value);
+
+        const donutWrap = card.createDiv('kt-fin-prominent-donut-wrap');
+        const stage = donutWrap.createDiv('kt-fin-pie-stage');
+
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '-130 -130 260 260');
+        svg.classList.add('kt-fin-big-donut-svg');
+
+        // Center Labels (Minimalist & Crisp)
+        const centerLbl = document.createElementNS(svgNS, 'text');
+        centerLbl.setAttribute('x', '0');
+        centerLbl.setAttribute('y', '-12');
+        centerLbl.classList.add('kt-pie-center-title');
+        centerLbl.textContent = 'TOTAL GASTOS';
+        svg.appendChild(centerLbl);
+
+        const centerVal = document.createElementNS(svgNS, 'text');
+        centerVal.setAttribute('x', '0');
+        centerVal.setAttribute('y', '14');
+        centerVal.classList.add('kt-pie-center-val');
+        centerVal.textContent = formatCurrency(totalExp, curr);
+        svg.appendChild(centerVal);
+
+        const centerSub = document.createElementNS(svgNS, 'text');
+        centerSub.setAttribute('x', '0');
+        centerSub.setAttribute('y', '32');
+        centerSub.classList.add('kt-pie-center-sub');
+        centerSub.textContent = '';
+        svg.appendChild(centerSub);
+
+        let currentAngle = 0;
+        const outerR = 115;
+        const innerR = 75;
+        const sliceEls = [];
+
+        sortedCats.forEach((item) => {
+            const sliceAngle = (item.value / totalExp) * 360;
+            const startA = currentAngle;
+            const endA = currentAngle + sliceAngle;
+            currentAngle += sliceAngle;
+
+            const path = document.createElementNS(svgNS, 'path');
+            const d = this.describeDonutSlice(0, 0, outerR, innerR, startA, endA);
+            path.setAttribute('d', d);
+            path.setAttribute('fill', item.color);
+            path.setAttribute('stroke', 'var(--background-secondary)');
+            path.setAttribute('stroke-width', sortedCats.length > 1 ? '3' : '0');
+            path.classList.add('kt-fin-pie-slice');
+
+            const activate = () => {
+                centerLbl.textContent = item.category;
+                centerVal.textContent = formatCurrency(item.value, curr);
+                centerSub.textContent = `${item.pct.toFixed(1)}% do total`;
+                path.style.transform = 'scale(1.045)';
+            };
+
+            const deactivate = () => {
+                centerLbl.textContent = 'TOTAL GASTOS';
+                centerVal.textContent = formatCurrency(totalExp, curr);
+                centerSub.textContent = '';
+                path.style.transform = '';
+            };
+
+            path.addEventListener('mouseenter', activate);
+            path.addEventListener('mouseleave', deactivate);
+            path.addEventListener('click', () => {
+                this.financesMainViewTab = 'overview';
+                this.financesSearchQuery = item.category;
+                this.render();
+            });
+
+            svg.appendChild(path);
+            sliceEls.push({ item, path, activate, deactivate });
+        });
+
+        stage.appendChild(svg);
+
+        // Breakdown Ranking List
+        const list = donutWrap.createDiv('kt-fin-breakdown-list');
+        sliceEls.forEach(({ item, activate, deactivate }) => {
+            const row = list.createDiv('kt-fin-breakdown-row');
+            const top = row.createDiv('kt-fin-bd-top');
+
+            const left = top.createDiv('kt-fin-bd-left');
+            const dot = left.createSpan({ cls: 'kt-fin-bd-dot' });
+            dot.style.backgroundColor = item.color;
+            left.createSpan({ text: item.category });
+
+            const right = top.createDiv('kt-fin-bd-right');
+            right.createSpan({ cls: 'kt-fin-bd-val', text: formatCurrency(item.value, curr) });
+            right.createSpan({ cls: 'kt-fin-bd-pct', text: `${item.pct.toFixed(1)}%` });
+
+            const track = row.createDiv('kt-fin-bd-bar-track');
+            const fill = track.createDiv('kt-fin-bd-bar-fill');
+            fill.style.width = `${item.pct}%`;
+            fill.style.backgroundColor = item.color;
+
+            row.addEventListener('mouseenter', activate);
+            row.addEventListener('mouseleave', deactivate);
+            row.addEventListener('click', () => {
+                this.financesMainViewTab = 'overview';
+                this.financesSearchQuery = item.category;
+                this.render();
+            });
+        });
+    }
+
+    normalizeMerchantName(desc) {
+        if (!desc) return 'Outros';
+        let clean = desc.trim();
+
+        // 1. Remove brackets, installments, dates, asterisks, fixo tags
+        clean = clean.replace(/\s*\(\d+\/\d+\)/g, '');
+        clean = clean.replace(/\s*\[\d+\/\d+\]/g, '');
+        clean = clean.replace(/\s*\[Fixo\]/gi, '');
+        clean = clean.replace(/\s*\(Fixo\)/gi, '');
+        clean = clean.replace(/\s*\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, '');
+        clean = clean.replace(/\s*-\s*parcela\s*\d+/gi, '');
+        clean = clean.replace(/\s*parcela\s*\d+/gi, '');
+
+        // 2. Remove common online/gateway payment prefixes (e.g. "Ifood *", "MP *", "Uber *", "Frogpay -")
+        clean = clean.replace(/^(ifood|ifd|uber|mercadopago|paypal|picpay|recargapay|99app|frogpay)\s*[\*_\-\s]\s*/i, '');
+        clean = clean.replace(/^(mp|pag|pg|st)\s*[\*_\-]\s*/i, '');
+
+        // 3. Remove leading/trailing transaction noise and stars
+        clean = clean.replace(/\*[^\s]+/g, '');
+        clean = clean.replace(/\b(com\.br|com|br)\b/gi, '');
+        clean = clean.trim();
+
+        // 4. Remove leading/trailing business descriptor noise (e.g. "Drogaria", "Padaria", "Burguer", "Mktp")
+        clean = clean.replace(/^(drogaria|farmacia|farmacias|padaria|restaurante|bar e lanches|auto posto|posto|loja|supermercado|mercado|comercio de|distribuidora)\s+/i, '');
+        clean = clean.replace(/\s+(burguer|burger|lanches|restaurante|bar|drogaria|farmacia|padaria|express|store|online|mktp|servicos|comercio|delivery|ltda|me|sa|eireli)$/i, '');
+        clean = clean.replace(/[\*\-_]+/g, ' ').trim();
+
+        // 5. Canonical Merchant Alias Map (unaccented lowercase keys)
+        const unaccented = clean.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        const KNOWN_MERCHANTS = {
+            'pagu': 'PAGU',
+            'pagu burguer': 'PAGU',
+            'araujo': 'Drogaria Araújo',
+            'drogaria araujo': 'Drogaria Araújo',
+            'pao e vida': 'Pão e Vida',
+            'padaria pao e vida': 'Pão e Vida',
+            'amazon': 'Amazon',
+            'amzn': 'Amazon',
+            'amzn mktp': 'Amazon',
+            'daki': 'DAKI',
+            'ifood': 'iFood',
+            'uber': 'Uber',
+            'petz': 'PETZ',
+            'estacionamento': 'Estacionamento',
+            'gasolina': 'Gasolina',
+            'iof': 'IOF Internacional',
+            'iof internacional': 'IOF Internacional'
+        };
+
+        if (KNOWN_MERCHANTS[unaccented]) {
+            return KNOWN_MERCHANTS[unaccented];
+        }
+
+        // Title case default
+        return clean.length > 0 ? clean.replace(/\b\w/g, l => l.toUpperCase()) : desc.trim();
+    }
+
+    calculateRecurringHabitEstimates(targetYear) {
+        const fin = this.plugin?.settings?.finances || {};
+        const merchantMap = {};
+        let activeMonthsCount = 0;
+
+        for (let m = 1; m <= 12; m++) {
+            const mKey = `${targetYear}-${String(m).padStart(2, '0')}`;
+            const mData = fin.months?.[mKey];
+            if (!mData) continue;
+
+            const expList = mData.expenses || [];
+            const incList = mData.income || [];
+            if (expList.length > 0 || incList.length > 0) activeMonthsCount++;
+
+            expList.forEach(e => {
+                const isFixed = e.isFixed === true || e.isFixed === 'true' || e.isFixed === 'Sim' || e.isFixed === 'sim' || e.isFixed === 1;
+                const hasInstallment = !!(e.installment && String(e.installment).trim().length > 0);
+                const rawDesc = (e.description || '').trim();
+                const isFixedOrInstByText = /\[fixo\]|\(fixo\)|parcela|\b\d{1,2}\/\d{1,2}\b|computador\s*caio|parcela\s*carro|trem\s*vit|festival\s*jap|diamantina/i.test(rawDesc);
+
+                if (isFixed || hasInstallment || isFixedOrInstByText) return;
+
+                const norm = this.normalizeMerchantName(e.description);
+                if (!norm) return;
+                const normKey = norm.toLowerCase();
+                const val = e.value || 0;
+                const cat = e.category || 'Outros';
+
+                if (!merchantMap[normKey]) {
+                    merchantMap[normKey] = {
+                        key: normKey,
+                        name: norm,
+                        count: 0,
+                        total: 0,
+                        monthsOccurred: new Set(),
+                        categories: {},
+                        sampleDesc: e.description
+                    };
+                }
+
+                merchantMap[normKey].count++;
+                merchantMap[normKey].total += val;
+                merchantMap[normKey].monthsOccurred.add(m);
+                merchantMap[normKey].categories[cat] = (merchantMap[normKey].categories[cat] || 0) + 1;
+            });
+        }
+
+        const denom = Math.max(1, activeMonthsCount);
+        const result = [];
+
+        Object.values(merchantMap).forEach(m => {
+            // Must have occurred across multiple months (at least 3 distinct months if dataset has >= 4 months)
+            const minMonths = denom <= 3 ? 2 : 3;
+            if (m.monthsOccurred.size < minMonths) return;
+            if (m.count < 3 && m.total < 150) return;
+
+            const primaryCat = Object.entries(m.categories).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Outros';
+            const monthlyAvgCost = Math.round((m.total / denom) * 100) / 100;
+            const avgSpentInActiveMonths = Math.round((m.total / Math.max(1, m.monthsOccurred.size)) * 100) / 100;
+            const avgTicket = Math.round((m.total / m.count) * 100) / 100;
+            const monthsCount = m.monthsOccurred.size;
+
+            result.push({
+                name: m.name,
+                key: m.key,
+                count: m.count,
+                monthsCount,
+                activeMonthsCount: denom,
+                total: m.total,
+                monthlyAvgCost,
+                avgSpentInActiveMonths,
+                avgTicket,
+                category: primaryCat
+            });
+        });
+
+        return result.sort((a, b) => b.count - a.count || b.total - a.total);
+    }
+
+    renderRecurringExpensesIntelligence(container, selYear, selMonth, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        const card = container.createDiv('kt-fin-card');
+
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Gastos Recorrentes & Hábitos' });
+        titleGroup.createSpan({ cls: 'kt-fin-card-subtitle', text: 'Comércios frequentes e média de consumo mensal estimada:' });
+
+        const habits = this.calculateRecurringHabitEstimates(selYear);
+
+        if (habits.length === 0) {
+            const empty = card.createDiv('kt-td-empty');
+            empty.setText('Nenhum gasto recorrente identificado ainda.');
+            return;
+        }
+
+        const currentMonthKey = `${selYear}-${String(selMonth).padStart(2, '0')}`;
+        const currentMonthData = fin.months?.[currentMonthKey] || {};
+
+        const list = card.createDiv('kt-fin-recurring-list');
+        habits.slice(0, 15).forEach(m => {
+            const row = list.createDiv('kt-fin-rec-row');
+            const catColor = this.getFinanceCategoryColor(m.category);
+
+            const top = row.createDiv('kt-fin-rec-top');
+            const left = top.createDiv('kt-fin-rec-left');
+            const dot = left.createSpan({ cls: 'kt-fin-bd-dot' });
+            dot.style.backgroundColor = catColor;
+            left.createSpan({ text: m.name });
+            left.createSpan({ cls: 'kt-fin-rec-freq-badge', text: `${m.count}x no ano • ${m.monthsCount}/${m.activeMonthsCount} meses` });
+
+            const right = top.createDiv('kt-fin-rec-right');
+            right.createSpan({ cls: 'kt-fin-rec-total', text: formatCurrency(m.total, curr) });
+
+            // Plan button per item
+            const planBtn = right.createEl('button', {
+                cls: 'kt-fin-rec-plan-btn',
+                text: `＋ Planejar (${formatCurrency(m.monthlyAvgCost, curr)}/mês)`
+            });
+            planBtn.title = `Adicionar previsão de ${m.name} (${formatCurrency(m.monthlyAvgCost, curr)}) aos gastos planejados de ${selMonth}/${selYear}`;
+            planBtn.onclick = async (e) => {
+                e.stopPropagation();
+                if (!currentMonthData.plannedItems) currentMonthData.plannedItems = [];
+                
+                const existingIdx = currentMonthData.plannedItems.findIndex(p => p.description.toLowerCase() === m.name.toLowerCase());
+                if (existingIdx !== -1) {
+                    currentMonthData.plannedItems[existingIdx].value = m.monthlyAvgCost;
+                    currentMonthData.plannedItems[existingIdx].category = m.category;
+                } else {
+                    currentMonthData.plannedItems.push({
+                        id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                        type: 'expense',
+                        value: m.monthlyAvgCost,
+                        description: m.name,
+                        category: m.category,
+                        date: ''
+                    });
+                }
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Previsão "${m.name}" (${formatCurrency(m.monthlyAvgCost, curr)}/mês) salva no Planejamento!`);
+            };
+
+            const bottom = row.createDiv('kt-fin-rec-bottom');
+            bottom.createSpan({
+                text: `${m.count} compras em ${m.monthsCount} dos ${m.activeMonthsCount} meses • Média/compra: ${formatCurrency(m.avgTicket, curr)} • Previsão: `,
+                cls: 'kt-fin-rec-sub'
+            });
+            const monthlyPill = bottom.createSpan({ cls: 'kt-fin-rec-monthly-badge', text: `${formatCurrency(m.monthlyAvgCost, curr)} / mês` });
+            monthlyPill.title = `Gasto total acumulado de ${formatCurrency(m.total, curr)} em ${m.count} compras distribuídas em ${m.monthsCount} dos ${m.activeMonthsCount} meses registrados. Previsão mensal amortizada: ${formatCurrency(m.monthlyAvgCost, curr)}/mês.`;
+            bottom.createSpan({ text: m.category, attr: { style: `color:${catColor}; font-weight:600; margin-left:auto;` } });
+
+            row.addEventListener('click', () => {
+                this.financesMainViewTab = 'overview';
+                this.financesSearchQuery = m.name;
+                this.render();
+            });
+        });
+
+        // Bulk Actions Bar at the bottom of the Card
+        const actions = card.createDiv('kt-fin-smart-actions');
+        actions.style.marginTop = '10px';
+
+        const applyHabitsThisMonth = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn is-primary',
+            text: `⚡ Consolidar Todos os Hábitos no Mês Atual`
+        });
+        applyHabitsThisMonth.title = `Adiciona todos os gastos recorrentes como previsões planejadas em ${selMonth}/${selYear}`;
+        applyHabitsThisMonth.onclick = async () => {
+            if (!currentMonthData.plannedItems) currentMonthData.plannedItems = [];
+            let addedCount = 0;
+            habits.slice(0, 15).forEach(m => {
+                const existing = currentMonthData.plannedItems.find(p => p.description.toLowerCase() === m.name.toLowerCase());
+                if (existing) {
+                    existing.value = m.monthlyAvgCost;
+                    existing.category = m.category;
+                } else {
+                    currentMonthData.plannedItems.push({
+                        id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                        type: 'expense',
+                        value: m.monthlyAvgCost,
+                        description: m.name,
+                        category: m.category,
+                        date: ''
+                    });
+                    addedCount++;
+                }
+            });
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ ${habits.length} hábitos recorrentes consolidados nos gastos planejados deste mês!`);
+        };
+
+        const applyHabitsAllYear = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn',
+            text: `⚡ Consolidar Hábitos em Todo o Ano`
+        });
+        applyHabitsAllYear.onclick = async () => {
+            for (let m = 1; m <= 12; m++) {
+                const mData = this.getFinancesMonthData(selYear, m);
+                if (!mData.plannedItems) mData.plannedItems = [];
+                habits.slice(0, 15).forEach(hab => {
+                    const existing = mData.plannedItems.find(p => p.description.toLowerCase() === hab.name.toLowerCase());
+                    if (existing) {
+                        existing.value = hab.monthlyAvgCost;
+                        existing.category = hab.category;
+                    } else {
+                        mData.plannedItems.push({
+                            id: `plan-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                            type: 'expense',
+                            value: hab.monthlyAvgCost,
+                            description: hab.name,
+                            category: hab.category,
+                            date: ''
+                        });
+                    }
+                });
+            }
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(`✓ Hábitos recorrentes consolidados em todos os 12 meses de ${selYear}!`);
+        };
+    }
+
+    calculateHistoricalAverages(targetYear, targetMonth) {
+        const fin = this.plugin?.settings?.finances || {};
+        const avgExp = {};
+        const avgInc = {};
+        let activeExpMonths = 0;
+        let activeIncMonths = 0;
+
+        for (let m = 1; m <= 12; m++) {
+            const mKey = `${targetYear}-${String(m).padStart(2, '0')}`;
+            const mData = fin.months?.[mKey];
+            if (!mData) continue;
+
+            const expList = mData.expenses || [];
+            const incList = mData.income || [];
+
+            if (expList.length > 0) {
+                activeExpMonths++;
+                expList.forEach(e => {
+                    const cat = e.category || 'Outros';
+                    avgExp[cat] = (avgExp[cat] || 0) + (e.value || 0);
+                });
+            }
+
+            if (incList.length > 0) {
+                activeIncMonths++;
+                incList.forEach(i => {
+                    const cat = i.category || 'Outros';
+                    avgInc[cat] = (avgInc[cat] || 0) + (i.value || 0);
+                });
+            }
+        }
+
+        // Fallback across all available months in settings if target year is fresh
+        if (activeExpMonths === 0) {
+            Object.entries(fin.months || {}).forEach(([mKey, mData]) => {
+                if (!mData) return;
+                const expList = mData.expenses || [];
+                const incList = mData.income || [];
+                if (expList.length > 0) {
+                    activeExpMonths++;
+                    expList.forEach(e => {
+                        const cat = e.category || 'Outros';
+                        avgExp[cat] = (avgExp[cat] || 0) + (e.value || 0);
+                    });
+                }
+                if (incList.length > 0) {
+                    activeIncMonths++;
+                    incList.forEach(i => {
+                        const cat = i.category || 'Outros';
+                        avgInc[cat] = (avgInc[cat] || 0) + (i.value || 0);
+                    });
+                }
+            });
+        }
+
+        const resExp = {};
+        const resInc = {};
+        const denomExp = Math.max(1, activeExpMonths);
+        const denomInc = Math.max(1, activeIncMonths);
+
+        Object.entries(avgExp).forEach(([cat, sum]) => {
+            resExp[cat] = Math.round(sum / denomExp);
+        });
+
+        Object.entries(avgInc).forEach(([cat, sum]) => {
+            resInc[cat] = Math.round(sum / denomInc);
+        });
+
+        // Ensure default categories exist if completely empty
+        if (Object.keys(resExp).length === 0) {
+            const fallbackCats = fin.categories || ['Moradia', 'Alimentação', 'Lazer', 'Transporte', 'Saúde'];
+            fallbackCats.forEach(c => { resExp[c] = 0; });
+        }
+
+        return {
+            avgExpenses: resExp,
+            avgIncome: resInc,
+            activeExpMonths,
+            activeIncMonths
+        };
+    }
+
+    renderSmartPlanningAssistant(container, selYear, selMonth, monthData, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        
+        container.createEl('h4', { cls: 'kt-fin-table-title', text: 'Médias Históricas' });
+        const card = container.createDiv('kt-fin-smart-plan-wrap');
+        card.style.marginBottom = '18px';
+
+        const history = this.calculateHistoricalAverages(selYear, selMonth);
+
+        const expAverages = Object.entries(history.avgExpenses).sort((a, b) => b[1] - a[1]);
+
+        const grid = card.createDiv('kt-fin-smart-avg-grid');
+        expAverages.forEach(([cat, avgVal]) => {
+            const currentPlan = monthData.plannedExpenses?.[cat] || 0;
+            const row = grid.createDiv('kt-fin-smart-avg-row');
+
+            const left = row.createDiv('kt-fin-smart-avg-left');
+            const dot = left.createSpan({ cls: 'kt-fin-bd-dot' });
+            dot.style.backgroundColor = this.getFinanceCategoryColor(cat);
+            left.createSpan({ text: cat });
+
+            const right = row.createDiv('kt-fin-smart-avg-right');
+            right.createSpan({
+                text: currentPlan > 0 ? `Meta: ${formatCurrency(currentPlan, curr)}` : 'Sem meta',
+                attr: { style: 'color:var(--text-muted); font-size:11px;' }
+            });
+            right.createSpan({ cls: 'kt-fin-smart-avg-val', text: `Média: ${formatCurrency(avgVal, curr)}` });
+        });
+
+        const actions = card.createDiv('kt-fin-smart-actions');
+
+        const applyThisMonthBtn = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn is-primary',
+            text: 'Aplicar Médias no Mês Atual'
+        });
+        applyThisMonthBtn.onclick = async () => {
+            if (!monthData.plannedExpenses) monthData.plannedExpenses = {};
+            if (!monthData.plannedIncome) monthData.plannedIncome = {};
+
+            Object.entries(history.avgExpenses).forEach(([cat, val]) => {
+                monthData.plannedExpenses[cat] = val;
+            });
+            Object.entries(history.avgIncome).forEach(([cat, val]) => {
+                monthData.plannedIncome[cat] = val;
+            });
+
+            await this.plugin.saveSettings();
+            new obsidian.Notice(`Metas de ${selMonth}/${selYear} preenchidas com as médias históricas!`);
+            this.render();
+        };
+
+        const applyAllYearBtn = actions.createEl('button', {
+            cls: 'kt-fin-smart-btn',
+            text: 'Aplicar em Todo o Ano'
+        });
+        applyAllYearBtn.onclick = async () => {
+            for (let m = 1; m <= 12; m++) {
+                const mData = this.getFinancesMonthData(selYear, m);
+                if (!mData.plannedExpenses) mData.plannedExpenses = {};
+                if (!mData.plannedIncome) mData.plannedIncome = {};
+
+                Object.entries(history.avgExpenses).forEach(([cat, val]) => {
+                    mData.plannedExpenses[cat] = val;
+                });
+                Object.entries(history.avgIncome).forEach(([cat, val]) => {
+                    mData.plannedIncome[cat] = val;
+                });
+            }
+
+            await this.plugin.saveSettings();
+            new obsidian.Notice(`Médias históricas aplicadas a todos os 12 meses de ${selYear}!`);
+            this.render();
+        };
+    }
+
+    renderFutureInstallmentsTimeline(container, selYear, selMonth, curr) {
+        const fin = this.plugin?.settings?.finances || {};
+        const card = container.createDiv('kt-fin-card');
+
+        const cardHdr = card.createDiv('kt-fin-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Comprometimento de Parcelas & Custos Fixos' });
+        titleGroup.createSpan({ cls: 'kt-fin-card-subtitle', text: 'Previsão consolidada das faturas e fixos para os próximos 6 meses:' });
+
+        const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+        const timelineList = card.createDiv('kt-fin-future-timeline');
+
+        let nextM = selMonth + 1;
+        let nextY = selYear;
+        let countFuture = 0;
+
+        for (let i = 1; i <= 6; i++) {
+            if (nextM > 12) {
+                nextM = 1;
+                nextY++;
+            }
+
+            const mKey = `${nextY}-${String(nextM).padStart(2, '0')}`;
+            const mData = fin.months?.[mKey];
+
+            if (mData && mData.expenses && mData.expenses.length > 0) {
+                const instExpenses = mData.expenses.filter(e => e.installment || e.isFixed);
+                const sumInst = instExpenses.reduce((acc, e) => acc + (e.value || 0), 0);
+
+                if (sumInst > 0 || instExpenses.length > 0) {
+                    countFuture++;
+                    const monthCard = timelineList.createDiv('kt-fin-future-month-card');
+                    
+                    const mHdr = monthCard.createDiv('kt-fin-future-month-hdr');
+                    mHdr.createSpan({ cls: 'kt-fin-future-month-name', text: `${monthNames[nextM - 1]}/${nextY}` });
+                    mHdr.createSpan({ cls: 'kt-fin-future-month-total', text: `${formatCurrency(sumInst, curr)} (${instExpenses.length} itens)` });
+
+                    const itemsList = monthCard.createDiv('kt-fin-future-items-list');
+                    instExpenses.forEach(it => {
+                        const itemRow = itemsList.createDiv('kt-fin-future-item');
+                        const label = it.installment ? `${it.description} (${it.installment})` : (it.isFixed ? `${it.description} [Fixo]` : it.description);
+                        itemRow.createSpan({ text: label });
+                        itemRow.createSpan({ cls: 'kt-fin-future-item-val', text: formatCurrency(it.value || 0, curr) });
+                    });
+                }
+            }
+
+            nextM++;
+        }
+
+        if (countFuture === 0) {
+            const empty = timelineList.createDiv('kt-td-empty');
+            empty.setText('Nenhum parcelamento ou custo fixo futuro encontrado nos próximos 6 meses.');
+        }
+    }
+
+    renderFinancesAnalyticsView(container, year, month, monthData, curr) {
+        const viewWrap = container.createDiv('kt-fin-analytics-view');
+
+        // 1. Top Section: 2-Column Dashboard (Line Chart 58% + Minimal Donut 42%)
+        const topGrid = viewWrap.createDiv('kt-fin-analytics-top-grid');
+        this.renderEvolutionLineChart(topGrid, year, month, curr);
+        this.renderProminentCategoryPieChart(topGrid, monthData, curr);
+
+        // 2. Middle Section: 2-Column Dashboard (Recurring Merchants 50% + Future Installments 50%)
+        const midGrid = viewWrap.createDiv('kt-fin-analytics-mid-grid');
+        this.renderRecurringExpensesIntelligence(midGrid, year, month, curr);
+        this.renderFutureInstallmentsTimeline(midGrid, year, month, curr);
+    }
+
     renderFinancesBudgetSummary(parent, year, month, monthData, curr, initialBal, finalBal, monthSavings, savingsPct, totalExpReal, totalIncReal) {
         const fin = this.plugin.settings.finances;
         const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -13026,10 +17284,10 @@ kanban-plugin: basic
 
         // Header with Edit Budget Button
         const cardHdr = summaryCard.createDiv('kt-fin-budget-hdr');
-        cardHdr.createEl('h3', { text: `Orçamento Mensal • ${monthName}` });
+        cardHdr.createEl('h3', { text: `Resumo Executivo • ${monthName}` });
 
         const editBudgetBtn = cardHdr.createEl('button', { cls: 'kt-fin-edit-budget-btn', text: '✎ Metas Planejadas' });
-        editBudgetBtn.title = 'Editar valores planejados por categoria';
+        editBudgetBtn.title = 'Editar metas planejadas por categoria';
         editBudgetBtn.onclick = () => {
             new FinancePlannedBudgetModal(
                 this.app,
@@ -13105,7 +17363,38 @@ kanban-plugin: basic
             collectEl.createDiv('kt-fin-kpi-lbl').setText('A COBRAR');
         }
 
-        // 2. Totals Comparison (Planejado vs Real)
+        // 2. Projeção com Gastos e Entradas Planejadas
+        const plannedItems = monthData.plannedItems || [];
+        const plannedExpItems = plannedItems.filter(p => p.type !== 'income');
+        const plannedIncItems = plannedItems.filter(p => p.type === 'income');
+        const totalPlannedExp = plannedExpItems.reduce((acc, p) => acc + (p.value || 0), 0);
+        const totalPlannedInc = plannedIncItems.reduce((acc, p) => acc + (p.value || 0), 0);
+        const projectedFinalBal = finalBal + totalPlannedInc - totalPlannedExp;
+
+        if (plannedItems.length > 0) {
+            const projSection = summaryCard.createDiv('kt-fin-projection-box');
+            const projHdr = projSection.createDiv('kt-fin-proj-hdr');
+            projHdr.createSpan({ cls: 'kt-fin-proj-title', text: 'Projeção com Previsões do Mês' });
+
+            const projRow = projSection.createDiv('kt-fin-proj-grid');
+
+            // Gastos Previstos
+            const expProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-red');
+            expProjEl.createDiv('kt-fin-proj-val').setText(`-${formatCurrency(totalPlannedExp, curr)}`);
+            expProjEl.createDiv('kt-fin-proj-lbl').setText(`GASTOS PREVISTOS (${plannedExpItems.length})`);
+
+            // Entradas Previstas
+            const incProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-green');
+            incProjEl.createDiv('kt-fin-proj-val').setText(`+${formatCurrency(totalPlannedInc, curr)}`);
+            incProjEl.createDiv('kt-fin-proj-lbl').setText(`ENTRADAS PREVISTAS (${plannedIncItems.length})`);
+
+            // Saldo Final Projetado (Orange matching Saldo Final)
+            const balProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-orange');
+            balProjEl.createDiv('kt-fin-proj-val').setText(formatCurrency(projectedFinalBal, curr));
+            balProjEl.createDiv('kt-fin-proj-lbl').setText('SALDO FINAL PROJETADO');
+        }
+
+        // 3. Totals Comparison (Planejado vs Real)
         const plannedExpTotal = Object.values(monthData.plannedExpenses || {}).reduce((acc, v) => acc + (v || 0), 0);
         const plannedIncTotal = Object.values(monthData.plannedIncome || {}).reduce((acc, v) => acc + (v || 0), 0);
 
@@ -13133,7 +17422,7 @@ kanban-plugin: basic
         const incBarFill = incBarTrack.createDiv('kt-fin-prog-fill is-green');
         incBarFill.style.width = `${incPct}%`;
 
-        // 3. Category Comparison Table: Despesas (Planejado vs Real vs Diferença)
+        // Category Comparison Table: Despesas
         summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: 'Despesas por Categoria' });
         const expCompTable = summaryCard.createEl('table', { cls: 'kt-fin-comp-table' });
         
@@ -13146,7 +17435,6 @@ kanban-plugin: basic
 
         const expTbody = expCompTable.createEl('tbody');
 
-        // Totals Row
         const expTotalRow = expTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
         expTotalRow.createEl('td', { text: 'Totais' });
         expTotalRow.createEl('td', { text: formatCurrency(plannedExpTotal, curr) });
@@ -13155,20 +17443,18 @@ kanban-plugin: basic
         const expTotDiffTd = expTotalRow.createEl('td', { cls: expTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
         expTotDiffTd.setText(formatCurrency(expTotalDiff, curr));
 
-        // Group actual expenses by category
         const expByCat = {};
         (monthData.expenses || []).forEach(e => {
             const cat = e.category || 'Outros';
             expByCat[cat] = (expByCat[cat] || 0) + (e.value || 0);
         });
 
-        // Combine all categories that either have a planned value or real expense
         const allExpCats = Array.from(new Set([...(fin.categories || []), ...Object.keys(monthData.plannedExpenses || {}), ...Object.keys(expByCat)]));
 
         allExpCats.forEach(cat => {
             const planned = monthData.plannedExpenses?.[cat] || 0;
             const real = expByCat[cat] || 0;
-            if (planned === 0 && real === 0) return; // Skip completely empty categories
+            if (planned === 0 && real === 0) return;
 
             const diff = planned - real;
             const tr = expTbody.createEl('tr');
@@ -13179,7 +17465,7 @@ kanban-plugin: basic
             diffTd.setText(formatCurrency(diff, curr));
         });
 
-        // 4. Category Comparison Table: Renda (Planejado vs Real vs Diferença)
+        // Category Comparison Table: Renda
         summaryCard.createEl('h4', { cls: 'kt-fin-table-title', text: 'Renda por Categoria' });
         const incCompTable = summaryCard.createEl('table', { cls: 'kt-fin-comp-table' });
 
@@ -13192,7 +17478,6 @@ kanban-plugin: basic
 
         const incTbody = incCompTable.createEl('tbody');
 
-        // Income Totals Row
         const incTotalRow = incTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
         incTotalRow.createEl('td', { text: 'Totais' });
         incTotalRow.createEl('td', { text: formatCurrency(plannedIncTotal, curr) });
@@ -13201,7 +17486,6 @@ kanban-plugin: basic
         const incTotDiffTd = incTotalRow.createEl('td', { cls: incTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
         incTotDiffTd.setText(formatCurrency(incTotalDiff, curr));
 
-        // Group actual income by category
         const incByCat = {};
         (monthData.income || []).forEach(i => {
             const cat = i.category || 'Pagamento';
@@ -13224,7 +17508,10 @@ kanban-plugin: basic
             diffTd.setText(formatCurrency(diff, curr));
         });
 
-        // 5. Cobranças por Pessoa do Mês (Com resumo e botão de copiar mensagem)
+        // 5. Médias Históricas (Sugestões e auto-preenchimento)
+        this.renderSmartPlanningAssistant(summaryCard, year, month, monthData, curr);
+
+        // 6. Cobranças por Pessoa do Mês (Splits)
         const peopleMap = {};
         (monthData.expenses || []).forEach(exp => {
             if (exp.splitData && exp.splitData.participants) {
@@ -13312,7 +17599,6 @@ kanban-plugin: basic
                 // Action Buttons Row
                 const pActions = personBox.createDiv('kt-fin-person-actions');
                 
-                // Copy WhatsApp / Text summary button in requested format
                 const copyMsgBtn = pActions.createEl('button', {
                     cls: 'kt-fin-person-copy-btn',
                     text: `📋 Copiar Mensagem (${person.name})`
@@ -13335,14 +17621,12 @@ kanban-plugin: basic
                     }).join('\n');
 
                     const totalToReport = pendingItems.length > 0 ? person.pending : person.total;
-
                     const message = `Segue os valores do mes :\n\n${itemsLines}\n\nTotal : ${formatCurrency(totalToReport, curr)}`;
 
                     navigator.clipboard.writeText(message);
                     new obsidian.Notice(`✓ Mensagem para ${person.name} copiada com sucesso!`);
                 };
 
-                // Quick toggle all settled button
                 if (isPending) {
                     const markPaidBtn = pActions.createEl('button', {
                         cls: 'kt-fin-person-settle-btn',
@@ -13520,6 +17804,1599 @@ kanban-plugin: basic
         link.click();
         document.body.removeChild(link);
         new obsidian.Notice(`✓ Arquivo exportado: ${fileName}`);
+    }
+
+    // ----------------------------------------------------------
+    // HEALTH TRACKER (SAÚDE & BEM-ESTAR)
+    // ----------------------------------------------------------
+
+    getHealthSettings() {
+        if (!this.plugin.settings.health) {
+            this.plugin.settings.health = {
+                selectedProfileId: 'profile-me',
+                activeSubTab: 'overview',
+                profiles: [
+                    { id: 'profile-me', name: 'Caio', type: 'human', birthDate: '', bloodType: '', notes: '', color: '#38bdf8' },
+                    { id: 'profile-pet-1', name: 'Gatas', type: 'pet', species: 'Felino', breed: 'SRD', birthDate: '', microchip: '', notes: '', color: '#a855f7' }
+                ],
+                data: {}
+            };
+        }
+        if (!this.plugin.settings.health.selectedProfileId) {
+            this.plugin.settings.health.selectedProfileId = this.plugin.settings.health.profiles?.[0]?.id || 'profile-me';
+        }
+        if (!this.plugin.settings.health.activeSubTab) {
+            this.plugin.settings.health.activeSubTab = 'overview';
+        }
+        return this.plugin.settings.health;
+    }
+
+    getHealthProfileData(profileId) {
+        const health = this.getHealthSettings();
+        if (!health.data[profileId]) {
+            health.data[profileId] = {
+                dailyLogs: {},
+                consultations: [],
+                exams: [],
+                biomarkers: [],
+                vaccines: [],
+                medications: []
+            };
+        }
+        const pData = health.data[profileId];
+        if (!pData.dailyLogs) pData.dailyLogs = {};
+        if (!Array.isArray(pData.consultations)) pData.consultations = [];
+        if (!Array.isArray(pData.exams)) pData.exams = [];
+        if (!Array.isArray(pData.biomarkers)) pData.biomarkers = [];
+        if (!Array.isArray(pData.vaccines)) pData.vaccines = [];
+        return pData;
+    }
+
+    renderHealthView(container) {
+        const viewWrap = container.createDiv('kt-health-view');
+        const health = this.getHealthSettings();
+
+        const currentProfileId = health.selectedProfileId || health.profiles[0]?.id;
+        const profile = health.profiles.find(p => p.id === currentProfileId) || health.profiles[0];
+        const profileData = this.getHealthProfileData(profile.id);
+        const isPet = profile.type === 'pet';
+
+        // Auto fallback if non-pet has vaccines tab selected
+        if (!isPet && health.activeSubTab === 'vaccines') {
+            health.activeSubTab = 'overview';
+        }
+
+        // 1. Topbar with Profile Pills & Quick Action Buttons
+        const topbar = viewWrap.createDiv('kt-health-topbar');
+
+        const profileStrip = topbar.createDiv('kt-health-profile-strip');
+        health.profiles.forEach(p => {
+            const isAct = p.id === profile.id;
+            const pill = profileStrip.createDiv(`kt-health-profile-pill ${isAct ? 'is-active' : ''}`);
+            
+            const dot = pill.createSpan('kt-health-profile-dot');
+            dot.style.backgroundColor = p.color || '#38bdf8';
+
+            pill.createSpan({ text: p.name });
+            pill.createSpan({ cls: 'kt-health-profile-badge', text: p.type === 'pet' ? (p.species || 'Pet') : 'Humano' });
+
+            pill.onclick = () => {
+                if (health.selectedProfileId !== p.id) {
+                    health.selectedProfileId = p.id;
+                    this.plugin.saveSettings();
+                    this.render();
+                }
+            };
+        });
+
+        const addProfileBtn = profileStrip.createEl('button', {
+            cls: 'kt-health-add-profile-btn',
+            text: '+ Novo Perfil'
+        });
+        addProfileBtn.onclick = () => {
+            new HealthProfileModal(this.app, null, async (saved) => {
+                health.profiles.push(saved);
+                health.selectedProfileId = saved.id;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Perfil "${saved.name}" criado com sucesso!`);
+            }).open();
+        };
+
+        // Actions on Right
+        const topActions = topbar.createDiv('kt-fin-top-actions');
+
+        const quickLogBtn = topActions.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Registro Diário' });
+        quickLogBtn.onclick = () => {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const currentLog = profileData.dailyLogs[todayStr];
+            new HealthDailyLogModal(this.app, profile, todayStr, currentLog, async (d, log) => {
+                profileData.dailyLogs[d] = log;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Registro de ${d} salvo!`);
+            }).open();
+        };
+
+        const addConsBtn = topActions.createEl('button', { cls: 'kt-fin-add-btn', text: isPet ? '+ Consulta Veterinária' : '+ Consulta Médica' });
+        addConsBtn.onclick = () => {
+            new HealthConsultationModal(this.app, profile, null, async (saved) => {
+                profileData.consultations.unshift(saved);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Consulta registrada!');
+            }).open();
+        };
+
+        const addExamBtn = topActions.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Exame / Laudo PDF' });
+        addExamBtn.onclick = () => {
+            new HealthExamModal(this.app, profile, null, async (savedExam, extractedBiomarkers) => {
+                profileData.exams.unshift(savedExam);
+                if (extractedBiomarkers && extractedBiomarkers.length > 0) {
+                    profileData.biomarkers.push(...extractedBiomarkers);
+                }
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Exame "${savedExam.title}" salvo com ${extractedBiomarkers.length} biomarcadores!`);
+            }).open();
+        };
+
+        const addBiomarkerBtn = topActions.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Nova Medição' });
+        addBiomarkerBtn.onclick = () => {
+            new HealthBiomarkerModal(this.app, profile, null, async (saved) => {
+                profileData.biomarkers.push(saved);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Medição de ${saved.metricName} salva!`);
+            }).open();
+        };
+
+        const editProfileBtn = topActions.createEl('button', { cls: 'kt-fin-more-btn', text: 'Editar Perfil' });
+        editProfileBtn.onclick = () => {
+            new HealthProfileModal(this.app, profile, async (updated) => {
+                const idx = health.profiles.findIndex(p => p.id === profile.id);
+                if (idx !== -1) health.profiles[idx] = updated;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Perfil atualizado!');
+            }, async (deletedId) => {
+                if (health.profiles.length <= 1) {
+                    new obsidian.Notice('Não é possível excluir o único perfil existente.');
+                    return;
+                }
+                health.profiles = health.profiles.filter(p => p.id !== deletedId);
+                health.selectedProfileId = health.profiles[0].id;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Perfil removido.');
+            }).open();
+        };
+
+        // 2. Subtabs Navigation Bar
+        const navStrip = viewWrap.createDiv('kt-health-nav-strip');
+        const subTabs = [
+            { id: 'overview', label: 'Geral & Diário' },
+            { id: 'biomarkers', label: 'Biomarcadores & Exames' },
+            { id: 'consultations', label: isPet ? 'Consultas Veterinárias' : 'Histórico Médico & Consultas' },
+            { id: 'mental', label: 'Saúde Mental & Correlações' }
+        ];
+
+        if (isPet) {
+            subTabs.push({ id: 'vaccines', label: 'Vacinas & Vermífugos' });
+        }
+
+        subTabs.forEach(t => {
+            const isAct = health.activeSubTab === t.id;
+            const tabBtn = navStrip.createEl('button', {
+                cls: `kt-health-tab-btn ${isAct ? 'is-active' : ''}`,
+                text: t.label
+            });
+            tabBtn.onclick = () => {
+                health.activeSubTab = t.id;
+                this.plugin.saveSettings();
+                this.render();
+            };
+        });
+
+        // 3. Render Current Subtab Content
+        if (health.activeSubTab === 'biomarkers') {
+            this.renderHealthBiomarkersTab(viewWrap, profile, profileData);
+        } else if (health.activeSubTab === 'consultations') {
+            this.renderHealthConsultationsTab(viewWrap, profile, profileData);
+        } else if (health.activeSubTab === 'mental') {
+            this.renderHealthMentalTab(viewWrap, profile, profileData);
+        } else if (health.activeSubTab === 'vaccines' && isPet) {
+            this.renderHealthVaccinesTab(viewWrap, profile, profileData);
+        } else {
+            this.renderHealthOverviewTab(viewWrap, profile, profileData);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // HEALTH: OVERVIEW & DAILY LOG TAB
+    // ----------------------------------------------------------
+
+    renderHealthOverviewTab(container, profile, profileData) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        if (!profileData.dailyLogs[todayStr]) {
+            profileData.dailyLogs[todayStr] = {
+                weight: undefined,
+                water: 0,
+                sleepHours: undefined,
+                sleepQuality: 3,
+                mood: 3,
+                stress: 2,
+                energy: 3,
+                notes: ''
+            };
+        }
+        const todayLog = profileData.dailyLogs[todayStr];
+
+        // 1. Quick Check-in Bar for Today
+        const quickWrap = container.createDiv('kt-health-quicklog-wrap');
+
+        // Water
+        const waterItem = quickWrap.createDiv('kt-health-quicklog-item');
+        waterItem.createSpan({ cls: 'kt-health-quicklog-label', text: `Água Hoje (${todayLog.water || 0} ml)` });
+        const waterControls = waterItem.createDiv('kt-health-quicklog-controls');
+        
+        const w250 = waterControls.createEl('button', { cls: 'kt-health-water-btn', text: '+250 ml' });
+        w250.onclick = async () => {
+            todayLog.water = (todayLog.water || 0) + 250;
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        const w500 = waterControls.createEl('button', { cls: 'kt-health-water-btn', text: '+500 ml' });
+        w500.onclick = async () => {
+            todayLog.water = (todayLog.water || 0) + 500;
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        const wReset = waterControls.createEl('button', { cls: 'kt-health-water-btn', text: 'Zerar' });
+        wReset.onclick = async () => {
+            todayLog.water = 0;
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        // Sleep
+        const sleepItem = quickWrap.createDiv('kt-health-quicklog-item');
+        sleepItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Sono da Noite' });
+        const sleepControls = sleepItem.createDiv('kt-health-quicklog-controls');
+        const sleepInput = sleepControls.createEl('input', { type: 'number', step: '0.5', value: todayLog.sleepHours || '' });
+        sleepInput.placeholder = 'Horas (ex: 7.5)';
+        sleepInput.style.width = '110px';
+        sleepInput.onchange = async () => {
+            todayLog.sleepHours = sleepInput.value ? parseFloat(sleepInput.value) : undefined;
+            await this.plugin.saveSettings();
+        };
+
+        // Weight
+        const weightItem = quickWrap.createDiv('kt-health-quicklog-item');
+        weightItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Peso Atual' });
+        const weightControls = weightItem.createDiv('kt-health-quicklog-controls');
+        const weightInput = weightControls.createEl('input', { type: 'number', step: '0.1', value: todayLog.weight || '' });
+        weightInput.placeholder = 'kg (ex: 82.4)';
+        weightInput.style.width = '110px';
+        weightInput.onchange = async () => {
+            todayLog.weight = weightInput.value ? parseFloat(weightInput.value) : undefined;
+            await this.plugin.saveSettings();
+        };
+
+        // Mood (1-5)
+        const moodItem = quickWrap.createDiv('kt-health-quicklog-item');
+        moodItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Humor (1 a 5)' });
+        const moodGroup = moodItem.createDiv('kt-health-score-group');
+        [1, 2, 3, 4, 5].forEach(score => {
+            const btn = moodGroup.createEl('button', {
+                cls: `kt-health-score-btn ${(todayLog.mood || 3) === score ? 'is-selected' : ''}`,
+                text: String(score)
+            });
+            btn.onclick = async () => {
+                todayLog.mood = score;
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+
+        // Stress (1-5)
+        const stressItem = quickWrap.createDiv('kt-health-quicklog-item');
+        stressItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Estresse (1 a 5)' });
+        const stressGroup = stressItem.createDiv('kt-health-score-group');
+        [1, 2, 3, 4, 5].forEach(score => {
+            const btn = stressGroup.createEl('button', {
+                cls: `kt-health-score-btn ${(todayLog.stress || 2) === score ? 'is-selected' : ''}`,
+                text: String(score)
+            });
+            btn.onclick = async () => {
+                todayLog.stress = score;
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+
+        // 2. KPI Summary Grid
+        const kpiGrid = container.createDiv('kt-health-kpi-grid');
+
+        // Calculate 7-day averages
+        const past7Days = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            past7Days.push(d.toISOString().split('T')[0]);
+        }
+
+        let totalSleep = 0, countSleep = 0;
+        let totalStress = 0, countStress = 0;
+        let latestWeight = todayLog.weight;
+
+        past7Days.forEach(dStr => {
+            const l = profileData.dailyLogs[dStr];
+            if (l) {
+                if (l.sleepHours) { totalSleep += l.sleepHours; countSleep++; }
+                if (l.stress) { totalStress += l.stress; countStress++; }
+                if (!latestWeight && l.weight) latestWeight = l.weight;
+            }
+        });
+
+        const avgSleep = countSleep > 0 ? (totalSleep / countSleep).toFixed(1) : '-';
+        const avgStress = countStress > 0 ? (totalStress / countStress).toFixed(1) : '-';
+
+        // Card 1: Sono Médio
+        const card1 = kpiGrid.createDiv('kt-health-kpi-card');
+        card1.createSpan({ cls: 'kt-health-kpi-label', text: 'Sono Médio (Últimos 7 dias)' });
+        card1.createSpan({ cls: 'kt-health-kpi-val', text: avgSleep !== '-' ? `${avgSleep}h / noite` : 'Sem registros' });
+        card1.createSpan({ cls: 'kt-health-kpi-meta', text: 'Meta recomendada: 7.5h a 8.5h' });
+
+        // Card 2: Estresse Médio
+        const card2 = kpiGrid.createDiv('kt-health-kpi-card');
+        card2.createSpan({ cls: 'kt-health-kpi-label', text: 'Nível de Estresse Médio' });
+        card2.createSpan({ cls: 'kt-health-kpi-val', text: avgStress !== '-' ? `${avgStress} / 5` : 'Sem registros' });
+        const stressStatus = avgStress !== '-' ? (parseFloat(avgStress) <= 2.5 ? 'Equilibrado' : (parseFloat(avgStress) <= 3.8 ? 'Moderado' : 'Elevado (Atenção)')) : '-';
+        card2.createSpan({ cls: 'kt-health-kpi-meta', text: `Status: ${stressStatus}` });
+
+        // Card 3: Peso Atual
+        const card3 = kpiGrid.createDiv('kt-health-kpi-card');
+        card3.createSpan({ cls: 'kt-health-kpi-label', text: 'Peso Corporal Mais Recente' });
+        card3.createSpan({ cls: 'kt-health-kpi-val', text: latestWeight ? `${latestWeight} kg` : 'Não informado' });
+        card3.createSpan({ cls: 'kt-health-kpi-meta', text: profile.name });
+
+        // Card 4: Água Hoje
+        const card4 = kpiGrid.createDiv('kt-health-kpi-card');
+        card4.createSpan({ cls: 'kt-health-kpi-label', text: 'Hidratação de Hoje' });
+        card4.createSpan({ cls: 'kt-health-kpi-val', text: `${todayLog.water || 0} ml` });
+        const waterPct = Math.min(100, Math.round(((todayLog.water || 0) / 3000) * 100));
+        card4.createSpan({ cls: 'kt-health-kpi-meta', text: `${waterPct}% da meta diária de 3.000 ml` });
+
+        // 3. Two-Column Mid Grid (Upcoming Consultations/Returns + Recent Biomarkers)
+        const midGrid = container.createDiv('kt-fin-analytics-mid-grid');
+        const isPet = profile.type === 'pet';
+
+        // Left: Upcoming Consultations / Scheduled Returns
+        const leftCard = midGrid.createDiv('kt-health-card');
+        const leftHdr = leftCard.createDiv('kt-health-card-header');
+        leftHdr.createSpan({ cls: 'kt-health-card-title', text: isPet ? 'Próximos Retornos Veterinários & Vacinas' : 'Próximos Retornos Médicos' });
+
+        const upcomingReturns = profileData.consultations.filter(c => c.returnDate && c.returnStatus === 'scheduled');
+        const upcomingVaccines = isPet ? profileData.vaccines.filter(v => v.nextDueDate) : [];
+
+        if (upcomingReturns.length === 0 && upcomingVaccines.length === 0) {
+            const empty = leftCard.createDiv('kt-td-empty');
+            empty.setText(isPet ? 'Nenhum retorno veterinário ou vacina pendente no momento.' : 'Nenhum retorno médico pendente no momento.');
+        } else {
+            const list = leftCard.createDiv('kt-health-timeline');
+            upcomingReturns.forEach(c => {
+                const item = list.createDiv('kt-health-entry-card');
+                const top = item.createDiv('kt-health-entry-top');
+                top.createSpan({ cls: 'kt-health-entry-title', text: `${c.specialty} — ${c.doctorName || 'Médico'}` });
+                top.createSpan({ cls: 'kt-health-badge is-pending', text: `Retorno: ${c.returnDate}` });
+                item.createDiv({ cls: 'kt-health-entry-meta', text: `Motivo: ${c.problemOrReason}` });
+            });
+            upcomingVaccines.forEach(v => {
+                const item = list.createDiv('kt-health-entry-card');
+                const top = item.createDiv('kt-health-entry-top');
+                top.createSpan({ cls: 'kt-health-entry-title', text: `Vacina: ${v.name}` });
+                top.createSpan({ cls: 'kt-health-badge is-pending', text: `Vence: ${v.nextDueDate}` });
+            });
+        }
+
+        // Right: Recent Lab Biomarkers
+        const rightCard = midGrid.createDiv('kt-health-card');
+        const rightHdr = rightCard.createDiv('kt-health-card-header');
+        rightHdr.createSpan({ cls: 'kt-health-card-title', text: 'Últimos Biomarcadores Registrados' });
+
+        const sortedBiomarkers = profileData.biomarkers.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        if (sortedBiomarkers.length === 0) {
+            const empty = rightCard.createDiv('kt-td-empty');
+            empty.setText('Nenhum exame ou medição de biomarcador cadastrada ainda.');
+        } else {
+            const list = rightCard.createDiv('kt-health-timeline');
+            sortedBiomarkers.slice(0, 5).forEach(bm => {
+                const item = list.createDiv('kt-health-entry-card');
+                const top = item.createDiv('kt-health-entry-top');
+                top.createSpan({ cls: 'kt-health-entry-title', text: bm.metricName });
+                top.createSpan({ cls: 'kt-health-entry-date', text: bm.date });
+                
+                const isOutOfRange = (bm.refMin !== undefined && bm.value < bm.refMin) || (bm.refMax !== undefined && bm.value > bm.refMax);
+                const badgeCls = isOutOfRange ? 'kt-health-badge is-danger' : 'kt-health-badge is-completed';
+                const badgeTxt = isOutOfRange ? (bm.value < bm.refMin ? 'Abaixo do Ideal' : 'Acima do Ideal') : 'Normal';
+
+                const meta = item.createDiv('kt-health-entry-meta');
+                meta.createSpan({ text: `Resultado: `, style: 'color:var(--text-muted);' });
+                meta.createSpan({ text: `${bm.value} ${bm.unit} `, style: 'font-weight:700; color:var(--text-normal);' });
+                meta.createSpan({ cls: badgeCls, text: badgeTxt });
+                if (bm.refMin !== undefined && bm.refMax !== undefined) {
+                    meta.createSpan({ text: ` (Ref: ${bm.refMin} a ${bm.refMax} ${bm.unit})`, style: 'color:var(--text-muted); margin-left:6px;' });
+                }
+            });
+        }
+
+        // 4. Section: Bioimpedance & Body Composition Hub (InBody & Images)
+        const bioSection = container.createDiv('kt-health-card kt-health-bio-section');
+        const bioHdr = bioSection.createDiv('kt-health-card-header');
+
+        const bioTitleGroup = bioHdr.createDiv('kt-fin-card-title-group');
+        bioTitleGroup.createSpan({ cls: 'kt-health-card-title', text: 'Bioimpedância & Composição Corporal' });
+        bioTitleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Acompanhamento de peso, % de gordura, massa muscular e histórico de laudos InBody em imagem/PDF:' });
+
+        const bioControls = bioHdr.createDiv('kt-fin-card-controls');
+        const addBioBtn = bioControls.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Nova Avaliação InBody' });
+        addBioBtn.onclick = () => {
+            new HealthBioimpedanceModal(this.app, profile, null, async (saved) => {
+                if (!profileData.bioimpedance) profileData.bioimpedance = [];
+                profileData.bioimpedance.unshift(saved);
+
+                // Sync with dailyLogs and biomarkers
+                if (saved.weight) {
+                    if (!profileData.dailyLogs[saved.date]) profileData.dailyLogs[saved.date] = {};
+                    profileData.dailyLogs[saved.date].weight = saved.weight;
+                }
+
+                const syncMetrics = [
+                    { key: 'weight', name: 'Peso', val: saved.weight, unit: 'kg', cat: 'Bioimpedância' },
+                    { key: 'body_fat_pct', name: 'Gordura Corporal (% BF)', val: saved.bodyFatPct, unit: '%', cat: 'Bioimpedância' },
+                    { key: 'muscle_mass', name: 'Massa Muscular Esquelética', val: saved.muscleMass, unit: 'kg', cat: 'Bioimpedância' },
+                    { key: 'fat_mass', name: 'Massa Gorda', val: saved.fatMass, unit: 'kg', cat: 'Bioimpedância' },
+                    { key: 'visceral_fat', name: 'Gordura Visceral', val: saved.visceralFat, unit: 'nível', cat: 'Bioimpedância' },
+                    { key: 'body_water_pct', name: 'Água Corporal Total', val: saved.bodyWater, unit: 'L', cat: 'Bioimpedância' }
+                ];
+
+                syncMetrics.forEach(m => {
+                    if (m.val !== undefined && !isNaN(m.val)) {
+                        const existIdx = profileData.biomarkers.findIndex(b => b.metricKey === m.key && b.date === saved.date);
+                        if (existIdx !== -1) {
+                            profileData.biomarkers[existIdx].value = m.val;
+                        } else {
+                            profileData.biomarkers.push({
+                                id: `bm-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                                date: saved.date,
+                                metricKey: m.key,
+                                metricName: m.name,
+                                category: m.cat,
+                                value: m.val,
+                                unit: m.unit,
+                                notes: `Importado da Bioimpedância de ${saved.date}`
+                            });
+                        }
+                    }
+                });
+
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Avaliação de bioimpedância salva e biomarcadores sincronizados!');
+            }).open();
+        };
+
+        const sortedBio = (profileData.bioimpedance || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const latestBio = sortedBio[0];
+
+        if (latestBio) {
+            const bioKpi = bioSection.createDiv('kt-health-bio-kpi-grid');
+            
+            const bkWeight = bioKpi.createDiv('kt-health-bio-kpi-card');
+            bkWeight.createSpan({ cls: 'kt-health-bio-kpi-label', text: 'Peso Atual' });
+            bkWeight.createSpan({ cls: 'kt-health-bio-kpi-val', text: latestBio.weight ? `${latestBio.weight} kg` : '—' });
+
+            const bkMuscle = bioKpi.createDiv('kt-health-bio-kpi-card');
+            bkMuscle.createSpan({ cls: 'kt-health-bio-kpi-label', text: 'Massa Muscular' });
+            bkMuscle.createSpan({ cls: 'kt-health-bio-kpi-val', text: latestBio.muscleMass ? `${latestBio.muscleMass} kg` : '—' });
+
+            const bkFat = bioKpi.createDiv('kt-health-bio-kpi-card');
+            bkFat.createSpan({ cls: 'kt-health-bio-kpi-label', text: 'Gordura (% PGC)' });
+            const fatSpan = bkFat.createSpan({ cls: 'kt-health-bio-kpi-val', text: latestBio.bodyFatPct ? `${latestBio.bodyFatPct}%` : '—' });
+            if (latestBio.bodyFatPct) {
+                fatSpan.style.color = latestBio.bodyFatPct > 22 ? '#f59e0b' : '#10b981';
+            }
+
+            const bkVisc = bioKpi.createDiv('kt-health-bio-kpi-card');
+            bkVisc.createSpan({ cls: 'kt-health-bio-kpi-label', text: 'Gordura Visceral' });
+            bkVisc.createSpan({ cls: 'kt-health-bio-kpi-val', text: latestBio.visceralFat ? `Nível ${latestBio.visceralFat}` : '—' });
+
+            const bkScore = bioKpi.createDiv('kt-health-bio-kpi-card');
+            bkScore.createSpan({ cls: 'kt-health-bio-kpi-label', text: 'Pontuação InBody' });
+            const scoreSpan = bkScore.createSpan({ cls: 'kt-health-bio-kpi-val', text: latestBio.inbodyScore ? `${latestBio.inbodyScore} pts` : '—' });
+            if (latestBio.inbodyScore) scoreSpan.style.color = '#38bdf8';
+        }
+
+        if (sortedBio.length === 0) {
+            const empty = bioSection.createDiv('kt-td-empty');
+            empty.setText('Nenhuma avaliação de bioimpedância ou laudo InBody registrado ainda. Clique em "+ Nova Avaliação InBody" para anexar uma foto ou registrar seus dados corporais.');
+        } else {
+            const bioGrid = bioSection.createDiv('kt-health-bio-grid');
+            sortedBio.forEach(bioItem => {
+                const bCard = bioGrid.createDiv('kt-health-bio-card');
+                bCard.title = 'Clique para visualizar ou editar';
+
+                const bTop = bCard.createDiv('kt-health-exam-header');
+                bTop.createSpan({ cls: 'kt-health-exam-title', text: `Avaliação InBody — ${bioItem.date}` });
+                if (bioItem.inbodyScore) {
+                    bTop.createSpan({ cls: 'kt-health-badge is-completed', text: `${bioItem.inbodyScore} pts` });
+                }
+
+                // Image thumbnail if attached
+                if (bioItem.imagePath) {
+                    if (bioItem.imagePath.toLowerCase().endsWith('.pdf')) {
+                        const pdfBtn = bCard.createEl('button', { cls: 'kt-health-pdf-btn', text: '📄 Abrir PDF do Laudo' });
+                        pdfBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            this.app.workspace.openLinkText(bioItem.imagePath, '', false);
+                        };
+                    } else {
+                        const img = bCard.createEl('img', { cls: 'kt-health-bio-thumb' });
+                        img.src = this.app.vault.adapter.getResourcePath(bioItem.imagePath);
+                        img.onclick = (e) => {
+                            e.stopPropagation();
+                            new HealthImageViewerModal(this.app, bioItem.imagePath, `Laudo InBody — ${bioItem.date}`).open();
+                        };
+                    }
+                }
+
+                // Mini metrics summary
+                const miniMetrics = bCard.createDiv('kt-health-bio-metrics-mini');
+                if (bioItem.weight) {
+                    const row = miniMetrics.createDiv('kt-health-bio-metric-item');
+                    row.createSpan({ text: 'Peso:' });
+                    row.createEl('b', { text: `${bioItem.weight} kg` });
+                }
+                if (bioItem.bodyFatPct) {
+                    const row = miniMetrics.createDiv('kt-health-bio-metric-item');
+                    row.createSpan({ text: 'Gordura:' });
+                    row.createEl('b', { text: `${bioItem.bodyFatPct}%` });
+                }
+                if (bioItem.muscleMass) {
+                    const row = miniMetrics.createDiv('kt-health-bio-metric-item');
+                    row.createSpan({ text: 'Massa Musc.:' });
+                    row.createEl('b', { text: `${bioItem.muscleMass} kg` });
+                }
+                if (bioItem.visceralFat) {
+                    const row = miniMetrics.createDiv('kt-health-bio-metric-item');
+                    row.createSpan({ text: 'G. Visceral:' });
+                    row.createEl('b', { text: `Nível ${bioItem.visceralFat}` });
+                }
+
+                // Actions row
+                const actRow = bCard.createDiv('kt-health-quicklog-controls');
+                actRow.style.marginTop = '4px';
+
+                if (bioItem.imagePath && !bioItem.imagePath.toLowerCase().endsWith('.pdf')) {
+                    const viewBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn', text: '🔍 Ver Foto' });
+                    viewBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        new HealthImageViewerModal(this.app, bioItem.imagePath, `Laudo InBody — ${bioItem.date}`).open();
+                    };
+                }
+
+                const editBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn', text: '✎ Editar' });
+                editBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    new HealthBioimpedanceModal(this.app, profile, bioItem, async (saved) => {
+                        const idx = profileData.bioimpedance.findIndex(b => b.id === bioItem.id);
+                        if (idx !== -1) profileData.bioimpedance[idx] = saved;
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }, async (delId) => {
+                        profileData.bioimpedance = profileData.bioimpedance.filter(b => b.id !== delId);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+
+                const delBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+                delBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    profileData.bioimpedance = profileData.bioimpedance.filter(b => b.id !== bioItem.id);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice('✓ Avaliação removida.');
+                };
+
+                bCard.ondblclick = (e) => {
+                    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                    if (bioItem.imagePath && !bioItem.imagePath.toLowerCase().endsWith('.pdf')) {
+                        new HealthImageViewerModal(this.app, bioItem.imagePath, `Laudo InBody — ${bioItem.date}`).open();
+                    } else {
+                        editBtn.click();
+                    }
+                };
+            });
+        }
+    }
+
+    // ----------------------------------------------------------
+    // HEALTH: BIOMARKERS & LAB EXAMS TAB (MULTI-BIOMARKER DASHBOARD GRID)
+    // ----------------------------------------------------------
+
+    renderHealthBiomarkersTab(container, profile, profileData) {
+        // 1. Section: Stored Lab Exams & PDF Attachments Hub
+        const examSection = container.createDiv('kt-health-card');
+        const examHdr = examSection.createDiv('kt-health-card-header');
+
+        const examTitleGroup = examHdr.createDiv('kt-fin-card-title-group');
+        examTitleGroup.createSpan({ cls: 'kt-health-card-title', text: 'Central de Exames, Laudos & PDFs Anexos' });
+        examTitleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Guarde seus laudos em PDF e extraia os biomarcadores automaticamente com 1 clique:' });
+
+        const examControls = examHdr.createDiv('kt-fin-card-controls');
+
+        const sortedExams = (profileData.exams || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        if (sortedExams.length > 0) {
+            const clearExamsBtn = examControls.createEl('button', {
+                cls: 'kt-health-btn-minimal-danger',
+                text: 'Limpar Exames',
+                title: 'Apagar todos os exames cadastrados e seus biomarcadores vinculados'
+            });
+            clearExamsBtn.onclick = () => {
+                new FinanceConfirmModal(
+                    this.app,
+                    'Limpar Todos os Exames',
+                    `Deseja realmente apagar todos os ${sortedExams.length} exames do perfil "${profile.name}"? Os biomarcadores vinculados a estes exames também serão removidos.`,
+                    async () => {
+                        const examIds = new Set(profileData.exams.map(e => e.id));
+                        profileData.exams = [];
+                        profileData.biomarkers = (profileData.biomarkers || []).filter(b => !examIds.has(b.examId));
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Todos os exames e biomarcadores de ${profile.name} foram apagados.`);
+                    }
+                ).open();
+            };
+        }
+
+        const addExamBtn = examControls.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Novo Exame / Importar PDF' });
+        addExamBtn.onclick = () => {
+            new HealthExamModal(this.app, profile, null, async (savedExam, extractedBiomarkers) => {
+                profileData.exams.unshift(savedExam);
+                if (extractedBiomarkers && extractedBiomarkers.length > 0) {
+                    profileData.biomarkers.push(...extractedBiomarkers);
+                }
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Exame "${savedExam.title}" salvo!`);
+            }).open();
+        };
+
+        if (sortedExams.length === 0) {
+            const empty = examSection.createDiv('kt-td-empty');
+            empty.setText('Nenhum exame em PDF cadastrado ainda. Clique no botão acima para importar um PDF do seu cofre ou arrastar um arquivo.');
+        } else {
+            const examGrid = examSection.createDiv('kt-health-exam-grid');
+            sortedExams.forEach(exam => {
+                const examCard = examGrid.createDiv('kt-health-exam-card');
+                examCard.title = 'Duplo clique para abrir detalhes completos do laudo';
+                
+                const openExamDetails = () => {
+                    new HealthExamDetailsModal(
+                        this.app,
+                        profile,
+                        exam,
+                        profileData,
+                        () => {
+                            new HealthExamModal(this.app, profile, exam, async (updatedExam, newBiomarkers) => {
+                                const idx = profileData.exams.findIndex(e => e.id === exam.id);
+                                if (idx !== -1) profileData.exams[idx] = updatedExam;
+                                if (newBiomarkers && newBiomarkers.length > 0) {
+                                    profileData.biomarkers.push(...newBiomarkers);
+                                }
+                                await this.plugin.saveSettings();
+                                this.render();
+                            }, async (delId) => {
+                                profileData.exams = profileData.exams.filter(e => e.id !== delId);
+                                profileData.biomarkers = profileData.biomarkers.filter(b => b.examId !== delId);
+                                await this.plugin.saveSettings();
+                                this.render();
+                            }).open();
+                        }
+                    ).open();
+                };
+
+                examCard.ondblclick = (e) => {
+                    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                    openExamDetails();
+                };
+
+                const top = examCard.createDiv('kt-health-exam-header');
+                top.createSpan({ cls: 'kt-health-exam-title', text: exam.title || 'Exame' });
+                top.createSpan({ cls: 'kt-health-exam-date', text: exam.date });
+
+                if (exam.lab) {
+                    examCard.createDiv({ cls: 'kt-health-entry-meta', text: `Local: ${exam.lab}` });
+                }
+
+                const linkedBiomarkersCount = profileData.biomarkers.filter(b => b.examId === exam.id || (!b.examId && b.date === exam.date)).length;
+                if (linkedBiomarkersCount > 0) {
+                    examCard.createDiv({ cls: 'kt-health-entry-meta', text: `Biomarcadores vinculados: ${linkedBiomarkersCount}` });
+                }
+
+                // Actions row
+                const actRow = examCard.createDiv('kt-health-quicklog-controls');
+                actRow.style.marginTop = '6px';
+
+                const detailsBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn', text: '🔍 Detalhes' });
+                detailsBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    openExamDetails();
+                };
+
+                if (exam.pdfPath) {
+                    const openPdfBtn = actRow.createEl('button', { cls: 'kt-health-pdf-btn', text: '📄 Abrir PDF' });
+                    openPdfBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        this.app.workspace.openLinkText(exam.pdfPath, '', false);
+                    };
+                }
+
+                const editBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn', text: '✎ Editar' });
+                editBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    new HealthExamModal(this.app, profile, exam, async (updatedExam, newBiomarkers) => {
+                        const idx = profileData.exams.findIndex(e => e.id === exam.id);
+                        if (idx !== -1) profileData.exams[idx] = updatedExam;
+                        if (newBiomarkers && newBiomarkers.length > 0) {
+                            profileData.biomarkers.push(...newBiomarkers);
+                        }
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }, async (delId) => {
+                        profileData.exams = profileData.exams.filter(e => e.id !== delId);
+                        profileData.biomarkers = profileData.biomarkers.filter(b => b.examId !== delId);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+
+                const delBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+                delBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    profileData.exams = profileData.exams.filter(e => e.id !== exam.id);
+                    profileData.biomarkers = profileData.biomarkers.filter(b => b.examId !== exam.id);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice('✓ Exame e biomarcadores vinculados removidos.');
+                };
+            });
+        }
+
+        // 2. Section: Multi-Biomarker Temporal Evolution Dashboard Grid
+        const gridSection = container.createDiv('kt-health-card');
+        const gridHdr = gridSection.createDiv('kt-health-card-header');
+
+        const titleGroup = gridHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-health-card-title', text: 'Painel Geral de Biomarcadores & Bioimpedância' });
+        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Visualização simultânea de todos os biomarcadores trackeados com curvas de evolução e faixas ideais:' });
+
+        const gridControls = gridHdr.createDiv('kt-fin-card-controls');
+
+        if ((profileData.biomarkers || []).length > 0) {
+            const clearBiomarkersBtn = gridControls.createEl('button', {
+                cls: 'kt-health-btn-minimal-danger',
+                text: 'Limpar Biomarcadores',
+                title: 'Apagar todas as medições de biomarcadores deste perfil'
+            });
+            clearBiomarkersBtn.onclick = () => {
+                new FinanceConfirmModal(
+                    this.app,
+                    'Limpar Todos os Biomarcadores',
+                    `Deseja realmente apagar todos os ${(profileData.biomarkers || []).length} registros de biomarcadores do perfil "${profile.name}"? Os gráficos serão zerados para você recomeçar.`,
+                    async () => {
+                        profileData.biomarkers = [];
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Todos os biomarcadores de ${profile.name} foram zerados.`);
+                    }
+                ).open();
+            };
+        }
+
+        const addManualBtn = gridControls.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Nova Medição Manual' });
+        addManualBtn.onclick = () => {
+            new HealthBiomarkerModal(this.app, profile, null, async (saved) => {
+                profileData.biomarkers.push(saved);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Medição de ${saved.metricName} salva!`);
+            }).open();
+        };
+
+        // Group biomarkers by metricKey
+        const grouped = {};
+        (profileData.biomarkers || []).forEach(bm => {
+            const k = bm.metricKey || 'custom';
+            if (!grouped[k]) grouped[k] = [];
+            grouped[k].push(bm);
+        });
+
+        const trackedKeys = Object.keys(grouped);
+
+        if (trackedKeys.length === 0) {
+            const empty = gridSection.createDiv('kt-td-empty');
+            empty.setText('Nenhum biomarcador ou medição registrada ainda. Clique em "+ Nova Medição Manual" ou importe um exame em PDF acima.');
+            return;
+        }
+
+        // Filter chips bar
+        if (!this.healthBiomarkerActiveCategory) {
+            this.healthBiomarkerActiveCategory = 'all';
+        }
+
+        // Extract categories
+        const catCounts = {};
+        trackedKeys.forEach(k => {
+            const cat = HEALTH_BIOMARKER_CATALOG.find(b => b.key === k)?.category || grouped[k][0]?.category || 'Geral';
+            catCounts[cat] = (catCounts[cat] || 0) + 1;
+        });
+
+        const filterBar = gridSection.createDiv('kt-health-filter-bar');
+        
+        const allChip = filterBar.createEl('button', {
+            cls: `kt-health-filter-chip ${this.healthBiomarkerActiveCategory === 'all' ? 'is-active' : ''}`,
+            text: `Todos (${trackedKeys.length})`
+        });
+        allChip.onclick = () => {
+            this.healthBiomarkerActiveCategory = 'all';
+            renderGrid();
+        };
+
+        Object.entries(catCounts).forEach(([catName, count]) => {
+            const chip = filterBar.createEl('button', {
+                cls: `kt-health-filter-chip ${this.healthBiomarkerActiveCategory === catName ? 'is-active' : ''}`,
+                text: `${catName} (${count})`
+            });
+            chip.onclick = () => {
+                this.healthBiomarkerActiveCategory = catName;
+                renderGrid();
+            };
+        });
+
+        // Live Search Input in Filter Bar
+        const searchInput = filterBar.createEl('input', {
+            cls: 'kt-health-search-input',
+            type: 'text',
+            value: this.healthBiomarkerSearchQuery || ''
+        });
+        searchInput.placeholder = '🔍 Buscar biomarcador (ex: testo, estradiol)...';
+        searchInput.oninput = () => {
+            this.healthBiomarkerSearchQuery = searchInput.value;
+            renderGrid();
+        };
+
+        // Biomarkers Cards Grid
+        const grid = gridSection.createDiv('kt-health-biomarkers-grid');
+        
+        const renderGrid = () => {
+            if (grid.empty) grid.empty();
+            else grid.innerHTML = '';
+            const sq = (this.healthBiomarkerSearchQuery || '').toLowerCase().trim();
+
+            const filteredKeys = trackedKeys.filter(k => {
+                const entries = grouped[k].slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+                const catItem = HEALTH_BIOMARKER_CATALOG.find(b => b.key === k) || {
+                    key: k,
+                    name: entries[0]?.metricName || k,
+                    unit: entries[0]?.unit || '',
+                    category: entries[0]?.category || 'Geral'
+                };
+                const catName = catItem.category || 'Geral';
+
+                if (this.healthBiomarkerActiveCategory !== 'all' && this.healthBiomarkerActiveCategory !== catName) {
+                    return false;
+                }
+
+                if (sq) {
+                    const name = (catItem.name || '').toLowerCase();
+                    const cat = (catItem.category || '').toLowerCase();
+                    const key = k.toLowerCase();
+                    if (!name.includes(sq) && !cat.includes(sq) && !key.includes(sq)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            if (filteredKeys.length === 0) {
+                const empty = grid.createDiv('kt-td-empty');
+                empty.style.gridColumn = '1 / -1';
+                empty.setText('Nenhum biomarcador encontrado para o filtro selecionado.');
+                return;
+            }
+
+            filteredKeys.forEach(k => {
+                const entries = grouped[k].slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+                const catItem = HEALTH_BIOMARKER_CATALOG.find(b => b.key === k) || {
+                    key: k,
+                    name: entries[0]?.metricName || k,
+                    unit: entries[0]?.unit || '',
+                    category: entries[0]?.category || 'Geral'
+                };
+                this.renderBiomarkerCard(grid, k, catItem, entries, profile, profileData);
+            });
+        };
+
+        renderGrid();
+    }
+
+    renderBiomarkerCard(container, metricKey, catItem, entries, profile, profileData) {
+        const card = container.createDiv('kt-health-biomarker-card');
+        const latest = entries[entries.length - 1];
+        const prev = entries.length > 1 ? entries[entries.length - 2] : null;
+
+        const refMin = latest.refMin !== undefined ? latest.refMin : catItem.refMin;
+        const refMax = latest.refMax !== undefined ? latest.refMax : catItem.refMax;
+
+        const isOut = (refMin !== undefined && refMin > 0 && latest.value < refMin) || (refMax !== undefined && refMax > 0 && latest.value > refMax);
+        const isLow = isOut && (refMin !== undefined && latest.value < refMin);
+        const badgeCls = isOut ? 'kt-health-badge is-danger' : 'kt-health-badge is-completed';
+        const badgeTxt = isOut ? (isLow ? 'Abaixo' : 'Acima') : 'Normal';
+
+        const openExpanded = () => {
+            new HealthBiomarkerExpandedModal(
+                this.app,
+                profile,
+                metricKey,
+                catItem,
+                entries,
+                profileData,
+                async (savedPoint) => {
+                    const idx = profileData.biomarkers.findIndex(b => b.id === savedPoint.id);
+                    if (idx !== -1) profileData.biomarkers[idx] = savedPoint;
+                    else profileData.biomarkers.push(savedPoint);
+                    await this.plugin.saveSettings();
+                    this.render();
+                },
+                async (delId) => {
+                    profileData.biomarkers = profileData.biomarkers.filter(b => b.id !== delId);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }
+            ).open();
+        };
+
+        card.title = 'Duplo clique para expandir gráfico e histórico detalhado';
+        card.ondblclick = (e) => {
+            if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+            openExpanded();
+        };
+
+        // 1. Card Top
+        const top = card.createDiv('kt-health-biomarker-card-top');
+        
+        const infoLeft = top.createDiv();
+        infoLeft.createDiv({ cls: 'kt-health-biomarker-card-name', text: catItem.name || latest.metricName });
+        infoLeft.createDiv({ cls: 'kt-health-biomarker-card-cat', text: catItem.category || 'Geral' });
+
+        const valRight = top.createDiv('kt-health-biomarker-card-value-box');
+        const valLine = valRight.createDiv();
+        valLine.createSpan({ cls: 'kt-health-biomarker-card-val', text: String(latest.value) });
+        valLine.createSpan({ cls: 'kt-health-biomarker-card-unit', text: latest.unit || catItem.unit || '' });
+
+        valRight.createSpan({ cls: badgeCls, text: badgeTxt });
+
+        // Delta & Date Meta
+        let deltaStr = `Última medição: ${latest.date}`;
+        if (prev) {
+            const diff = latest.value - prev.value;
+            const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
+            deltaStr += ` (Δ ${diffStr} ${latest.unit || catItem.unit || ''})`;
+        }
+        const deltaEl = card.createDiv({ cls: 'kt-health-kpi-meta', text: deltaStr });
+        deltaEl.style.marginTop = '-4px';
+
+        // 2. Sparkline SVG
+        this.renderBiomarkerSparkline(card, catItem, entries, refMin, refMax);
+
+        // 3. Mini History & Quick Actions
+        const historyWrap = card.createDiv('kt-health-mini-history');
+        
+        const actRow = historyWrap.createDiv('kt-health-quicklog-controls');
+        actRow.style.justifyContent = 'space-between';
+
+        const addBtn = actRow.createEl('button', { cls: 'kt-health-water-btn', text: '+ Medição' });
+        addBtn.onclick = (e) => {
+            e.stopPropagation();
+            new HealthBiomarkerModal(this.app, profile, {
+                metricKey: metricKey,
+                metricName: catItem.name || latest.metricName,
+                category: catItem.category || latest.category,
+                unit: latest.unit || catItem.unit,
+                refMin: refMin,
+                refMax: refMax
+            }, async (saved) => {
+                profileData.biomarkers.push(saved);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Medição de ${saved.metricName} salva!`);
+            }).open();
+        };
+
+        const toggleHistoryBtn = actRow.createEl('button', { cls: 'kt-fin-row-btn', text: `⛶ Histórico (${entries.length})` });
+        toggleHistoryBtn.onclick = (e) => {
+            e.stopPropagation();
+            openExpanded();
+        };
+
+        const historyTableContainer = card.createDiv();
+        historyTableContainer.style.display = 'none';
+
+        toggleHistoryBtn.onclick = () => {
+            const isShown = historyTableContainer.style.display !== 'none';
+            historyTableContainer.style.display = isShown ? 'none' : 'block';
+            toggleHistoryBtn.setText(isShown ? `▾ Histórico (${entries.length})` : `▴ Ocultar (${entries.length})`);
+        };
+
+        // Populate inline history table
+        const tableWrap = historyTableContainer.createDiv('kt-fin-table-wrap');
+        tableWrap.style.marginTop = '6px';
+        const tbl = tableWrap.createEl('table', { cls: 'kt-fin-table' });
+        const thead = tbl.createEl('thead');
+        const thr = thead.createEl('tr');
+        thr.createEl('th', { text: 'Data' });
+        thr.createEl('th', { text: 'Valor' });
+        thr.createEl('th', { text: 'Obs' });
+        thr.createEl('th', { text: 'Ações', cls: 'kt-th-actions' });
+
+        const tbody = tbl.createEl('tbody');
+        entries.slice().reverse().forEach(entry => {
+            const tr = tbody.createEl('tr');
+            tr.createEl('td', { text: entry.date });
+            tr.createEl('td', { text: `${entry.value} ${entry.unit || ''}`, attr: { style: 'font-weight:700;' } });
+            tr.createEl('td', { text: entry.notes || '—', attr: { style: 'font-size:11px; color:var(--text-muted);' } });
+
+            const actTd = tr.createEl('td', { cls: 'kt-td-actions' });
+            const editBtn = actTd.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+            editBtn.onclick = () => {
+                new HealthBiomarkerModal(this.app, profile, entry, async (updated) => {
+                    const idx = profileData.biomarkers.findIndex(b => b.id === entry.id);
+                    if (idx !== -1) profileData.biomarkers[idx] = updated;
+                    await this.plugin.saveSettings();
+                    this.render();
+                }, async (delId) => {
+                    profileData.biomarkers = profileData.biomarkers.filter(b => b.id !== delId);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+
+            const delBtn = actTd.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.onclick = async () => {
+                profileData.biomarkers = profileData.biomarkers.filter(b => b.id !== entry.id);
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+    }
+
+    renderBiomarkerSparkline(container, catItem, entries, refMin, refMax) {
+        const sparkWrap = container.createDiv('kt-health-sparkline-wrap');
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 340 100');
+        svg.classList.add('kt-health-sparkline-svg');
+
+        const padX = 25;
+        const padY = 15;
+        const chartW = 290;
+        const chartH = 65;
+        const bottomY = padY + chartH;
+
+        const values = entries.map(e => e.value);
+        let allPoints = [...values];
+        if (refMin !== undefined && refMin > 0) allPoints.push(refMin);
+        if (refMax !== undefined && refMax > 0) allPoints.push(refMax);
+
+        let minVal = Math.min(...allPoints);
+        let maxVal = Math.max(...allPoints);
+        const range = maxVal === minVal ? (maxVal === 0 ? 10 : maxVal * 0.2) : (maxVal - minVal);
+        minVal = Math.max(0, minVal - range * 0.15);
+        maxVal = maxVal + range * 0.15;
+
+        const getY = (val) => bottomY - ((val - minVal) / (maxVal - minVal)) * chartH;
+        const getX = (idx) => entries.length === 1 ? 170 : padX + (idx / (entries.length - 1)) * chartW;
+
+        // Reference range band
+        if (refMin !== undefined && refMax !== undefined && refMax > refMin) {
+            const yMax = getY(refMax);
+            const yMin = getY(refMin);
+            const rectH = yMin - yMax;
+
+            const refRect = document.createElementNS(svgNS, 'rect');
+            refRect.setAttribute('x', String(padX));
+            refRect.setAttribute('y', String(yMax));
+            refRect.setAttribute('width', String(chartW));
+            refRect.setAttribute('height', String(rectH));
+            refRect.setAttribute('fill', 'rgba(34, 197, 94, 0.12)');
+            refRect.setAttribute('rx', '3');
+            svg.appendChild(refRect);
+
+            const refTxt = document.createElementNS(svgNS, 'text');
+            refTxt.setAttribute('x', String(padX + chartW - 2));
+            refTxt.setAttribute('y', String(yMax - 3));
+            refTxt.setAttribute('text-anchor', 'end');
+            refTxt.setAttribute('fill', '#22c55e');
+            refTxt.setAttribute('font-size', '8.5');
+            refTxt.setAttribute('font-weight', '600');
+            refTxt.textContent = `Ref: ${refMin}–${refMax}`;
+            svg.appendChild(refTxt);
+        }
+
+        // Line Path
+        if (entries.length >= 2) {
+            let pathStr = `M ${getX(0).toFixed(1)} ${getY(entries[0].value).toFixed(1)}`;
+            for (let i = 1; i < entries.length; i++) {
+                pathStr += ` L ${getX(i).toFixed(1)} ${getY(entries[i].value).toFixed(1)}`;
+            }
+            const pathEl = document.createElementNS(svgNS, 'path');
+            pathEl.setAttribute('d', pathStr);
+            pathEl.setAttribute('fill', 'none');
+            pathEl.setAttribute('stroke', '#38bdf8');
+            pathEl.setAttribute('stroke-width', '2.2');
+            pathEl.setAttribute('stroke-linecap', 'round');
+            pathEl.setAttribute('stroke-linejoin', 'round');
+            svg.appendChild(pathEl);
+        }
+
+        // Points
+        entries.forEach((e, idx) => {
+            const cx = getX(idx);
+            const cy = getY(e.value);
+            const isOut = (refMin !== undefined && refMin > 0 && e.value < refMin) || (refMax !== undefined && refMax > 0 && e.value > refMax);
+
+            const circle = document.createElementNS(svgNS, 'circle');
+            circle.setAttribute('cx', String(cx));
+            circle.setAttribute('cy', String(cy));
+            circle.setAttribute('r', '4');
+            circle.setAttribute('fill', isOut ? '#ef4444' : '#22c55e');
+            circle.setAttribute('stroke', 'var(--background-secondary)');
+            circle.setAttribute('stroke-width', '1.5');
+            svg.appendChild(circle);
+
+            // Value label above
+            const valTxt = document.createElementNS(svgNS, 'text');
+            valTxt.setAttribute('x', String(cx));
+            valTxt.setAttribute('y', String(cy - 6));
+            valTxt.setAttribute('text-anchor', 'middle');
+            valTxt.setAttribute('fill', 'var(--text-normal)');
+            valTxt.setAttribute('font-size', '9');
+            valTxt.setAttribute('font-weight', '700');
+            valTxt.textContent = String(e.value);
+            svg.appendChild(valTxt);
+
+            // Date label below
+            const dateTxt = document.createElementNS(svgNS, 'text');
+            dateTxt.setAttribute('x', String(cx));
+            dateTxt.setAttribute('y', String(bottomY + 12));
+            dateTxt.setAttribute('text-anchor', 'middle');
+            dateTxt.setAttribute('fill', 'var(--text-muted)');
+            dateTxt.setAttribute('font-size', '8');
+            dateTxt.textContent = e.date.substring(5); // e.g. 08-29
+            svg.appendChild(dateTxt);
+        });
+
+        sparkWrap.appendChild(svg);
+    }
+
+    // ----------------------------------------------------------
+    // HEALTH: CONSULTATIONS & MEDICAL HISTORY TAB
+    // ----------------------------------------------------------
+
+    renderHealthConsultationsTab(container, profile, profileData) {
+        const card = container.createDiv('kt-health-card');
+        const cardHdr = card.createDiv('kt-health-card-header');
+
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-health-card-title', text: profile.type === 'pet' ? 'Consultas Veterinárias & Histórico Clínico' : 'Histórico Médico, Consultas & Retornos' });
+        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Registro cronológico de queixas, diagnósticos, receitas e retornos agendados:' });
+
+        const addBtn = cardHdr.createEl('button', { cls: 'kt-fin-add-btn', text: profile.type === 'pet' ? '+ Nova Consulta Veterinária' : '+ Nova Consulta Médica' });
+        addBtn.onclick = () => {
+            new HealthConsultationModal(this.app, profile, null, async (saved) => {
+                profileData.consultations.unshift(saved);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Consulta registrada com sucesso!');
+            }).open();
+        };
+
+        const sorted = profileData.consultations.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        if (sorted.length === 0) {
+            const empty = card.createDiv('kt-td-empty');
+            empty.setText('Nenhuma consulta médica cadastrada ainda.');
+            return;
+        }
+
+        const timeline = card.createDiv('kt-health-timeline');
+        sorted.forEach(c => {
+            const entryCard = timeline.createDiv('kt-health-entry-card');
+
+            const top = entryCard.createDiv('kt-health-entry-top');
+            const leftTop = top.createDiv();
+            leftTop.createSpan({ cls: 'kt-health-entry-title', text: `${c.specialty} — ${c.doctorName || 'Médico'}` });
+            if (c.clinicOrHospital) {
+                leftTop.createSpan({ text: ` (${c.clinicOrHospital})`, style: 'color:var(--text-muted); font-size:12px;' });
+            }
+
+            const rightTop = top.createDiv('kt-fin-person-actions');
+            top.createSpan({ cls: 'kt-health-entry-date', text: c.date });
+
+            if (c.returnDate) {
+                const isCompleted = c.returnStatus === 'completed';
+                const badge = entryCard.createSpan({
+                    cls: isCompleted ? 'kt-health-badge is-completed' : 'kt-health-badge is-pending',
+                    text: isCompleted ? `Retorno Realizado: ${c.returnDate}` : `Retorno Agendado: ${c.returnDate}`
+                });
+                badge.style.alignSelf = 'flex-start';
+            }
+
+            // Reason
+            entryCard.createDiv({ cls: 'kt-health-entry-meta', text: `Motivo / Queixa: ${c.problemOrReason}` });
+
+            // Diagnosis
+            if (c.diagnosis) {
+                const diagDiv = entryCard.createDiv('kt-health-entry-meta');
+                diagDiv.createSpan({ text: 'Diagnóstico / Laudo: ', style: 'font-weight:600; color:var(--text-normal);' });
+                diagDiv.createSpan({ text: c.diagnosis });
+            }
+
+            // Prescriptions
+            if (c.prescriptions) {
+                const presDiv = entryCard.createDiv('kt-health-entry-meta');
+                presDiv.createSpan({ text: 'Receita / Medicamentos: ', style: 'font-weight:600; color:var(--text-normal);' });
+                presDiv.createSpan({ text: c.prescriptions, style: 'color:#38bdf8;' });
+            }
+
+            // Requested exams
+            if (c.requestedExams) {
+                const examsDiv = entryCard.createDiv('kt-health-entry-meta');
+                examsDiv.createSpan({ text: 'Exames Solicitados: ', style: 'font-weight:600; color:var(--text-normal);' });
+                examsDiv.createSpan({ text: c.requestedExams });
+            }
+
+            // PDF button / Action buttons
+            const botActions = entryCard.createDiv('kt-health-quicklog-controls');
+            botActions.style.marginTop = '6px';
+
+            if (c.pdfPath) {
+                const pdfBtn = botActions.createEl('button', { cls: 'kt-health-pdf-btn', text: '📄 Abrir PDF Anexo' });
+                pdfBtn.onclick = () => {
+                    this.app.workspace.openLinkText(c.pdfPath, '', false);
+                };
+            }
+
+            const editBtn = botActions.createEl('button', { cls: 'kt-fin-row-btn', text: '✎ Editar' });
+            editBtn.onclick = () => {
+                new HealthConsultationModal(this.app, profile, c, async (updated) => {
+                    const idx = profileData.consultations.findIndex(it => it.id === c.id);
+                    if (idx !== -1) profileData.consultations[idx] = updated;
+                    await this.plugin.saveSettings();
+                    this.render();
+                }, async (delId) => {
+                    profileData.consultations = profileData.consultations.filter(it => it.id !== delId);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+
+            const delBtn = botActions.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.onclick = async () => {
+                profileData.consultations = profileData.consultations.filter(it => it.id !== c.id);
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+    }
+
+    // ----------------------------------------------------------
+    // HEALTH: MENTAL HEALTH & CORRELATION ENGINE TAB
+    // ----------------------------------------------------------
+
+    renderHealthMentalTab(container, profile, profileData) {
+        const card = container.createDiv('kt-health-card');
+        const cardHdr = card.createDiv('kt-health-card-header');
+
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-health-card-title', text: 'Saúde Mental, Sono & Prevenção de Burnout' });
+        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Cruzamento preditivo de Estresse Diário vs. Horas de Sono:' });
+
+        // 1. Burnout Early Warning Detector
+        const recentDates = [];
+        for (let i = 0; i < 14; i++) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            recentDates.push(d.toISOString().split('T')[0]);
+        }
+
+        let consecutiveStress = 0;
+        let highStressLowSleepDays = 0;
+
+        recentDates.forEach(dStr => {
+            const l = profileData.dailyLogs[dStr];
+            if (l) {
+                if (l.stress >= 4 && (l.sleepHours || 8) < 6.5) {
+                    highStressLowSleepDays++;
+                }
+            }
+        });
+
+        if (highStressLowSleepDays >= 3) {
+            const banner = card.createDiv('kt-health-burnout-banner');
+            const bLeft = banner.createDiv();
+            bLeft.createDiv({ cls: 'kt-health-burnout-title', text: 'Atenção Preventiva: Risco de Sobrecarga / Burnout' });
+            bLeft.createDiv({ cls: 'kt-health-burnout-desc', text: `Detectados ${highStressLowSleepDays} dias recentes com estresse elevado (≥ 4) associados a sono insuficiente (< 6.5h). Considere pausas e ajuste de prazos.` });
+        }
+
+        // 2. Dual-Axis Correlation Chart (Stress vs Sleep)
+        this.renderHealthMentalCorrelationChart(card, profile, profileData);
+
+        // 3. Insights Cards Grid
+        const insightsGrid = card.createDiv('kt-health-kpi-grid');
+        insightsGrid.style.marginTop = '12px';
+
+        let sleepHighStress = 0, countHighStress = 0;
+        let sleepLowStress = 0, countLowStress = 0;
+
+        Object.values(profileData.dailyLogs).forEach(l => {
+            if (l.sleepHours) {
+                if (l.stress >= 4) {
+                    sleepHighStress += l.sleepHours;
+                    countHighStress++;
+                } else if (l.stress <= 2) {
+                    sleepLowStress += l.sleepHours;
+                    countLowStress++;
+                }
+            }
+        });
+
+        const avgSleepHighStress = countHighStress > 0 ? (sleepHighStress / countHighStress).toFixed(1) : '-';
+        const avgSleepLowStress = countLowStress > 0 ? (sleepLowStress / countLowStress).toFixed(1) : '-';
+
+        const ins1 = insightsGrid.createDiv('kt-health-kpi-card');
+        ins1.createSpan({ cls: 'kt-health-kpi-label', text: 'Sono em Dias de Alto Estresse' });
+        ins1.createSpan({ cls: 'kt-health-kpi-val', text: avgSleepHighStress !== '-' ? `${avgSleepHighStress}h / noite` : 'Sem registros' });
+        ins1.createSpan({ cls: 'kt-health-kpi-meta', text: 'Média de descanso sob pressão' });
+
+        const ins2 = insightsGrid.createDiv('kt-health-kpi-card');
+        ins2.createSpan({ cls: 'kt-health-kpi-label', text: 'Sono em Dias Calmos / Equilibrados' });
+        ins2.createSpan({ cls: 'kt-health-kpi-val', text: avgSleepLowStress !== '-' ? `${avgSleepLowStress}h / noite` : 'Sem registros' });
+        ins2.createSpan({ cls: 'kt-health-kpi-meta', text: 'Média de descanso em dias tranquilos' });
+    }
+
+    renderHealthMentalCorrelationChart(container, profile, profileData) {
+        const chartWrap = container.createDiv('kt-health-chart-wrap');
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 1000 260');
+        svg.classList.add('kt-health-chart-svg');
+
+        const padX = 50;
+        const padY = 30;
+        const chartW = 900;
+        const chartH = 190;
+        const bottomY = padY + chartH;
+
+        // Last 14 days series
+        const days = [];
+        for (let i = 13; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const dStr = d.toISOString().split('T')[0];
+            const log = profileData.dailyLogs[dStr] || {};
+            days.push({
+                date: dStr,
+                label: `${d.getDate()}/${d.getMonth() + 1}`,
+                stress: log.stress || 0,
+                sleep: log.sleepHours || 0
+            });
+        }
+
+        // Background Grid
+        for (let g = 0; g <= 3; g++) {
+            const gy = padY + (g / 3) * chartH;
+            const gLine = document.createElementNS(svgNS, 'line');
+            gLine.setAttribute('x1', String(padX));
+            gLine.setAttribute('y1', String(gy));
+            gLine.setAttribute('x2', String(padX + chartW));
+            gLine.setAttribute('y2', String(gy));
+            gLine.classList.add('kt-fin-chart-grid-line');
+            svg.appendChild(gLine);
+        }
+
+        const getX = (idx) => padX + (idx / (days.length - 1)) * chartW;
+        const getStressY = (s) => bottomY - (s / 5) * chartH;
+        const getSleepY = (h) => bottomY - (Math.min(12, h) / 12) * chartH;
+
+        // Line 1: Stress Line (Red/Coral)
+        const activeStress = days.filter(d => d.stress > 0);
+        if (activeStress.length >= 2) {
+            let pStr = '';
+            days.forEach((d, idx) => {
+                if (d.stress > 0) {
+                    pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getStressY(d.stress).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getStressY(d.stress).toFixed(1)}`;
+                }
+            });
+            const pEl = document.createElementNS(svgNS, 'path');
+            pEl.setAttribute('d', pStr);
+            pEl.setAttribute('fill', 'none');
+            pEl.setAttribute('stroke', '#ef4444');
+            pEl.setAttribute('stroke-width', '2.5');
+            svg.appendChild(pEl);
+        }
+
+        // Line 2: Sleep Line (Sky Blue)
+        const activeSleep = days.filter(d => d.sleep > 0);
+        if (activeSleep.length >= 2) {
+            let pStr = '';
+            days.forEach((d, idx) => {
+                if (d.sleep > 0) {
+                    pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getSleepY(d.sleep).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getSleepY(d.sleep).toFixed(1)}`;
+                }
+            });
+            const pEl = document.createElementNS(svgNS, 'path');
+            pEl.setAttribute('d', pStr);
+            pEl.setAttribute('fill', 'none');
+            pEl.setAttribute('stroke', '#38bdf8');
+            pEl.setAttribute('stroke-width', '2.5');
+            pEl.setAttribute('stroke-dasharray', '5 3');
+            svg.appendChild(pEl);
+        }
+
+        // Legend
+        const legStress = document.createElementNS(svgNS, 'text');
+        legStress.setAttribute('x', '60');
+        legStress.setAttribute('y', '20');
+        legStress.setAttribute('fill', '#ef4444');
+        legStress.setAttribute('font-size', '11');
+        legStress.setAttribute('font-weight', '600');
+        legStress.textContent = '— Estresse (1 a 5)';
+        svg.appendChild(legStress);
+
+        const legSleep = document.createElementNS(svgNS, 'text');
+        legSleep.setAttribute('x', '200');
+        legSleep.setAttribute('y', '20');
+        legSleep.setAttribute('fill', '#38bdf8');
+        legSleep.setAttribute('font-size', '11');
+        legSleep.setAttribute('font-weight', '600');
+        legSleep.textContent = '- - - Horas de Sono (0 a 12h)';
+        svg.appendChild(legSleep);
+
+        // Dots & X Labels
+        days.forEach((d, idx) => {
+            const cx = getX(idx);
+            
+            // X Label
+            const lbl = document.createElementNS(svgNS, 'text');
+            lbl.setAttribute('x', String(cx));
+            lbl.setAttribute('y', String(bottomY + 16));
+            lbl.setAttribute('text-anchor', 'middle');
+            lbl.setAttribute('fill', 'var(--text-muted)');
+            lbl.setAttribute('font-size', '10.5');
+            lbl.textContent = d.label;
+            svg.appendChild(lbl);
+
+            // Stress Dot
+            if (d.stress > 0) {
+                const c = document.createElementNS(svgNS, 'circle');
+                c.setAttribute('cx', String(cx));
+                c.setAttribute('cy', String(getStressY(d.stress)));
+                c.setAttribute('r', '4');
+                c.setAttribute('fill', '#ef4444');
+                svg.appendChild(c);
+            }
+
+            // Sleep Dot
+            if (d.sleep > 0) {
+                const c = document.createElementNS(svgNS, 'circle');
+                c.setAttribute('cx', String(cx));
+                c.setAttribute('cy', String(getSleepY(d.sleep)));
+                c.setAttribute('r', '4');
+                c.setAttribute('fill', '#38bdf8');
+                svg.appendChild(c);
+            }
+        });
+
+        chartWrap.appendChild(svg);
+    }
+
+    // ----------------------------------------------------------
+    // HEALTH: VACCINES & PREVENTION TAB
+    // ----------------------------------------------------------
+
+    renderHealthVaccinesTab(container, profile, profileData) {
+        const card = container.createDiv('kt-health-card');
+        const cardHdr = card.createDiv('kt-health-card-header');
+
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-health-card-title', text: profile.type === 'pet' ? 'Vacinas, Vermífugos & Antiparasitários' : 'Vacinas & Imunização' });
+        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Controle de aplicações, lotes e datas de reforço:' });
+
+        const addBtn = cardHdr.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Nova Vacina / Dose' });
+        addBtn.onclick = () => {
+            new HealthVaccineModal(this.app, profile, null, async (saved) => {
+                profileData.vaccines.push(saved);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('✓ Registro de vacina adicionado!');
+            }).open();
+        };
+
+        const sorted = profileData.vaccines.slice().sort((a, b) => (b.applicationDate || '').localeCompare(a.applicationDate || ''));
+        if (sorted.length === 0) {
+            const empty = card.createDiv('kt-td-empty');
+            empty.setText('Nenhuma vacina ou antiparasitário registrado ainda.');
+            return;
+        }
+
+        const timeline = card.createDiv('kt-health-timeline');
+        sorted.forEach(v => {
+            const entryCard = timeline.createDiv('kt-health-entry-card');
+
+            const top = entryCard.createDiv('kt-health-entry-top');
+            top.createSpan({ cls: 'kt-health-entry-title', text: v.name });
+            top.createSpan({ cls: 'kt-health-entry-date', text: `Aplicada em: ${v.applicationDate}` });
+
+            if (v.nextDueDate) {
+                const today = new Date().toISOString().split('T')[0];
+                const isOverdue = v.nextDueDate < today;
+                const badge = entryCard.createSpan({
+                    cls: isOverdue ? 'kt-health-badge is-danger' : 'kt-health-badge is-pending',
+                    text: isOverdue ? `Atrasada! Reforço era em ${v.nextDueDate}` : `Próximo Reforço: ${v.nextDueDate}`
+                });
+                badge.style.alignSelf = 'flex-start';
+            }
+
+            if (v.clinicOrVet) {
+                entryCard.createDiv({ cls: 'kt-health-entry-meta', text: `Local / Veterinário: ${v.clinicOrVet}` });
+            }
+            if (v.batchNumber) {
+                entryCard.createDiv({ cls: 'kt-health-entry-meta', text: `Lote / Fabricante: ${v.batchNumber}` });
+            }
+            if (v.notes) {
+                entryCard.createDiv({ cls: 'kt-health-entry-meta', text: `Obs: ${v.notes}` });
+            }
+
+            const botActions = entryCard.createDiv('kt-health-quicklog-controls');
+            botActions.style.marginTop = '6px';
+
+            const editBtn = botActions.createEl('button', { cls: 'kt-fin-row-btn', text: '✎ Editar' });
+            editBtn.onclick = () => {
+                new HealthVaccineModal(this.app, profile, v, async (updated) => {
+                    const idx = profileData.vaccines.findIndex(it => it.id === v.id);
+                    if (idx !== -1) profileData.vaccines[idx] = updated;
+                    await this.plugin.saveSettings();
+                    this.render();
+                }, async (delId) => {
+                    profileData.vaccines = profileData.vaccines.filter(it => it.id !== delId);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+
+            const delBtn = botActions.createEl('button', { cls: 'kt-fin-row-btn mod-warning', text: '✕' });
+            delBtn.onclick = async () => {
+                profileData.vaccines = profileData.vaccines.filter(it => it.id !== v.id);
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
     }
 
     // ----------------------------------------------------------
@@ -14054,11 +19931,25 @@ kanban-plugin: basic
         const form = footer.createDiv('kt-add-card-form');
         form.style.display = 'none';
 
+        // Tag badge for associated project/column
+        const tagBadge = form.createDiv('kt-add-card-tag-badge');
+        tagBadge.style.display = 'none';
+
         const input = form.createEl('textarea', {
             cls: 'kt-new-card-input',
-            attr: { placeholder: 'Digite o título do card...', rows: '2' }
+            attr: { placeholder: 'Digite o título do card...', rows: '3' }
         });
-        new CardTextareaSuggester(this.app, input, () => this.cards.flatMap(c => c.tags));
+        new CardTextareaSuggester(this.app, input, () => [
+            ...this.cards.flatMap(c => c.tags || []),
+            ...(this.plugin.settings.projects || []).map(p => p.tag).filter(Boolean),
+            ...(this.plugin.settings.projects || []).map(p => p.name).filter(Boolean)
+        ]);
+
+        const autoResize = () => {
+            input.style.height = 'auto';
+            input.style.height = Math.max(68, input.scrollHeight) + 'px';
+        };
+        input.addEventListener('input', autoResize);
 
         const btnRow = form.createDiv('kt-add-card-actions');
         const confirmBtn = btnRow.createEl('button', {
@@ -14074,13 +19965,28 @@ kanban-plugin: basic
             addBtn.style.display = 'none';
             form.style.display = 'flex';
             input.value = '';
-            input.focus();
+
+            const assocTag = this.getAssociatedTagForColumn(colName);
+            if (assocTag) {
+                tagBadge.setText(`🏷️ ${assocTag}`);
+                tagBadge.title = `A tag ${assocTag} será adicionada automaticamente ao card se você não a digitar.`;
+                tagBadge.style.display = 'inline-flex';
+            } else {
+                tagBadge.style.display = 'none';
+            }
+
+            autoResize();
+            setTimeout(() => {
+                input.focus();
+                autoResize();
+            }, 30);
         };
 
         const closeForm = () => {
             form.style.display = 'none';
             addBtn.style.display = 'flex';
             input.value = '';
+            input.style.height = '';
         };
 
         const submitForm = async () => {
@@ -14088,6 +19994,7 @@ kanban-plugin: basic
             if (val) {
                 await this.addCardToColumn(colName, val);
                 input.value = '';
+                autoResize();
                 input.focus();
                 await this.refresh();
             }
@@ -15705,6 +21612,15 @@ const DEFAULT_SETTINGS = {
             'Outros'
         ],
         months: {}
+    },
+    health: {
+        selectedProfileId: 'profile-me',
+        activeSubTab: 'overview',
+        profiles: [
+            { id: 'profile-me', name: 'Caio', type: 'human', birthDate: '', bloodType: '', notes: '', color: '#38bdf8' },
+            { id: 'profile-pet-1', name: 'Gatas', type: 'pet', species: 'Felino', breed: 'SRD', birthDate: '', microchip: '', notes: '', color: '#a855f7' }
+        ],
+        data: {}
     }
 };
 
@@ -16121,6 +22037,15 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (!this.settings.finances.incomeCategories || this.settings.finances.incomeCategories.length === 0) {
             this.settings.finances.incomeCategories = DEFAULT_SETTINGS.finances.incomeCategories.slice();
+        }
+        if (!this.settings.health) {
+            this.settings.health = Object.assign({}, DEFAULT_SETTINGS.health);
+        }
+        if (!Array.isArray(this.settings.health.profiles) || this.settings.health.profiles.length === 0) {
+            this.settings.health.profiles = DEFAULT_SETTINGS.health.profiles.slice();
+        }
+        if (!this.settings.health.data) {
+            this.settings.health.data = {};
         }
     }
 

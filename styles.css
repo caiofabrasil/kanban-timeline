@@ -1249,17 +1249,42 @@ body.kt-is-resizing * {
 
 .kt-new-card-input {
     width: 100%;
+    min-height: 68px;
     box-sizing: border-box;
     background: var(--background-primary);
     border: 1px solid var(--interactive-accent);
-    border-radius: 5px;
-    padding: 6px 8px;
+    border-radius: 6px;
+    padding: 8px 10px;
     color: var(--text-normal);
-    font-size: 12px;
-    line-height: 1.35;
-    resize: none;
+    font-size: 13px;
+    line-height: 1.45;
+    resize: vertical;
     font-family: inherit;
     outline: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    overflow-y: hidden;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.kt-new-card-input:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 30%, transparent), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.kt-add-card-tag-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-accent, var(--interactive-accent));
+    background: color-mix(in srgb, var(--interactive-accent) 15%, var(--background-secondary));
+    border: 1px solid color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+    padding: 2px 7px;
+    border-radius: 12px;
+    margin-bottom: 2px;
+    width: fit-content;
+    user-select: none;
 }
 
 .kt-add-card-actions {
@@ -5223,11 +5248,847 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
-.kt-cal-bar.kt-cal-special-event-bar:hover {
-    background: color-mix(in srgb, var(--evt-color, #ec4899) 32%, var(--background-secondary));
-    border-color: var(--evt-color, #ec4899);
+/* ================================================================
+   FINANCES: PLANNED ITEMS & FORECASTING (Despesas & Entradas Planejadas)
+   ================================================================ */
+
+.kt-fin-planned-section {
+    border-left: 3px solid #8b5cf6 !important;
+}
+
+.kt-fin-planned-summary-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--background-secondary);
+    padding: 3px 8px;
+    border-radius: 12px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-row-planned {
+    transition: background 0.12s ease;
+}
+.kt-row-planned.is-planned-income {
+    background: color-mix(in srgb, #10b981 4%, transparent);
+}
+.kt-row-planned.is-planned-expense {
+    background: color-mix(in srgb, #f43f5e 4%, transparent);
+}
+.kt-row-planned:hover {
+    background: var(--background-modifier-hover) !important;
+}
+
+.kt-planned-type-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    display: inline-block;
+    white-space: nowrap;
+}
+.kt-planned-type-badge.is-income {
+    background: color-mix(in srgb, #10b981 18%, transparent);
+    color: #10b981;
+    border: 1px solid color-mix(in srgb, #10b981 35%, transparent);
+}
+.kt-planned-type-badge.is-expense {
+    background: color-mix(in srgb, #f43f5e 18%, transparent);
+    color: #f43f5e;
+    border: 1px solid color-mix(in srgb, #f43f5e 35%, transparent);
+}
+
+.kt-fin-confirm-plan-btn {
+    background: color-mix(in srgb, #10b981 20%, var(--background-secondary)) !important;
+    color: #10b981 !important;
+    border: 1px solid #10b981 !important;
+    border-radius: 4px !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    padding: 2px 8px !important;
+    cursor: pointer !important;
+    transition: all 0.12s ease !important;
+    margin-right: 4px;
+}
+.kt-fin-confirm-plan-btn:hover {
+    background: #10b981 !important;
+    color: #ffffff !important;
     transform: translateY(-1px);
-    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+
+.kt-fin-projection-box {
+    margin-top: 14px;
+    margin-bottom: 6px;
+    padding: 12px;
+    background: color-mix(in srgb, #8b5cf6 6%, var(--background-secondary));
+    border: 1px solid color-mix(in srgb, #8b5cf6 28%, var(--background-modifier-border));
+    border-radius: 8px;
+}
+
+.kt-fin-proj-hdr {
+    margin-bottom: 8px;
+}
+
+.kt-fin-proj-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-normal);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-fin-proj-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.kt-fin-proj-cell {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px;
+    text-align: center;
+}
+
+.kt-fin-proj-val {
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 2px;
+}
+.kt-cell-red .kt-fin-proj-val { color: #f43f5e; }
+.kt-cell-green .kt-fin-proj-val { color: #10b981; }
+.kt-cell-blue .kt-fin-proj-val { color: #6366f1; }
+.kt-cell-orange .kt-fin-proj-val { color: #f97316; }
+
+.kt-fin-proj-lbl {
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* ================================================================
+   FINANCES: FINTECH DARK SUITE (NATIVE OBSIDIAN INTEGRATION)
+   ================================================================ */
+
+/* Top View Switcher */
+.kt-fin-main-switcher {
+    display: flex;
+    gap: 6px;
+    padding: 0 16px 12px 16px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    margin-bottom: 14px;
+}
+
+.kt-fin-main-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.kt-fin-main-tab-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-main-tab-btn.is-active {
+    color: var(--text-normal);
+    background: var(--background-primary);
+    border-color: #22c55e;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.18);
+    font-weight: 700;
+}
+
+/* Dedicated Analytics View Layout (Full Width & Natural Scroll) */
+.kt-fin-analytics-view {
+    padding: 0 20px 50px 20px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* Base Card Style (100% Obsidian Native) */
+.kt-fin-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    position: relative;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.kt-fin-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 14px;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.kt-fin-card-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.kt-fin-card-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--text-normal);
+    letter-spacing: 0.2px;
+}
+
+.kt-fin-card-subtitle {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-fin-kpi-big {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--text-normal);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.5px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.kt-fin-kpi-delta {
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 6px;
+}
+
+.kt-fin-kpi-delta.is-positive {
+    background: rgba(34, 197, 94, 0.16);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.kt-fin-kpi-delta.is-negative {
+    background: rgba(239, 68, 68, 0.16);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Metric Selector Dropdown */
+.kt-fin-metric-select {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--text-normal);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.kt-fin-metric-select:hover,
+.kt-fin-metric-select:focus {
+    border-color: #22c55e;
+}
+
+/* Smooth Line / Area Chart Container (Proportional & Elegant) */
+.kt-fin-line-chart-wrap {
+    width: 100%;
+    position: relative;
+    padding-top: 4px;
+    box-sizing: border-box;
+}
+
+.kt-fin-line-chart-svg {
+    width: 100%;
+    height: 220px;
+    display: block;
+}
+
+.kt-fin-line-chart-svg {
+    width: 100%;
+    height: 270px;
+    display: block;
+}
+
+.kt-fin-chart-grid-line {
+    stroke: var(--background-modifier-border);
+    stroke-dasharray: 4 4;
+    stroke-width: 1;
+    opacity: 0.6;
+}
+
+.kt-fin-chart-line {
+    fill: none;
+    stroke: #22c55e;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    filter: drop-shadow(0 2px 8px rgba(34, 197, 94, 0.45));
+}
+
+.kt-fin-chart-area {
+    fill: url(#ktFinLineGrad);
+    opacity: 0.75;
+}
+
+.kt-fin-chart-zero-line {
+    stroke: rgba(239, 68, 68, 0.5);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+}
+
+.kt-fin-chart-zero-label {
+    fill: #ef4444;
+    font-size: 10px;
+    font-weight: 700;
+    opacity: 0.85;
+}
+
+.kt-fin-chart-dot {
+    fill: var(--background-secondary);
+    stroke: #22c55e;
+    stroke-width: 2.5;
+    cursor: pointer;
+    transition: r 0.15s ease, stroke-width 0.15s ease;
+}
+
+.kt-fin-chart-dot:hover,
+.kt-fin-chart-dot.is-selected {
+    r: 6.5;
+    stroke-width: 3.5;
+    fill: #4ade80;
+    filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.8));
+}
+
+.kt-fin-chart-dot.is-negative {
+    stroke: #ef4444;
+    fill: var(--background-secondary);
+}
+
+.kt-fin-chart-dot.is-negative:hover,
+.kt-fin-chart-dot.is-negative.is-selected {
+    stroke: #ffffff;
+    fill: #ef4444;
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.85));
+}
+
+.kt-fin-chart-dot-nodata {
+    fill: var(--background-secondary);
+    stroke: #166534;
+    stroke-width: 2;
+    stroke-dasharray: 2 2;
+    opacity: 0.65;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-chart-dot-nodata:hover,
+.kt-fin-chart-dot-nodata.is-selected {
+    stroke: #22c55e;
+    stroke-dasharray: none;
+    opacity: 1;
+    fill: #14532d;
+    filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.7));
+}
+
+.kt-fin-chart-x-labels {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    width: 100%;
+    margin-top: 6px;
+    padding: 0;
+    box-sizing: border-box;
+    gap: 2px;
+}
+
+.kt-fin-chart-x-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 0;
+    text-align: center;
+    border-radius: 4px;
+    transition: all 0.12s ease;
+    width: 100%;
+}
+
+.kt-fin-chart-x-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-chart-x-btn.is-selected {
+    color: #4ade80;
+    font-weight: 700;
+    background: rgba(34, 197, 94, 0.14);
+}
+
+/* Floating Chart Tooltip */
+.kt-fin-chart-tooltip {
+    position: absolute;
+    top: 10px;
+    right: 18px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 11.5px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-fin-tip-val {
+    font-weight: 700;
+    color: #4ade80;
+}
+
+/* Top Dashboard Grid (Chart + Donut) */
+.kt-fin-analytics-top-grid {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr;
+    gap: 20px;
+    width: 100%;
+    align-items: start;
+}
+
+/* Mid Dashboard Grid (Recurring + Future Roadmap) */
+.kt-fin-analytics-mid-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    width: 100%;
+    align-items: start;
+}
+
+@media (max-width: 1180px) {
+    .kt-fin-analytics-top-grid,
+    .kt-fin-analytics-mid-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Prominent Pie/Donut Chart (Large & Minimalist) */
+.kt-fin-prominent-donut-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.kt-fin-pie-stage {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    padding: 6px 0;
+}
+
+.kt-fin-big-donut-svg {
+    width: 250px;
+    height: 250px;
+    overflow: visible;
+}
+
+.kt-fin-pie-slice {
+    cursor: pointer;
+    transition: transform 0.18s ease, filter 0.18s ease;
+    transform-origin: 0px 0px;
+}
+
+.kt-fin-pie-slice:hover {
+    transform: scale(1.045);
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.5));
+}
+
+.kt-pie-center-title {
+    font-size: 9.5px;
+    fill: var(--text-muted);
+    font-weight: 600;
+    text-anchor: middle;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    opacity: 0.8;
+}
+
+.kt-pie-center-val {
+    font-size: 17px;
+    fill: var(--text-normal);
+    font-weight: 800;
+    text-anchor: middle;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-pie-center-sub {
+    font-size: 11px;
+    fill: #4ade80;
+    font-weight: 700;
+    text-anchor: middle;
+}
+
+/* Breakdown Ranking Table */
+.kt-fin-breakdown-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.kt-fin-breakdown-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-fin-breakdown-row:hover {
+    border-color: rgba(34, 197, 94, 0.4);
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-bd-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.kt-fin-bd-left {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-fin-bd-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.kt-fin-bd-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-fin-bd-val {
+    font-weight: 700;
+    color: var(--text-normal);
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-fin-bd-pct {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #4ade80;
+    min-width: 38px;
+    text-align: center;
+}
+
+.kt-fin-bd-bar-track {
+    width: 100%;
+    height: 4px;
+    background: var(--background-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.kt-fin-bd-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* ================================================================
+   RECURRING EXPENSES & HABIT INTELLIGENCE (AMAZON, PÃO E VIDA, ETC.)
+   ================================================================ */
+
+.kt-fin-recurring-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding-right: 4px;
+}
+
+.kt-fin-rec-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-fin-rec-row:hover {
+    border-color: rgba(56, 189, 248, 0.4);
+    background: var(--background-modifier-hover);
+}
+
+.kt-fin-rec-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.kt-fin-rec-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-fin-rec-freq-badge {
+    background: rgba(56, 189, 248, 0.14);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+}
+
+.kt-fin-rec-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-fin-rec-total {
+    font-weight: 700;
+    color: var(--text-normal);
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-fin-rec-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.kt-fin-rec-plan-btn {
+    background: rgba(34, 197, 94, 0.14);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-fin-rec-plan-btn:hover {
+    background: #22c55e;
+    color: #0f172a;
+    border-color: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+}
+
+.kt-fin-rec-monthly-badge {
+    color: #4ade80;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ================================================================
+   SMART PLANNING ASSISTANT (HISTORICAL AVERAGES & AUTO-FILL)
+   ================================================================ */
+
+.kt-fin-smart-plan-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.kt-fin-smart-avg-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+}
+
+.kt-fin-smart-avg-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    font-size: 12px;
+}
+
+.kt-fin-smart-avg-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-normal);
+    font-weight: 600;
+}
+
+.kt-fin-smart-avg-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-fin-smart-avg-val {
+    font-weight: 700;
+    color: #4ade80;
+}
+
+.kt-fin-smart-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.kt-fin-smart-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-fin-smart-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: #22c55e;
+    color: #4ade80;
+}
+
+.kt-fin-smart-btn.is-primary {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: #22c55e;
+    color: #4ade80;
+    font-weight: 700;
+}
+
+.kt-fin-smart-btn.is-primary:hover {
+    background: #22c55e;
+    color: #0f172a;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.3);
+}
+
+/* Future Cash Flow Timeline (Natural Flow) */
+.kt-fin-future-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 4px;
+}
+
+.kt-fin-future-month-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-fin-future-month-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.kt-fin-future-month-name {
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-fin-future-month-total {
+    font-weight: 700;
+    color: #38bdf8;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-fin-future-items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--background-modifier-border);
+    max-height: 240px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.kt-fin-future-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    color: var(--text-normal);
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--background-secondary);
+}
+
+.kt-fin-future-item-val {
+    font-weight: 700;
+    color: #38bdf8;
+    font-variant-numeric: tabular-nums;
 }
 
 .kt-cal-card-inner {
@@ -6114,7 +6975,8 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     width: 100%;
     background: var(--background-primary);
     color: var(--text-normal);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     box-sizing: border-box;
 }
 
@@ -6662,6 +7524,17 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     font-size: 11px;
     font-weight: 500;
     white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.kt-fin-cat-pill:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
 }
 
 .kt-fin-split-badge {
@@ -6986,6 +7859,20 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     font-weight: 700;
     background: var(--background-secondary);
     border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-fin-comp-table tbody tr {
+    transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.kt-fin-comp-table tbody tr:hover {
+    background: var(--background-modifier-hover, rgba(255, 255, 255, 0.045));
+    box-shadow: inset 3px 0 0 rgba(56, 189, 248, 0.6);
+}
+
+.kt-fin-comp-table tbody tr.kt-fin-tot-row:hover {
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 3px 0 0 #22c55e;
 }
 
 .kt-diff-pos {
@@ -7471,6 +8358,995 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     margin: 4px 0;
 }
 
+/* ================================================================
+   HEALTH TRACKER (SAÚDE & BEM-ESTAR) - MINIMALIST OBSIDIAN DESIGN
+   ================================================================ */
 
+.kt-health-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    background: var(--background-primary);
+    padding: 16px 20px;
+    box-sizing: border-box;
+    gap: 16px;
+}
 
+/* Topbar & Profile Switcher */
+.kt-health-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
 
+.kt-health-profile-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-health-profile-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    border: 1px solid var(--background-modifier-border);
+    transition: all 0.15s ease;
+}
+
+.kt-health-profile-pill:hover {
+    color: var(--text-normal);
+    border-color: var(--text-muted);
+}
+
+.kt-health-profile-pill.is-active {
+    background: var(--background-primary-alt, rgba(56, 189, 248, 0.1));
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.kt-health-profile-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.kt-health-profile-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 10px;
+    background: var(--background-modifier-border);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-add-profile-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 16px;
+    border: 1px dashed var(--background-modifier-border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.kt-health-add-profile-btn:hover {
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+}
+
+/* Subtabs Navigation Bar */
+.kt-health-nav-strip {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 2px;
+}
+
+.kt-health-tab-btn {
+    background: transparent;
+    border: none;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+    border-bottom: 2px solid transparent;
+    transition: all 0.12s ease;
+}
+
+.kt-health-tab-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-health-tab-btn.is-active {
+    color: var(--text-normal);
+    font-weight: 600;
+    border-bottom-color: var(--interactive-accent);
+}
+
+/* Health Cards & Grids */
+.kt-health-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-sizing: border-box;
+}
+
+.kt-health-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 10px;
+}
+
+.kt-health-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-normal);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-health-card-subtitle {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+/* KPI Summary Cards */
+.kt-health-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    width: 100%;
+}
+
+.kt-health-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-kpi-label {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+
+.kt-health-kpi-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-normal);
+    letter-spacing: -0.5px;
+}
+
+.kt-health-kpi-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Quick Log Check-in Bar */
+.kt-health-quicklog-wrap {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    background: var(--background-secondary-alt, var(--background-secondary));
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    align-items: center;
+}
+
+.kt-health-quicklog-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-quicklog-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.kt-health-quicklog-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-health-water-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    cursor: pointer;
+}
+
+.kt-health-water-btn:hover {
+    border-color: #38bdf8;
+    color: #38bdf8;
+}
+
+/* Range Slider and Score Selector */
+.kt-health-score-group {
+    display: flex;
+    gap: 4px;
+}
+
+.kt-health-score-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.1s ease;
+}
+
+.kt-health-score-btn:hover {
+    color: var(--text-normal);
+    border-color: var(--text-muted);
+}
+
+.kt-health-score-btn.is-selected {
+    background: var(--interactive-accent);
+    color: #ffffff;
+    border-color: var(--interactive-accent);
+}
+
+/* Biomarker Evolution Chart & Reference Band */
+.kt-health-chart-wrap {
+    width: 100%;
+    position: relative;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px;
+    box-sizing: border-box;
+}
+
+.kt-health-chart-svg {
+    width: 100%;
+    height: 250px;
+    display: block;
+    overflow: visible;
+}
+
+.kt-health-ref-band {
+    fill: rgba(34, 197, 94, 0.08);
+    stroke: rgba(34, 197, 94, 0.25);
+    stroke-dasharray: 4 3;
+    stroke-width: 1;
+}
+
+.kt-health-chart-line {
+    fill: none;
+    stroke: #38bdf8;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.kt-health-chart-dot {
+    stroke-width: 2.5;
+    cursor: pointer;
+    transition: r 0.15s ease;
+}
+
+.kt-health-chart-dot.is-normal {
+    fill: var(--background-primary);
+    stroke: #22c55e;
+}
+
+.kt-health-chart-dot.is-warning {
+    fill: var(--background-primary);
+    stroke: #eab308;
+}
+
+.kt-health-chart-dot.is-danger {
+    fill: var(--background-primary);
+    stroke: #ef4444;
+}
+
+.kt-health-chart-dot:hover {
+    r: 6.5;
+    stroke-width: 3.5;
+}
+
+/* Timeline of Consultations & Lab Exams */
+.kt-health-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.kt-health-entry-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 0.15s ease;
+}
+
+.kt-health-entry-card:hover {
+    border-color: var(--interactive-accent);
+}
+
+.kt-health-entry-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-health-entry-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-health-entry-date {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-entry-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.kt-health-badge {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-badge.is-pending {
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.kt-health-badge.is-completed {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.kt-health-badge.is-danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.kt-health-pdf-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.kt-health-pdf-btn:hover {
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+}
+
+/* Mental Health / Burnout Alert Banner */
+.kt-health-burnout-banner {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kt-health-burnout-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ef4444;
+}
+
+.kt-health-burnout-desc {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+/* ================================================================
+   MODAL FORM ALIGNMENT & CONTROLS (CLEAN OBSIDIAN DESIGN)
+   ================================================================ */
+
+.kt-form-row {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    width: 100%;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+}
+
+.kt-form-field {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 5px !important;
+    width: 100% !important;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+}
+
+.kt-form-field label {
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    color: var(--text-muted) !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    display: block !important;
+    margin: 0 !important;
+}
+
+.kt-form-field input[type="text"],
+.kt-form-field input[type="number"],
+.kt-form-field input[type="date"],
+.kt-form-field input[type="color"],
+.kt-form-field select,
+.kt-form-field textarea {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 7px 10px !important;
+    font-size: 13px !important;
+    color: var(--text-normal) !important;
+    background: var(--background-secondary) !important;
+    border: 1px solid var(--background-modifier-border) !important;
+    border-radius: 6px !important;
+    outline: none !important;
+    display: block !important;
+    transition: border-color 0.15s ease !important;
+}
+
+.kt-form-field input:focus,
+.kt-form-field select:focus,
+.kt-form-field textarea:focus {
+    border-color: var(--interactive-accent) !important;
+    box-shadow: 0 0 0 1px var(--interactive-accent) !important;
+}
+
+.kt-form-field textarea {
+    resize: vertical !important;
+    font-family: inherit !important;
+    line-height: 1.4 !important;
+    min-height: 60px !important;
+}
+
+/* Exam PDF Row & Dropzone */
+.kt-health-pdf-row {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 8px !important;
+    width: 100% !important;
+    align-items: center !important;
+}
+
+.kt-health-pdf-row input[type="text"] {
+    flex: 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+}
+
+.kt-health-pdf-row select {
+    width: 180px !important;
+    min-width: 180px !important;
+    flex-shrink: 0 !important;
+}
+
+.kt-health-dropzone {
+    border: 2px dashed var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    background: var(--background-primary);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    margin-bottom: 12px;
+}
+
+.kt-health-dropzone:hover,
+.kt-health-dropzone.is-dragover {
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-health-extract-preview {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+/* Minimal Subtle Action Buttons */
+.kt-health-btn-minimal-danger {
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    color: var(--text-muted) !important;
+    font-size: 11.5px !important;
+    font-weight: 450 !important;
+    padding: 3px 8px !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+    opacity: 0.7;
+    box-shadow: none !important;
+}
+
+.kt-health-btn-minimal-danger:hover {
+    color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.1) !important;
+    border-color: rgba(239, 68, 68, 0.2) !important;
+    opacity: 1;
+}
+
+.kt-health-exam-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.kt-health-exam-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-health-exam-card:hover {
+    border-color: var(--interactive-accent);
+    background: var(--background-secondary-alt);
+}
+
+.kt-health-exam-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.kt-health-exam-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-health-exam-date {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Health Exam Details Modal */
+.kt-health-details-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.kt-health-details-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-health-details-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+    margin-bottom: 4px;
+}
+
+.kt-health-details-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.kt-health-details-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kt-health-details-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.kt-health-details-kpi-card {
+    background: var(--background-secondary-alt);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kt-health-details-kpi-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-details-kpi-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-details-table-wrap {
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+}
+
+.kt-health-details-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.kt-health-details-table th {
+    position: sticky;
+    top: 0;
+    background: var(--background-secondary);
+    padding: 8px 12px;
+    font-weight: 600;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--background-modifier-border);
+    z-index: 2;
+}
+
+.kt-health-details-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+.kt-health-details-table tr:last-child td {
+    border-bottom: none;
+}
+
+.kt-health-details-table tr:hover td {
+    background: var(--background-modifier-hover);
+}
+
+/* ================================================================
+   MULTI-BIOMARKER DASHBOARD GRID & SPARKLINE CARDS
+   ================================================================ */
+
+.kt-health-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.kt-health-filter-chip {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-health-filter-chip:hover {
+    color: var(--text-normal);
+    border-color: var(--text-muted);
+}
+
+.kt-health-filter-chip.is-active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent, #ffffff);
+    border-color: var(--interactive-accent);
+    font-weight: 600;
+}
+
+.kt-health-biomarkers-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 14px;
+    width: 100%;
+}
+
+.kt-health-biomarker-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    box-sizing: border-box;
+}
+
+.kt-health-biomarker-card:hover {
+    border-color: var(--text-muted);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.kt-health-biomarker-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.kt-health-biomarker-card-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin-bottom: 2px;
+}
+
+.kt-health-biomarker-card-cat {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-biomarker-card-value-box {
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.kt-health-biomarker-card-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-biomarker-card-unit {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+.kt-health-sparkline-wrap {
+    width: 100%;
+    height: 120px;
+    position: relative;
+    background: var(--background-secondary);
+    border-radius: 6px;
+    padding: 6px;
+    box-sizing: border-box;
+}
+
+.kt-health-sparkline-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.kt-health-mini-history {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    border-top: 1px solid var(--background-modifier-border);
+    padding-top: 8px;
+    font-size: 11.5px;
+}
+
+.kt-health-mini-history-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--text-muted);
+}
+
+.kt-health-biomarker-card {
+    cursor: pointer;
+}
+
+.kt-health-search-input {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-normal);
+    outline: none;
+    transition: all 0.15s ease;
+    width: 220px;
+}
+
+.kt-health-search-input:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+/* Expanded Biomarker Modal */
+.kt-health-expanded-chart-wrap {
+    width: 100%;
+    height: 240px;
+    position: relative;
+    background: var(--background-secondary-alt);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+}
+
+.kt-health-expanded-chart-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+/* Bioimpedance Section & Image Gallery */
+.kt-health-bio-section {
+    margin-top: 18px;
+}
+
+.kt-health-bio-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.kt-health-bio-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.kt-health-bio-kpi-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-bio-kpi-val {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-bio-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.kt-health-bio-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-health-bio-card:hover {
+    border-color: var(--interactive-accent);
+    background: var(--background-secondary-alt);
+}
+
+.kt-health-bio-thumb {
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    cursor: zoom-in;
+}
+
+.kt-health-bio-metrics-mini {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    font-size: 11.5px;
+}
+
+.kt-health-bio-metric-item {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-muted);
+    padding: 2px 0;
+    border-bottom: 1px dashed var(--background-modifier-border);
+}
+
+.kt-health-bio-metric-item b {
+    color: var(--text-normal);
+}
