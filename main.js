@@ -21601,6 +21601,8 @@ kanban-plugin: basic
                 c.addEventListener('dragend', () => {
                     c.classList.remove('kt-dragging');
                     document.body.classList.remove('kt-is-card-dragging');
+                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
                     this.draggedCard = null;
                 });
 
@@ -21784,28 +21786,74 @@ kanban-plugin: basic
                 }
             }
 
-            // Drag & Drop on day column
+            // Drag & Drop on day column with visual preview
+            let weekDropPreviewEl = null;
+
+            const removeWeekDropPreview = () => {
+                if (weekDropPreviewEl && weekDropPreviewEl.parentNode) {
+                    weekDropPreviewEl.remove();
+                }
+                weekDropPreviewEl = null;
+                dayCol.classList.remove('kt-tb-col-drop-hover');
+            };
+
             dayCol.addEventListener('dragover', (e) => {
                 if (!this.draggedCard) return;
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 dayCol.classList.add('kt-tb-col-drop-hover');
-            });
-            dayCol.addEventListener('dragleave', (e) => {
-                if (!dayCol.contains(e.relatedTarget)) {
-                    dayCol.classList.remove('kt-tb-col-drop-hover');
-                }
-            });
-            dayCol.addEventListener('drop', async (e) => {
-                if (!this.draggedCard) return;
-                e.preventDefault();
-                dayCol.classList.remove('kt-tb-col-drop-hover');
 
                 const rect = dayCol.getBoundingClientRect();
                 const relY = e.clientY - rect.top;
                 const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
                 const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
-                const startMins = totalMinutes % 60;
+                const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
+                const startTotalMins = startHours * 60 + startMins;
+
+                const card = this.draggedCard;
+                const existingSlots = getTimesForDay(card, day);
+                let estMin = 60;
+                if (existingSlots.length > 0) {
+                    const dur = timeToMinutes(existingSlots[0].timeEnd) - timeToMinutes(existingSlots[0].timeStart);
+                    if (dur > 0) estMin = dur;
+                } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                    estMin = card.estimateMinutes;
+                }
+                const endTotalMins = Math.min((dayEnd + 1) * 60, startTotalMins + estMin);
+
+                const pad = n => String(n).padStart(2, '0');
+                const ts = `${pad(startHours)}:${pad(startMins)}`;
+                const te = `${pad(Math.floor(endTotalMins / 60))}:${pad(endTotalMins % 60)}`;
+
+                const topPx = (startTotalMins - dayStart * 60) * PX_PER_MIN;
+                const heightPx = Math.max(22, (endTotalMins - startTotalMins) * PX_PER_MIN);
+
+                if (!weekDropPreviewEl) {
+                    weekDropPreviewEl = eventsLayer.createDiv('kt-tb-drop-preview');
+                }
+
+                weekDropPreviewEl.style.top = `${topPx}px`;
+                weekDropPreviewEl.style.height = `${heightPx}px`;
+                const projColor = card.tagColor || card.projectColor || card.priorityColor || 'var(--interactive-accent)';
+                weekDropPreviewEl.style.setProperty('--proj-color', projColor);
+            });
+
+            dayCol.addEventListener('dragleave', (e) => {
+                if (!dayCol.contains(e.relatedTarget)) {
+                    removeWeekDropPreview();
+                }
+            });
+
+            dayCol.addEventListener('drop', async (e) => {
+                removeWeekDropPreview();
+                if (!this.draggedCard) return;
+                e.preventDefault();
+
+                const rect = dayCol.getBoundingClientRect();
+                const relY = e.clientY - rect.top;
+                const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
+                const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
+                const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
 
                 const card = this.draggedCard;
                 this.draggedCard = null;
@@ -21955,6 +22003,8 @@ kanban-plugin: basic
                 c.addEventListener('dragend', () => {
                     c.classList.remove('kt-dragging');
                     document.body.classList.remove('kt-is-card-dragging');
+                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
                     this.draggedCard = null;
                 });
 
@@ -22004,6 +22054,8 @@ kanban-plugin: basic
                 c.addEventListener('dragend', () => {
                     c.classList.remove('kt-dragging');
                     document.body.classList.remove('kt-is-card-dragging');
+                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
                     this.draggedCard = null;
                 });
 
@@ -22091,22 +22143,68 @@ kanban-plugin: basic
             });
         }
 
-        // Drag & Drop na Grade do Dia (gridArea)
+        // Drag & Drop na Grade do Dia (gridArea) com Indicador Visual Minimalista
+        let dropPreviewEl = null;
+
+        const removeDropPreview = () => {
+            if (dropPreviewEl && dropPreviewEl.parentNode) {
+                dropPreviewEl.remove();
+            }
+            dropPreviewEl = null;
+            gridArea.classList.remove('kt-tb-col-drop-hover');
+        };
+
         gridArea.addEventListener('dragover', (e) => {
             if (!this.draggedCard) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             gridArea.classList.add('kt-tb-col-drop-hover');
+
+            const rect = gridArea.getBoundingClientRect();
+            const relY = e.clientY - rect.top;
+            const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
+            const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
+            const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
+            const startTotalMins = startHours * 60 + startMins;
+
+            const card = this.draggedCard;
+            const existingSlots = getTimesForDay(card, day);
+            let duration = 60;
+            if (existingSlots.length > 0) {
+                const dur = timeToMinutes(existingSlots[0].timeEnd) - timeToMinutes(existingSlots[0].timeStart);
+                if (dur > 0) duration = dur;
+            } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                duration = card.estimateMinutes;
+            }
+            const endTotalMins = Math.min((dayEnd + 1) * 60, startTotalMins + duration);
+
+            const pad = n => String(n).padStart(2, '0');
+            const ts = `${pad(startHours)}:${pad(startMins)}`;
+            const te = `${pad(Math.floor(endTotalMins / 60))}:${pad(endTotalMins % 60)}`;
+
+            const topPx = (startTotalMins - dayStart * 60) * PX_PER_MIN;
+            const heightPx = Math.max(26, (endTotalMins - startTotalMins) * PX_PER_MIN);
+
+            if (!dropPreviewEl) {
+                dropPreviewEl = eventsLayer.createDiv('kt-tb-drop-preview');
+            }
+
+            dropPreviewEl.style.top = `${topPx}px`;
+            dropPreviewEl.style.height = `${heightPx}px`;
+            const projColor = card.tagColor || card.projectColor || card.priorityColor || 'var(--interactive-accent)';
+            dropPreviewEl.style.setProperty('--proj-color', projColor);
         });
+
         gridArea.addEventListener('dragleave', (e) => {
             if (!gridArea.contains(e.relatedTarget)) {
-                gridArea.classList.remove('kt-tb-col-drop-hover');
+                removeDropPreview();
             }
         });
+
         gridArea.addEventListener('drop', async (e) => {
+            removeDropPreview();
             if (!this.draggedCard) return;
             e.preventDefault();
-            gridArea.classList.remove('kt-tb-col-drop-hover');
 
             const rect = gridArea.getBoundingClientRect();
             const relY = e.clientY - rect.top;

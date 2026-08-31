@@ -1725,8 +1725,9 @@ body.kt-is-card-dragging .kt-gantt-section {
 }
 
 .kt-tb-slot-line.kt-slot-drop-hover {
-    background: rgba(var(--color-accent-1, 99, 102, 241), 0.22) !important;
-    outline: 2px dashed var(--interactive-accent) !important;
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.12) !important;
+    border-top: 1px dashed var(--interactive-accent) !important;
+    border-bottom: 1px dashed var(--interactive-accent) !important;
 }
 
 /* 3. Camada de Eventos / Cards Absolutos */
@@ -1737,6 +1738,29 @@ body.kt-is-card-dragging .kt-gantt-section {
     right: 0;
     bottom: 0;
     pointer-events: none;
+}
+
+/* ================================================================
+   TIMEBLOCKING DROP PREVIEW GHOST (MINIMAL & CLEAN DASHED BLOCK)
+   ================================================================ */
+.kt-tb-drop-preview {
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    border-radius: 6px;
+    border: 1.5px dashed var(--proj-color, var(--interactive-accent, #6366f1));
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.06);
+    background: color-mix(in srgb, var(--proj-color, var(--interactive-accent, #6366f1)) 10%, transparent);
+    pointer-events: none;
+    z-index: 99;
+    box-sizing: border-box;
+    transition: top 0.04s ease-out, height 0.04s ease-out;
+}
+
+.kt-tb-week-day-col .kt-tb-drop-preview {
+    left: 2px;
+    right: 2px;
+    border-radius: 4px;
 }
 
 /* ================================================================
@@ -6435,7 +6459,7 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 }
 
 .kt-tb-week-day-col.kt-tb-col-drop-hover {
-    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.16) !important;
+    background: rgba(255, 255, 255, 0.02) !important;
 }
 
 /* Recurrence Custom Weekdays Selector in Modal */
