@@ -3159,9 +3159,8 @@ class WeeklyTimeBalanceModal extends obsidian.Modal {
         days.forEach(day => {
             const dateStr = formatDate(day);
 
-            // 1. Kanban cards active on this day
+            // 1. Kanban cards active on this day (including Rotina, habits, and tasks)
             const dayCards = cards.filter(c => {
-                if (c.isEvent || c.column === 'Rotina') return false;
                 if (!c.startDate) return false;
                 const s = startOfDay(c.startDate);
                 const e = endOfDay(c.endDate || c.startDate);
@@ -3174,28 +3173,39 @@ class WeeklyTimeBalanceModal extends obsidian.Modal {
                     if (slot && slot.timeStart && slot.timeEnd) {
                         const dur = timeToMinutes(slot.timeEnd) - timeToMinutes(slot.timeStart);
                         if (dur > 0) {
-                            const matchedHabit = habits.find(h => 
-                                (card.habitId && card.habitId === h.id) || 
-                                (card.title && card.title.toLowerCase().includes(h.name.toLowerCase()))
-                            );
+                            const cleanCardTitle = (card.title || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
 
-                            const matchedProj = !matchedHabit ? getProjectForCard(card, projects) : null;
+                            const matchedHabit = habits.find(h => {
+                                if (card.habitId && card.habitId === h.id) return true;
+                                const cleanHName = (h.name || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+                                return cleanHName && (cleanCardTitle === cleanHName || cleanCardTitle.includes(cleanHName) || cleanHName.includes(cleanCardTitle));
+                            });
+
+                            const isBreak = card.eventType === 'break' || /^(?:☕|🍽️|🍵|🍎|⏸️|almoço|almoco|pausa|refeicao|lanche)/i.test(card.title || '');
+                            const isMeet = isMeeting(card.title, card.eventType);
+                            const isPers = isBreak || isRoutineOrPersonal(card.title, card.eventType, card.column) || card.isHabit || !!matchedHabit;
+
+                            const matchedProj = (!matchedHabit && !card.isEvent && card.column !== 'Rotina') ? getProjectForCard(card, projects) : null;
                             const hRate = matchedProj ? (matchedProj.hourlyRate || 0) : 0;
                             
                             if (matchedHabit) {
                                 const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
                                 addBlock(hTitle, card.habitColor || matchedHabit.color || '#10b981', dur, 'personal', 0, card);
+                            } else if (card.isHabit || card.eventType === 'habit') {
+                                addBlock(card.title || 'Hábito', card.habitColor || '#10b981', dur, 'personal', 0, card);
                             } else if (matchedProj) {
                                 addBlock(matchedProj.name, matchedProj.color || '#6366f1', dur, 'work', hRate, card);
-                            } else if (card.tags && card.tags.length > 0) {
+                            } else if (card.tags && card.tags.length > 0 && !card.isEvent && card.column !== 'Rotina') {
                                 const primaryTag = card.tags[0];
                                 const tagCol = getCardTagColor([primaryTag], projects) || '#3b82f6';
-                                const cat = isMeeting(card.title, card.eventType) ? 'meetings' : (isRoutineOrPersonal(card.title, card.eventType, card.column) ? 'personal' : 'work');
+                                const cat = isMeet ? 'meetings' : (isPers ? 'personal' : 'work');
                                 addBlock(primaryTag, tagCol, dur, cat, 0, card);
-                            } else if (isMeeting(card.title, card.eventType)) {
+                            } else if (isMeet) {
                                 addBlock('Reuniões & Standups', '#a855f7', dur, 'meetings', 0, card);
-                            } else if (isRoutineOrPersonal(card.title, card.eventType, card.column)) {
-                                addBlock('Rotina & Pessoal', '#10b981', dur, 'personal', 0, card);
+                            } else if (isBreak) {
+                                addBlock('Pausas & Almoço', '#f59e0b', dur, 'personal', 0, card);
+                            } else if (isPers) {
+                                addBlock(card.title || 'Rotina & Pessoal', '#10b981', dur, 'personal', 0, card);
                             } else {
                                 addBlock('Geral / Backlog', '#64748b', dur, 'other', 0, card);
                             }
@@ -3218,6 +3228,7 @@ class WeeklyTimeBalanceModal extends obsidian.Modal {
                 }
 
                 if (matches && evt.timeStart && evt.timeEnd) {
+                    if (dayCards.some(c => c.title === evt.title)) return;
                     const dur = timeToMinutes(evt.timeEnd) - timeToMinutes(evt.timeStart);
                     if (dur > 0) {
                         const matchedHabit = habits.find(h => 
