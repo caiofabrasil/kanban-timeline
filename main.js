@@ -697,16 +697,25 @@ class KanbanParser {
 
             // Detect if this is an Event/Routine block (Pausa, Reunião, Foco, etc.)
             let isEvent = false;
-            let eventType = 'task'; // 'break' | 'meeting' | 'focus' | 'custom'
+            let eventType = 'task'; // 'break' | 'meeting' | 'focus' | 'custom' | 'habit'
 
             // Check comments for event type
             const rawComment = (m[2].match(/<!--\s*([\s\S]*?)-->/) || [])[1] || '';
+            let habitId = null;
+            let habitColor = null;
+            const habitIdMatch = rawComment.match(/habitId:([^\s]+)/i);
+            if (habitIdMatch) habitId = habitIdMatch[1];
+            const habitColorMatch = rawComment.match(/habitColor:([^\s]+)/i);
+            if (habitColorMatch) habitColor = habitColorMatch[1];
+
             if (/type:(?:break|pausa|almoco|refeicao)/i.test(rawComment)) {
                 isEvent = true; eventType = 'break';
             } else if (/type:(?:meeting|reuniao|call|sync)/i.test(rawComment)) {
                 isEvent = true; eventType = 'meeting';
             } else if (/type:(?:focus|foco|estudo)/i.test(rawComment)) {
                 isEvent = true; eventType = 'focus';
+            } else if (/type:habit/i.test(rawComment) || habitId) {
+                isEvent = true; eventType = 'habit';
             } else if (/type:(?:custom|event|rotina)/i.test(rawComment)) {
                 isEvent = true; eventType = 'custom';
             } else if (/^[☕🍽️🍵🍎⏸️]/.test(title)) {
@@ -720,9 +729,9 @@ class KanbanParser {
             const seriesMatch = rawComment.match(/series:([^\s]+)/i);
             const seriesId = seriesMatch ? seriesMatch[1] : null;
 
-            const tagColor = isEvent ? null : getCardTagColor(tags, customProjects);
+            const tagColor = isEvent ? (habitColor || null) : getCardTagColor(tags, customProjects);
             const colColor = isEvent ? null : getColumnColor(currentColumn, { ...customColors, ...colColors }, customProjects);
-            const projColor = isEvent ? null : getProjectColor(tags, currentColumn, { ...customColors, ...colColors }, customProjects);
+            const projColor = isEvent ? (habitColor || null) : getProjectColor(tags, currentColumn, { ...customColors, ...colColors }, customProjects);
 
             const card = {
                 id:              `${i}-${title}`,
@@ -743,10 +752,13 @@ class KanbanParser {
                 dailyTimes,
                 isEvent,
                 eventType,
+                habitId,
+                habitColor,
+                isHabit:         eventType === 'habit' || !!habitId,
                 seriesId,
                 lineIndex:       i,
                 tagColor:        tagColor,
-                projectColor:    isEvent ? null : (projColor || '#6366f1'),
+                projectColor:    isEvent ? (habitColor || null) : (projColor || '#6366f1'),
                 priorityColor:   isEvent ? null : getPriorityColor(tags),
             };
 
@@ -840,11 +852,12 @@ class KanbanParser {
     }
 
     /** Delete a card block including subtasks */
-    deleteCard(content, cardLineIndex) {
+    deleteCard(content, cardLineIndex, card = null) {
         const lines = content.split('\n');
-        if (cardLineIndex < 0 || cardLineIndex >= lines.length) return content;
+        const idx = this.findActualCardLineIndex(lines, cardLineIndex, card);
+        if (idx === -1) return content;
 
-        let endIndex = cardLineIndex + 1;
+        let endIndex = idx + 1;
         while (endIndex < lines.length) {
             const raw = lines[endIndex];
             const trimmed = raw.trim();
@@ -853,7 +866,7 @@ class KanbanParser {
             endIndex++;
         }
 
-        lines.splice(cardLineIndex, endIndex - cardLineIndex);
+        lines.splice(idx, endIndex - idx);
         return lines.join('\n');
     }
 
@@ -1271,7 +1284,9 @@ class KanbanParser {
         const cardLines = items.map(item => {
             const dateStr = formatDate(item.date);
             const seriesTag = item.seriesId ? ` series:${item.seriesId}` : '';
-            return `- [ ] ${item.title} @{${dateStr}} <!-- tb: ${dateStr} ${item.timeStart}-${item.timeEnd} type:${item.eventType || 'break'}${seriesTag} -->`;
+            const habitTag = item.habitId ? ` habitId:${item.habitId}` : '';
+            const colorTag = item.color ? ` habitColor:${item.color}` : '';
+            return `- [ ] ${item.title} @{${dateStr}} <!-- tb: ${dateStr} ${item.timeStart}-${item.timeEnd} type:${item.eventType || 'break'}${habitTag}${colorTag}${seriesTag} -->`;
         });
 
         const lines = content.split('\n');
@@ -1335,8 +1350,12 @@ class KanbanParser {
                         const curType = newEventType || (typeMatch ? typeMatch[1] : 'break');
                         const sId = seriesId || (commentMatch[1].match(/series:([^\s]+)/) || [])[1] || '';
                         const sIdTag = sId ? ` series:${sId}` : '';
+                        const hIdMatch = commentMatch[1].match(/habitId:([^\s]+)/i);
+                        const hColMatch = commentMatch[1].match(/habitColor:([^\s]+)/i);
+                        const hIdTag = hIdMatch ? ` habitId:${hIdMatch[1]}` : '';
+                        const hColTag = hColMatch ? ` habitColor:${hColMatch[1]}` : '';
 
-                        const newComment = `<!-- tb: ${curDateStr} ${newTimeStart}-${newTimeEnd} type:${curType}${sIdTag} -->`;
+                        const newComment = `<!-- tb: ${curDateStr} ${newTimeStart}-${newTimeEnd} type:${curType}${hIdTag}${hColTag}${sIdTag} -->`;
                         updatedLine = updatedLine.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/, newComment);
                     }
                 }
@@ -1348,10 +1367,18 @@ class KanbanParser {
     }
 
     /** Delete all routine/event cards in a recurring series */
-    deleteTimeEventSeries(content, seriesId, titleMatch, fromDate = null) {
+    deleteTimeEventSeries(content, seriesId, titleMatch, fromDate = null, habitId = null) {
         const lines = content.split('\n');
         const fromDateObj = fromDate ? startOfDay(fromDate) : null;
         const filtered = [];
+
+        // Clean titleMatch of date tags, comments, emojis, and extra whitespace
+        const cleanTitle = (titleMatch || '')
+            .replace(/@\{[\s\S]*?\}/g, '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .trim()
+            .toLowerCase();
+        const titleLettersOnly = cleanTitle.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
@@ -1361,9 +1388,26 @@ class KanbanParser {
             }
 
             const hasSeries = seriesId && line.includes(`series:${seriesId}`);
-            const hasTitleMatch = !seriesId && titleMatch && line.includes(titleMatch);
+            const hasHabit = habitId && line.includes(`habitId:${habitId}`);
+            
+            // Extract line's title
+            const lineTitle = line
+                .replace(/^-\s+\[[ x]\]\s*/, '')
+                .replace(/@\{[\s\S]*?\}/g, '')
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .trim()
+                .toLowerCase();
+            const lineLettersOnly = lineTitle.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
 
-            if (hasSeries || hasTitleMatch) {
+            const hasTitleMatch = cleanTitle && (
+                lineTitle === cleanTitle || 
+                lineTitle.includes(cleanTitle) || 
+                cleanTitle.includes(lineTitle) ||
+                (titleLettersOnly.length > 2 && lineLettersOnly === titleLettersOnly) ||
+                (titleLettersOnly.length > 2 && lineLettersOnly.includes(titleLettersOnly))
+            );
+
+            if (hasSeries || hasHabit || hasTitleMatch) {
                 if (fromDateObj) {
                     const dateMatch = line.match(/@\{([\d-]+)/);
                     if (dateMatch) {
@@ -1547,6 +1591,25 @@ class KanbanParser {
             }
         });
 
+        // Extract metadata from existing comment or card object
+        let curType = (card && card.eventType && card.eventType !== 'task') ? card.eventType : null;
+        let curHabitId = (card && card.habitId) ? card.habitId : null;
+        let curHabitColor = (card && (card.habitColor || (card.isHabit ? card.projectColor : null))) ? (card.habitColor || card.projectColor) : null;
+        let curSeriesId = (card && card.seriesId) ? card.seriesId : null;
+
+        const rawCommentMatch = line.match(/<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/);
+        if (rawCommentMatch) {
+            const rawBody = rawCommentMatch[1];
+            const typeMatch = rawBody.match(/type:([^\s]+)/i);
+            if (typeMatch && !curType) curType = typeMatch[1];
+            const hIdMatch = rawBody.match(/habitId:([^\s]+)/i);
+            if (hIdMatch && !curHabitId) curHabitId = hIdMatch[1];
+            const hColMatch = rawBody.match(/habitColor:([^\s]+)/i);
+            if (hColMatch && !curHabitColor) curHabitColor = hColMatch[1];
+            const sIdMatch = rawBody.match(/series:([^\s]+)/i);
+            if (sIdMatch && !curSeriesId) curSeriesId = sIdMatch[1];
+        }
+
         // Clean all old comments and legacy time tags from the line
         line = line.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/g, '');
         line = line.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
@@ -1566,7 +1629,14 @@ class KanbanParser {
                 }
             });
             if (formattedBlocks.length > 0) {
-                line = `${line} <!-- tb: ${formattedBlocks.join(' ')} -->`;
+                const metaTags = [];
+                if (curType && curType !== 'task') metaTags.push(`type:${curType}`);
+                if (curHabitId) metaTags.push(`habitId:${curHabitId}`);
+                if (curHabitColor) metaTags.push(`habitColor:${curHabitColor}`);
+                if (curSeriesId) metaTags.push(`series:${curSeriesId}`);
+                const metaStr = metaTags.length > 0 ? ` ${metaTags.join(' ')}` : '';
+
+                line = `${line} <!-- tb: ${formattedBlocks.join(' ')}${metaStr} -->`;
             }
         }
 
@@ -3013,6 +3083,456 @@ class ProjectReportModal extends obsidian.Modal {
 }
 
 // ================================================================
+// WEEKLY TIME BALANCE & DISTRIBUTION MODAL (Pie Chart / KPIs)
+// ================================================================
+
+class WeeklyTimeBalanceModal extends obsidian.Modal {
+    constructor(app, plugin, view) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.view = view;
+    }
+
+    onOpen() {
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-balance-modal-wrapper');
+        this.modalEl.style.width = '860px';
+        this.modalEl.style.maxWidth = '95vw';
+        this.modalEl.style.maxHeight = '92vh';
+        this.renderModal();
+    }
+
+    getWeeklyData() {
+        const ws = this.view ? this.view.getWeekStart() : startOfWeek(new Date());
+        const hideWeekends = !!this.plugin.settings.timeblockHideWeekends;
+        const daysCount = hideWeekends ? 5 : 7;
+        const days = [];
+        for (let i = 0; i < daysCount; i++) {
+            const d = new Date(ws);
+            d.setDate(d.getDate() + i);
+            days.push(d);
+        }
+        const weekDatesSet = new Set(days.map(d => formatDate(d)));
+        const we = days[days.length - 1];
+
+        const projects = this.plugin.settings.projects || [];
+        const groupsMap = new Map();
+
+        const addBlock = (name, color, minutes, category, hourlyRate = 0, card = null) => {
+            if (minutes <= 0) return;
+            if (!groupsMap.has(name)) {
+                groupsMap.set(name, {
+                    name,
+                    color: color || '#6366f1',
+                    minutes: 0,
+                    count: 0,
+                    earnings: 0,
+                    category: category || 'work',
+                    hourlyRate: hourlyRate || 0
+                });
+            }
+            const g = groupsMap.get(name);
+            g.minutes += minutes;
+            g.count += 1;
+            if (hourlyRate > 0) {
+                g.earnings += (minutes / 60) * hourlyRate;
+            }
+        };
+
+        const isMeeting = (title, eventType) => {
+            if (eventType === 'meeting') return true;
+            const t = (title || '').toLowerCase();
+            return t.includes('reunião') || t.includes('reuniao') || t.includes('standup') || t.includes('sync') || t.includes('alinhamento') || t.includes('call') || t.includes('1:1') || t.includes('1on1');
+        };
+
+        const isRoutineOrPersonal = (title, eventType, column) => {
+            if (eventType === 'break' || column === 'Rotina') return true;
+            const t = (title || '').toLowerCase();
+            return t.includes('almoço') || t.includes('almoco') || t.includes('pausa') || t.includes('descanso') || t.includes('boxe') || t.includes('jiu') || t.includes('treino') || t.includes('academia') || t.includes('psicólog') || t.includes('psicolog') || t.includes('médic') || t.includes('medic') || t.includes('saúde') || t.includes('saude');
+        };
+
+        // Iterate through each day of the week, exactly matching the Timeblock week grid
+        const cards = this.view ? this.view.cards : [];
+        const customEvents = (this.plugin.settings.customEvents || []).concat(this.plugin.settings.calendarEvents || []);
+        const habits = this.plugin.settings.habits || [];
+
+        days.forEach(day => {
+            const dateStr = formatDate(day);
+
+            // 1. Kanban cards active on this day
+            const dayCards = cards.filter(c => {
+                if (c.isEvent || c.column === 'Rotina') return false;
+                if (!c.startDate) return false;
+                const s = startOfDay(c.startDate);
+                const e = endOfDay(c.endDate || c.startDate);
+                return startOfDay(day) >= s && startOfDay(day) <= e;
+            });
+
+            dayCards.forEach(card => {
+                const slots = getTimesForDay(card, day);
+                slots.forEach(slot => {
+                    if (slot && slot.timeStart && slot.timeEnd) {
+                        const dur = timeToMinutes(slot.timeEnd) - timeToMinutes(slot.timeStart);
+                        if (dur > 0) {
+                            const matchedHabit = habits.find(h => 
+                                (card.habitId && card.habitId === h.id) || 
+                                (card.title && card.title.toLowerCase().includes(h.name.toLowerCase()))
+                            );
+
+                            const matchedProj = !matchedHabit ? getProjectForCard(card, projects) : null;
+                            const hRate = matchedProj ? (matchedProj.hourlyRate || 0) : 0;
+                            
+                            if (matchedHabit) {
+                                const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
+                                addBlock(hTitle, card.habitColor || matchedHabit.color || '#10b981', dur, 'personal', 0, card);
+                            } else if (matchedProj) {
+                                addBlock(matchedProj.name, matchedProj.color || '#6366f1', dur, 'work', hRate, card);
+                            } else if (card.tags && card.tags.length > 0) {
+                                const primaryTag = card.tags[0];
+                                const tagCol = getCardTagColor([primaryTag], projects) || '#3b82f6';
+                                const cat = isMeeting(card.title, card.eventType) ? 'meetings' : (isRoutineOrPersonal(card.title, card.eventType, card.column) ? 'personal' : 'work');
+                                addBlock(primaryTag, tagCol, dur, cat, 0, card);
+                            } else if (isMeeting(card.title, card.eventType)) {
+                                addBlock('Reuniões & Standups', '#a855f7', dur, 'meetings', 0, card);
+                            } else if (isRoutineOrPersonal(card.title, card.eventType, card.column)) {
+                                addBlock('Rotina & Pessoal', '#10b981', dur, 'personal', 0, card);
+                            } else {
+                                addBlock('Geral / Backlog', '#64748b', dur, 'other', 0, card);
+                            }
+                        }
+                    }
+                });
+            });
+
+            // 2. Custom Events / Routines on this day
+            customEvents.forEach(evt => {
+                if (!evt) return;
+                let matches = false;
+                if (evt.date === dateStr) {
+                    matches = true;
+                } else if (evt.recurrence && evt.recurrence !== 'none') {
+                    const dayIdx = day.getDay();
+                    if (evt.recurrence === 'daily') matches = true;
+                    else if (evt.recurrence === 'weekdays' && dayIdx >= 1 && dayIdx <= 5) matches = true;
+                    else if (evt.recurrence === 'custom_days' && evt.customDays && evt.customDays.includes(dayIdx)) matches = true;
+                }
+
+                if (matches && evt.timeStart && evt.timeEnd) {
+                    const dur = timeToMinutes(evt.timeEnd) - timeToMinutes(evt.timeStart);
+                    if (dur > 0) {
+                        const matchedHabit = habits.find(h => 
+                            (evt.habitId && evt.habitId === h.id) || 
+                            (evt.title && evt.title.toLowerCase().includes(h.name.toLowerCase()))
+                        );
+
+                        if (matchedHabit) {
+                            const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
+                            addBlock(hTitle, evt.color || matchedHabit.color || '#10b981', dur, 'personal', 0);
+                        } else {
+                            const isMeet = isMeeting(evt.title, evt.eventType);
+                            const isPers = isRoutineOrPersonal(evt.title, evt.eventType, 'Rotina');
+                            const cat = isMeet ? 'meetings' : (isPers ? 'personal' : 'other');
+                            const grpName = isMeet ? 'Reuniões & Standups' : (isPers ? (evt.eventType === 'break' ? 'Pausas & Almoço' : 'Rotina & Hábitos') : (evt.title || 'Eventos'));
+                            const grpCol = evt.color || (isMeet ? '#a855f7' : (isPers ? '#10b981' : '#f59e0b'));
+                            addBlock(grpName, grpCol, dur, cat, 0);
+                        }
+                    }
+                }
+            });
+
+            // 3. Remote Calendar Events on this day
+            const remoteEvents = this.view ? this.view.getRemoteEventsForDay(day) : (this.plugin.remoteCalendarEvents || []).filter(e => e.date === dateStr);
+            remoteEvents.forEach(evt => {
+                if (evt.timeStart && evt.timeEnd) {
+                    const dur = timeToMinutes(evt.timeEnd) - timeToMinutes(evt.timeStart);
+                    if (dur > 0) {
+                        const matchedHabit = habits.find(h => 
+                            evt.title && evt.title.toLowerCase().includes(h.name.toLowerCase())
+                        );
+                        if (matchedHabit) {
+                            const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
+                            addBlock(hTitle, matchedHabit.color || evt.calendarColor || '#10b981', dur, 'personal', 0);
+                        } else {
+                            const grpName = evt.calendarName || evt.title || 'Calendário Externo';
+                            const grpCol = evt.calendarColor || '#ec4899';
+                            const isMeet = isMeeting(evt.title);
+                            const cat = isMeet ? 'meetings' : 'personal';
+                            addBlock(grpName, grpCol, dur, cat, 0);
+                        }
+                    }
+                }
+            });
+        });
+
+        // Calculate Totals & Percentages
+        let totalMinutes = 0;
+        let totalEarnings = 0;
+        let workMinutes = 0;
+        let meetingMinutes = 0;
+        let personalMinutes = 0;
+        let otherMinutes = 0;
+
+        const groups = Array.from(groupsMap.values());
+        groups.forEach(g => {
+            totalMinutes += g.minutes;
+            totalEarnings += g.earnings;
+            if (g.category === 'work') workMinutes += g.minutes;
+            else if (g.category === 'meetings') meetingMinutes += g.minutes;
+            else if (g.category === 'personal') personalMinutes += g.minutes;
+            else otherMinutes += g.minutes;
+        });
+
+        // Sort descending by duration
+        groups.sort((a, b) => b.minutes - a.minutes);
+        groups.forEach(g => {
+            g.percent = totalMinutes > 0 ? (g.minutes / totalMinutes) * 100 : 0;
+        });
+
+        return {
+            ws,
+            we,
+            daysCount,
+            totalMinutes,
+            totalEarnings,
+            workMinutes,
+            workPercent: totalMinutes > 0 ? (workMinutes / totalMinutes) * 100 : 0,
+            meetingMinutes,
+            meetingPercent: totalMinutes > 0 ? (meetingMinutes / totalMinutes) * 100 : 0,
+            personalMinutes,
+            personalPercent: totalMinutes > 0 ? (personalMinutes / totalMinutes) * 100 : 0,
+            otherMinutes,
+            otherPercent: totalMinutes > 0 ? (otherMinutes / totalMinutes) * 100 : 0,
+            groups
+        };
+    }
+
+    renderModal() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass('kt-balance-modal-content');
+
+        const data = this.getWeeklyData();
+
+        // 1. Header
+        const header = contentEl.createDiv('kt-balance-modal-hdr');
+        const titleRow = header.createDiv('kt-balance-title-row');
+        titleRow.createEl('h2', { text: '📊 Balanço de Horas da Semana' });
+
+        const wsLabel = this.view ? this.view.dayLabel(data.ws, false) : formatDate(data.ws);
+        const weLabel = this.view ? this.view.dayLabel(data.we, false) : formatDate(data.we);
+        const totalHoursText = formatMinutesToHours(data.totalMinutes) || '0h';
+
+        header.createEl('p', {
+            cls: 'kt-balance-modal-subtitle',
+            text: `Período: ${wsLabel} — ${weLabel} • ${totalHoursText} alocadas no total`
+        });
+
+        if (data.totalMinutes === 0) {
+            const emptyWrap = contentEl.createDiv('kt-balance-empty');
+            emptyWrap.createDiv({ cls: 'kt-balance-empty-icon', text: '📅' });
+            emptyWrap.createEl('h3', { text: 'Nenhuma tarefa ou horário agendado nesta semana.' });
+            emptyWrap.createEl('p', { text: 'Arraste cards da barra lateral para a grade semanal para planejar seus horários e visualizar a distribuição.' });
+            return;
+        }
+
+        // 2. Macro Ratio Bar (Trabalho vs Reuniões vs Pessoal vs Outros)
+        const ratioSection = contentEl.createDiv('kt-balance-ratio-section');
+        ratioSection.createDiv({ cls: 'kt-balance-section-label', text: 'MACRO-DISTRIBUIÇÃO DA SEMANA' });
+
+        const ratioBar = ratioSection.createDiv('kt-balance-ratio-bar');
+        if (data.workPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-work');
+            seg.style.width = `${data.workPercent}%`;
+            seg.title = `💼 Trabalho: ${formatMinutesToHours(data.workMinutes)} (${data.workPercent.toFixed(1)}%)`;
+        }
+        if (data.meetingPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-meetings');
+            seg.style.width = `${data.meetingPercent}%`;
+            seg.title = `👥 Reuniões: ${formatMinutesToHours(data.meetingMinutes)} (${data.meetingPercent.toFixed(1)}%)`;
+        }
+        if (data.personalPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-personal');
+            seg.style.width = `${data.personalPercent}%`;
+            seg.title = `🌿 Pessoal / Rotinas: ${formatMinutesToHours(data.personalMinutes)} (${data.personalPercent.toFixed(1)}%)`;
+        }
+        if (data.otherPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-other');
+            seg.style.width = `${data.otherPercent}%`;
+            seg.title = `📦 Outros: ${formatMinutesToHours(data.otherMinutes)} (${data.otherPercent.toFixed(1)}%)`;
+        }
+
+        // Ratio Legend
+        const ratioLegend = ratioSection.createDiv('kt-balance-ratio-legend');
+        if (data.workMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-work-dot' });
+            pill.createSpan({ text: `💼 Trabalho: ${formatMinutesToHours(data.workMinutes)} (${data.workPercent.toFixed(0)}%)` });
+        }
+        if (data.meetingMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-meetings-dot' });
+            pill.createSpan({ text: `👥 Reuniões: ${formatMinutesToHours(data.meetingMinutes)} (${data.meetingPercent.toFixed(0)}%)` });
+        }
+        if (data.personalMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-personal-dot' });
+            pill.createSpan({ text: `🌿 Pessoal: ${formatMinutesToHours(data.personalMinutes)} (${data.personalPercent.toFixed(0)}%)` });
+        }
+        if (data.otherMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-other-dot' });
+            pill.createSpan({ text: `📦 Outros: ${formatMinutesToHours(data.otherMinutes)} (${data.otherPercent.toFixed(0)}%)` });
+        }
+
+        // 3. Split Body: Donut Chart + KPIs (Left) & Project Breakdown List (Right)
+        const bodySplit = contentEl.createDiv('kt-balance-body-split');
+
+        // Left Panel (Chart + KPIs)
+        const leftPanel = bodySplit.createDiv('kt-balance-left-panel');
+
+        // Donut Chart Box
+        const chartBox = leftPanel.createDiv('kt-balance-chart-box');
+        this.renderDonutChart(chartBox, data.groups, data.totalMinutes);
+
+        // KPIs
+        const kpisGrid = leftPanel.createDiv('kt-balance-kpis-grid');
+        
+        const kpi1 = kpisGrid.createDiv('kt-balance-kpi-card');
+        kpi1.createDiv({ cls: 'kt-kpi-val', text: formatMinutesToHours(data.totalMinutes) });
+        kpi1.createDiv({ cls: 'kt-kpi-label', text: '⏱️ Total Planejado' });
+
+        const kpi2 = kpisGrid.createDiv('kt-balance-kpi-card');
+        kpi2.createDiv({ cls: 'kt-kpi-val', text: formatMinutesToHours(data.workMinutes) });
+        kpi2.createDiv({ cls: 'kt-kpi-label', text: '💼 Foco & Projetos' });
+
+        if (data.totalEarnings > 0) {
+            const kpi3 = kpisGrid.createDiv('kt-balance-kpi-card');
+            kpi3.createDiv({ cls: 'kt-kpi-val kt-kpi-earnings', text: formatCurrency(data.totalEarnings, 'R$') });
+            kpi3.createDiv({ cls: 'kt-kpi-label', text: '💵 Ganho Previsto' });
+        }
+
+        // Right Panel (Detailed Breakdown List)
+        const rightPanel = bodySplit.createDiv('kt-balance-right-panel');
+        rightPanel.createDiv({ cls: 'kt-balance-section-label', text: `PROJETOS & CATEGORIAS (${data.groups.length})` });
+
+        const listWrap = rightPanel.createDiv('kt-balance-items-list');
+
+        data.groups.forEach(g => {
+            const item = listWrap.createDiv('kt-balance-item');
+            item.style.setProperty('--item-color', g.color);
+
+            const topRow = item.createDiv('kt-balance-item-top');
+            
+            const leftCol = topRow.createDiv('kt-balance-item-title-col');
+            const dot = leftCol.createSpan('kt-balance-item-dot');
+            dot.style.background = g.color;
+            const nameSpan = leftCol.createSpan('kt-balance-item-name');
+            nameSpan.setText(g.name);
+
+            const rightCol = topRow.createDiv('kt-balance-item-stats-col');
+            const durBadge = rightCol.createSpan('kt-balance-dur-badge');
+            durBadge.setText(formatMinutesToHours(g.minutes));
+            const pctBadge = rightCol.createSpan('kt-balance-pct-badge');
+            pctBadge.setText(`${g.percent.toFixed(1)}%`);
+
+            if (g.earnings > 0) {
+                const earnSpan = rightCol.createSpan('kt-balance-earnings-badge');
+                earnSpan.setText(`💵 ${formatCurrency(g.earnings, 'R$')}`);
+            }
+
+            // Progress Bar
+            const barTrack = item.createDiv('kt-balance-bar-track');
+            const barFill = barTrack.createDiv('kt-balance-bar-fill');
+            barFill.style.width = `${Math.max(2, g.percent)}%`;
+            barFill.style.background = g.color;
+        });
+    }
+
+    renderDonutChart(container, groups, totalMinutes) {
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("viewBox", "0 0 180 180");
+        svg.classList.add("kt-donut-svg");
+
+        const R = 62;
+        const C = 2 * Math.PI * R; // ~389.55
+        let cumulativeOffset = 0;
+
+        // Background circle
+        const bgCircle = document.createElementNS(svgNS, "circle");
+        bgCircle.setAttribute("cx", "90");
+        bgCircle.setAttribute("cy", "90");
+        bgCircle.setAttribute("r", String(R));
+        bgCircle.setAttribute("fill", "none");
+        bgCircle.setAttribute("stroke", "var(--background-modifier-border)");
+        bgCircle.setAttribute("stroke-width", "20");
+        svg.appendChild(bgCircle);
+
+        // Center Text
+        const defaultCenterVal = formatMinutesToHours(totalMinutes) || '0h';
+        const defaultCenterLbl = "Total Alocado";
+
+        const centerVal = document.createElementNS(svgNS, "text");
+        centerVal.setAttribute("x", "90");
+        centerVal.setAttribute("y", "86");
+        centerVal.setAttribute("text-anchor", "middle");
+        centerVal.classList.add("kt-donut-center-val");
+        centerVal.textContent = defaultCenterVal;
+        svg.appendChild(centerVal);
+
+        const centerLbl = document.createElementNS(svgNS, "text");
+        centerLbl.setAttribute("x", "90");
+        centerLbl.setAttribute("y", "104");
+        centerLbl.setAttribute("text-anchor", "middle");
+        centerLbl.classList.add("kt-donut-center-lbl");
+        centerLbl.textContent = defaultCenterLbl;
+        svg.appendChild(centerLbl);
+
+        groups.forEach(g => {
+            if (g.minutes <= 0) return;
+            const pct = g.minutes / totalMinutes;
+            const dashLength = pct * C;
+            const gapLength = C - dashLength;
+
+            const slice = document.createElementNS(svgNS, "circle");
+            slice.setAttribute("cx", "90");
+            slice.setAttribute("cy", "90");
+            slice.setAttribute("r", String(R));
+            slice.setAttribute("fill", "none");
+            slice.setAttribute("stroke", g.color || "#6366f1");
+            slice.setAttribute("stroke-width", "20");
+            slice.setAttribute("stroke-dasharray", `${dashLength} ${gapLength}`);
+            slice.setAttribute("stroke-dashoffset", String(-cumulativeOffset));
+            slice.setAttribute("transform", "rotate(-90 90 90)");
+            slice.classList.add("kt-donut-slice");
+
+            slice.addEventListener("mouseenter", () => {
+                slice.style.filter = "brightness(1.2)";
+                slice.style.opacity = "0.9";
+                centerVal.textContent = formatMinutesToHours(g.minutes);
+                centerLbl.textContent = `${g.name} (${g.percent.toFixed(1)}%)`;
+            });
+
+            slice.addEventListener("mouseleave", () => {
+                slice.style.filter = "none";
+                slice.style.opacity = "1";
+                centerVal.textContent = defaultCenterVal;
+                centerLbl.textContent = defaultCenterLbl;
+            });
+
+            svg.appendChild(slice);
+            cumulativeOffset += dashLength;
+        });
+
+        container.appendChild(svg);
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
 // HABIT MODAL (Novo Hábito / Editar Hábito)
 // ================================================================
 
@@ -3649,6 +4169,172 @@ class CustomEventModal extends obsidian.Modal {
                     return;
                 }
                 this.onSave(titleVal.trim(), startVal, endVal, typeVal, repeatRule, customDays, repeatWeeks);
+                this.close();
+            }))
+            .addButton(b => b.setButtonText('Cancelar').onClick(() => this.close()));
+    }
+
+    onClose() { this.contentEl.empty(); }
+}
+
+class HabitEventModal extends obsidian.Modal {
+    constructor(app, plugin, habit, date, defaultHour, defaultMin, onSave) {
+        super(app);
+        this.plugin      = plugin;
+        this.habit       = habit;
+        this.date        = date;
+        this.defaultHour = defaultHour;
+        this.defaultMin  = defaultMin;
+        this.onSave      = onSave;
+    }
+
+    onOpen() {
+        const { contentEl, date, habit } = this;
+        contentEl.addClass('kt-modal');
+        contentEl.addClass('kt-habit-modal');
+
+        const headerRow = contentEl.createDiv('kt-habit-modal-header');
+        headerRow.style.display = 'flex';
+        headerRow.style.alignItems = 'center';
+        headerRow.style.gap = '12px';
+        headerRow.style.marginBottom = '16px';
+
+        const iconBadge = headerRow.createDiv('kt-habit-icon-badge');
+        iconBadge.style.width = '38px';
+        iconBadge.style.height = '38px';
+        iconBadge.style.borderRadius = '8px';
+        iconBadge.style.display = 'flex';
+        iconBadge.style.alignItems = 'center';
+        iconBadge.style.justifyContent = 'center';
+        iconBadge.style.fontSize = '20px';
+        iconBadge.style.background = colorMixHex(habit.color || '#10b981', 0.2);
+        iconBadge.style.border = `1.5px solid ${habit.color || '#10b981'}`;
+        iconBadge.setText(habit.icon || '✨');
+
+        const titleInfo = headerRow.createDiv();
+        const titleH2 = titleInfo.createEl('h2', { text: `Agendar Hábito: ${habit.name}` });
+        titleH2.style.margin = '0 0 2px 0';
+        titleH2.style.fontSize = '16px';
+
+        const dateSub = titleInfo.createEl('span', { text: `Data selecionada: ${formatDate(date)}` });
+        dateSub.style.fontSize = '12px';
+        dateSub.style.color = 'var(--text-muted)';
+
+        let durationMins = 30;
+        if (habit.type === 'time' && habit.target && habit.target > 0) {
+            durationMins = habit.target;
+        }
+
+        const startMin = this.defaultHour * 60 + this.defaultMin;
+        let startVal = minutesToTime(startMin);
+        let endVal   = minutesToTime(Math.min(23 * 60 + 59, startMin + durationMins));
+
+        let repeatRule = 'none';
+        let repeatWeeks = 4;
+        let customDays = [date.getDay()];
+
+        new obsidian.Setting(contentEl)
+            .setName('Horário de Início')
+            .addText(t => { t.setValue(startVal); t.onChange(v => startVal = v); });
+
+        new obsidian.Setting(contentEl)
+            .setName('Horário de Término')
+            .addText(t => { t.setValue(endVal); t.onChange(v => endVal = v); });
+
+        const dowNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const todayDowName = dowNames[date.getDay()];
+
+        const repeatSetting = new obsidian.Setting(contentEl)
+            .setName('Repetição')
+            .setDesc('Preencher automaticamente em múltiplos dias');
+
+        const customDaysWrap = contentEl.createDiv('kt-custom-days-wrap');
+        customDaysWrap.style.display = 'none';
+        customDaysWrap.style.margin = '4px 0 14px 0';
+        customDaysWrap.style.padding = '8px 12px';
+        customDaysWrap.style.background = 'var(--background-secondary)';
+        customDaysWrap.style.borderRadius = '6px';
+
+        const customDaysTitle = customDaysWrap.createEl('div', { text: 'Repetir em quais dias da semana:', cls: 'kt-custom-days-label' });
+        customDaysTitle.style.fontSize = '12px';
+        customDaysTitle.style.marginBottom = '6px';
+        customDaysTitle.style.color = 'var(--text-muted)';
+
+        const daysBtnRow = customDaysWrap.createDiv('kt-custom-days-row');
+        daysBtnRow.style.display = 'flex';
+        daysBtnRow.style.gap = '6px';
+
+        const dayAbbrs = [
+            { dow: 1, label: 'Seg' },
+            { dow: 2, label: 'Ter' },
+            { dow: 3, label: 'Qua' },
+            { dow: 4, label: 'Qui' },
+            { dow: 5, label: 'Sex' },
+            { dow: 6, label: 'Sáb' },
+            { dow: 0, label: 'Dom' },
+        ];
+
+        dayAbbrs.forEach(dInfo => {
+            const b = daysBtnRow.createEl('button', {
+                text: dInfo.label,
+                cls: `kt-day-select-btn ${customDays.includes(dInfo.dow) ? 'is-active' : ''}`
+            });
+            b.style.padding = '4px 8px';
+            b.style.fontSize = '11.5px';
+            b.onclick = (e) => {
+                e.preventDefault();
+                if (customDays.includes(dInfo.dow)) {
+                    customDays = customDays.filter(x => x !== dInfo.dow);
+                    b.classList.remove('is-active');
+                } else {
+                    customDays.push(dInfo.dow);
+                    b.classList.add('is-active');
+                }
+            };
+        });
+
+        const horizonSetting = new obsidian.Setting(contentEl)
+            .setName('Duração da Série')
+            .setDesc('Quantas semanas preencher automaticamente')
+            .addDropdown(d => {
+                d.addOption('4', '4 semanas (~1 mês)');
+                d.addOption('8', '8 semanas (~2 meses)');
+                d.addOption('12', '12 semanas (~3 meses)');
+                d.addOption('26', '26 semanas (~6 meses)');
+                d.setValue('4');
+                d.onChange(v => repeatWeeks = parseInt(v, 10) || 4);
+            });
+        horizonSetting.settingEl.style.display = 'none';
+
+        repeatSetting.addDropdown(d => {
+            d.addOption('none', 'Não se repete (Apenas hoje)');
+            d.addOption('daily', 'Todos os dias (Seg a Dom)');
+            d.addOption('weekdays', 'Dias úteis (Segunda a Sexta)');
+            d.addOption('weekly', `Semanalmente (Toda ${todayDowName})`);
+            d.addOption('custom', 'Personalizado (Escolher dias da semana)');
+            d.setValue(repeatRule);
+            d.onChange(v => {
+                repeatRule = v;
+                if (v === 'none') {
+                    customDaysWrap.style.display = 'none';
+                    horizonSetting.settingEl.style.display = 'none';
+                } else if (v === 'custom') {
+                    customDaysWrap.style.display = 'block';
+                    horizonSetting.settingEl.style.display = 'flex';
+                } else {
+                    customDaysWrap.style.display = 'none';
+                    horizonSetting.settingEl.style.display = 'flex';
+                }
+            });
+        });
+
+        new obsidian.Setting(contentEl)
+            .addButton(b => b.setButtonText('💾 Agendar Hábito').setCta().onClick(() => {
+                if (!/^\d{2}:\d{2}$/.test(startVal) || !/^\d{2}:\d{2}$/.test(endVal)) {
+                    new obsidian.Notice('⚠️ Horário inválido. Use HH:mm');
+                    return;
+                }
+                this.onSave(habit, date, startVal, endVal, repeatRule, customDays, repeatWeeks);
                 this.close();
             }))
             .addButton(b => b.setButtonText('Cancelar').onClick(() => this.close()));
@@ -9100,7 +9786,7 @@ class TimeBlockModal extends obsidian.Modal {
         let endVal   = this.initialEnd   || slot?.timeEnd   || `${pad(this.defaultHour + 1)}:00`;
         let applyToAll = false;
 
-        const isRoutineOrEvent = card.isEvent || card.column === 'Rotina' || !!card.seriesId;
+        const isRoutineOrEvent = card.isEvent || card.isHabit || card.column === 'Rotina' || !!card.seriesId || !!card.habitId;
 
         if (isRoutineOrEvent) {
             new obsidian.Setting(contentEl)
@@ -9152,9 +9838,9 @@ class TimeBlockModal extends obsidian.Modal {
 
         if (isRoutineOrEvent) {
             buttonsRow.addButton(b => b.setButtonText('Excluir toda a série').setWarning().onClick(() => {
-                new ConfirmDeleteModal(this.app, `toda a série "${card.title}"`, () => {
+                new ConfirmDeleteModal(this.app, `toda a série "${card.title}"`, async () => {
                     if (this.onDelete) {
-                        this.onDelete(true);
+                        await this.onDelete(true);
                     }
                     this.close();
                 }).open();
@@ -10218,6 +10904,9 @@ kanban-plugin: basic
         const targetDate = date || this.selectedDay || card.startDate || new Date();
         const updated = this.parser.updateTimeBlock(content, card.lineIndex, targetDate, ts, te, instanceIndex, mode, card);
         await this.app.vault.modify(file, updated);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         if (ts && te) {
             new obsidian.Notice(`${card.title} (${formatDate(targetDate).slice(0,5)}) → ${ts} – ${te}`);
         } else {
@@ -10254,6 +10943,9 @@ kanban-plugin: basic
 
         // 3. Atomically write to disk
         await this.app.vault.modify(file, content);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         if (ts && te) {
             new obsidian.Notice(`✓ ${card.title} (${formatDate(targetDay).slice(0,5)}) → ${ts} – ${te}`);
         }
@@ -10265,6 +10957,74 @@ kanban-plugin: basic
         const ts       = minutesToTime(startMin);
         const te       = minutesToTime(endMin);
         await this.createCustomTimeEvent(title, date, ts, te, eventType, 'none');
+    }
+
+    async createHabitTimeEvent(habit, date, ts, te, repeatRule = 'none', customDays = [], repeatWeeks = 4) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+
+        const items = [];
+        const baseDate = startOfDay(date);
+        const habitTitle = `${habit.icon ? habit.icon + ' ' : '✨ '}${habit.name}`;
+
+        if (repeatRule === 'none') {
+            items.push({
+                title: habitTitle,
+                date: baseDate,
+                timeStart: ts,
+                timeEnd: te,
+                eventType: 'habit',
+                habitId: habit.id,
+                color: habit.color || '#10b981'
+            });
+        } else {
+            const seriesId = 'series_' + Date.now();
+            const totalDays = repeatWeeks * 7;
+
+            for (let i = 0; i < totalDays; i++) {
+                const curDate = new Date(baseDate);
+                curDate.setDate(curDate.getDate() + i);
+                const dow = curDate.getDay();
+
+                let shouldAdd = false;
+                if (repeatRule === 'daily') {
+                    shouldAdd = true;
+                } else if (repeatRule === 'weekdays') {
+                    shouldAdd = (dow >= 1 && dow <= 5);
+                } else if (repeatRule === 'weekly') {
+                    shouldAdd = (dow === baseDate.getDay());
+                } else if (repeatRule === 'custom') {
+                    shouldAdd = customDays.includes(dow);
+                }
+
+                if (shouldAdd) {
+                    items.push({
+                        title: habitTitle,
+                        date: curDate,
+                        timeStart: ts,
+                        timeEnd: te,
+                        eventType: 'habit',
+                        habitId: habit.id,
+                        color: habit.color || '#10b981',
+                        seriesId
+                    });
+                }
+            }
+        }
+
+        let content = await this.app.vault.read(file);
+        content = this.parser.addTimeEventsBatch(content, items);
+        await this.app.vault.modify(file, content);
+
+        // Update habitLogs in settings
+        await this.syncAllHabitLogs(habit.id);
+
+        if (items.length > 1) {
+            new obsidian.Notice(`✓ Criados ${items.length} blocos recorrentes para o hábito "${habit.name}" (${ts} – ${te})!`);
+        } else {
+            new obsidian.Notice(`✓ Hábito "${habit.name}" agendado (${ts} – ${te}) e registrado na aba Hábitos!`);
+        }
+        await this.refresh();
     }
 
     async createCustomTimeEvent(title, date, ts, te, eventType, repeatRule = 'none', customDays = [], repeatWeeks = 4) {
@@ -10327,7 +11087,7 @@ kanban-plugin: basic
         let content = await this.app.vault.read(file);
 
         if (!applyToAll) {
-            content = this.parser.updateTimeBlock(content, card.lineIndex, day, newTs, newTe);
+            content = this.parser.updateTimeBlock(content, card.lineIndex, day, newTs, newTe, null, 'set', card);
             if (newTitle && newTitle !== card.title) {
                 content = this.parser.saveCardEdit(content, card.lineIndex, newTitle, card.column, card.column, card.startDate, card.endDate);
             }
@@ -10336,6 +11096,9 @@ kanban-plugin: basic
         }
 
         await this.app.vault.modify(file, content);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         new obsidian.Notice('Evento(s) atualizado(s)');
         await this.refresh();
     }
@@ -10346,14 +11109,146 @@ kanban-plugin: basic
         let content = await this.app.vault.read(file);
 
         if (!deleteAll) {
-            content = this.parser.deleteCard(content, card.lineIndex);
+            content = this.parser.deleteCard(content, card.lineIndex, card);
         } else {
-            content = this.parser.deleteTimeEventSeries(content, card.seriesId, card.title, day);
+            content = this.parser.deleteTimeEventSeries(content, card.seriesId, card.title, null, card.habitId);
         }
 
         await this.app.vault.modify(file, content);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         new obsidian.Notice(deleteAll ? `Série "${card.title}" excluída` : `Evento excluído`);
         await this.refresh();
+    }
+
+    async syncAllHabitLogs(targetHabitId = null) {
+        if (!this.plugin.settings.habitLogs) this.plugin.settings.habitLogs = {};
+        const habits = this.plugin.settings.habits || [];
+        const targetHabits = targetHabitId ? habits.filter(h => h.id === targetHabitId) : habits;
+        if (targetHabits.length === 0) return;
+
+        const now = new Date();
+        const todayStart = startOfDay(now);
+        const curMin = now.getHours() * 60 + now.getMinutes();
+
+        // Parse all current cards from file
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        let allCards = this.cards || [];
+        if (file) {
+            try {
+                const content = await this.app.vault.read(file);
+                const parsed = this.parser.parseFile(content);
+                allCards = parsed.cards || [];
+            } catch(e) {}
+        }
+
+        targetHabits.forEach(h => {
+            if (!this.plugin.settings.habitLogs[h.id]) this.plugin.settings.habitLogs[h.id] = {};
+
+            // Find all cards matching this habit
+            const habitCards = allCards.filter(c => {
+                if (c.habitId && c.habitId === h.id) return true;
+                const cleanCardTitle = (c.title || '').replace(/[^\p{L}\p{N}\s]/gu, '').trim().toLowerCase();
+                const cleanHabitName = (h.name || '').replace(/[^\p{L}\p{N}\s]/gu, '').trim().toLowerCase();
+                return cleanHabitName && (cleanCardTitle === cleanHabitName || cleanCardTitle.includes(cleanHabitName));
+            });
+
+            // Rebuild habit day logs ONLY for dates where habit has been completed / concluded
+            const daysMap = new Map(); // dateKey -> { totalMinutes, count }
+
+            habitCards.forEach(c => {
+                // Collect dates strictly from dailyTimes (cards must have actual time slots)
+                const cardDates = [];
+                if (c.dailyTimes) {
+                    Object.keys(c.dailyTimes).forEach(dStr => {
+                        const d = parseDate(dStr);
+                        if (d) cardDates.push(d);
+                    });
+                }
+
+                cardDates.forEach(dateObj => {
+                    const dKey = getHabitDateKey(dateObj);
+                    const slots = getTimesForDay(c, dateObj);
+                    if (!slots || slots.length === 0) return;
+
+                    const dayStartObj = startOfDay(dateObj);
+                    const isPastDay = dayStartObj < todayStart;
+                    const isToday = sameDay(dateObj, now);
+                    const isFutureDay = dayStartObj > todayStart;
+
+                    // Future days CANNOT be marked as done unless explicitly checked [x]
+                    if (isFutureDay && !c.isCompleted) {
+                        return;
+                    }
+
+                    let dayMins = 0;
+                    let dayCount = 0;
+                    let hasCompletedSlot = false;
+
+                    slots.forEach(s => {
+                        if (s.timeStart && s.timeEnd) {
+                            const dur = timeToMinutes(s.timeEnd) - timeToMinutes(s.timeStart);
+                            const endMin = timeToMinutes(s.timeEnd);
+
+                            // Determine if this specific slot has concluded
+                            let slotConcluded = false;
+                            if (c.isCompleted) {
+                                slotConcluded = true;
+                            } else if (isPastDay) {
+                                slotConcluded = true;
+                            } else if (isToday) {
+                                slotConcluded = (curMin >= endMin);
+                            }
+
+                            if (slotConcluded && dur > 0) {
+                                dayMins += dur;
+                                dayCount += 1;
+                                hasCompletedSlot = true;
+                            }
+                        }
+                    });
+
+                    if (hasCompletedSlot || c.isCompleted) {
+                        if (!daysMap.has(dKey)) {
+                            daysMap.set(dKey, { totalMinutes: 0, count: 0 });
+                        }
+                        const cur = daysMap.get(dKey);
+                        cur.totalMinutes += dayMins;
+                        cur.count += dayCount > 0 ? dayCount : 1;
+                    }
+                });
+            });
+
+            // Clean keys that no longer have completed habit timeblocks
+            const existingKeys = Object.keys(this.plugin.settings.habitLogs[h.id] || {});
+            existingKeys.forEach(k => {
+                if (!daysMap.has(k)) {
+                    delete this.plugin.settings.habitLogs[h.id][k];
+                }
+            });
+
+            // Set new values
+            daysMap.forEach((data, dKey) => {
+                if (h.type === 'boolean') {
+                    this.plugin.settings.habitLogs[h.id][dKey] = data.count > 0;
+                } else if (h.type === 'time') {
+                    if (data.totalMinutes > 0) {
+                        this.plugin.settings.habitLogs[h.id][dKey] = data.totalMinutes;
+                    } else {
+                        delete this.plugin.settings.habitLogs[h.id][dKey];
+                    }
+                } else if (h.type === 'count') {
+                    if (data.count > 0) {
+                        this.plugin.settings.habitLogs[h.id][dKey] = data.count;
+                    } else {
+                        delete this.plugin.settings.habitLogs[h.id][dKey];
+                    }
+                }
+            });
+        });
+
+        await this.plugin.saveSettings();
     }
 
     async deleteCardLine(lineIndex) {
@@ -10362,6 +11257,7 @@ kanban-plugin: basic
         const content = await this.app.vault.read(file);
         const updated = this.parser.deleteCard(content, lineIndex);
         await this.app.vault.modify(file, updated);
+        await this.syncAllHabitLogs();
         new obsidian.Notice('Card excluído');
     }
 
@@ -10369,8 +11265,11 @@ kanban-plugin: basic
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         const content = await this.app.vault.read(file);
-        const updated = this.parser.removeDateRange(content, card.lineIndex);
+        const updated = this.parser.removeDateRange(content, card.lineIndex, card);
         await this.app.vault.modify(file, updated);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         new obsidian.Notice(`${card.title} removido do cronograma`);
         await this.refresh();
     }
@@ -11275,6 +12174,7 @@ kanban-plugin: basic
         kanbanTab.onclick   = () => switchMainView('kanban');
         projectsTab.onclick = () => switchMainView('projects');
         habitsTab.onclick   = async () => {
+            await this.syncAllHabitLogs();
             await switchMainView('habits');
             if (this.plugin.settings.awConnected) {
                 const now = Date.now();
@@ -11404,6 +12304,22 @@ kanban-plugin: basic
             };
 
             if (isCalActive) {
+                const isCentered = !!this.calendarCentered;
+                const centerBtn = nav.createEl('button', { 
+                    cls: `kt-nav-btn kt-center-today-btn${isCentered ? ' kt-nav-btn-active' : ''}`, 
+                    text: isCentered ? '🎯 Centralizado' : '🎯 Centralizar' 
+                });
+                centerBtn.title = isCentered 
+                    ? 'Modo rolagem ativo: Semana atual na 2ª linha. Clique para voltar ao mês civil padrão.' 
+                    : 'Centralizar a semana atual na 2ª linha para visualizar as próximas semanas à frente.';
+                centerBtn.onclick = () => {
+                    this.calendarCentered = !this.calendarCentered;
+                    if (this.calendarCentered) {
+                        this.monthOffset = 0;
+                    }
+                    this.render();
+                };
+
                 const addEvtBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-add-calevt-nav-btn', text: '＋ Evento' });
                 addEvtBtn.title = 'Criar novo evento, data especial, aniversário ou lembrete';
                 addEvtBtn.onclick = () => {
@@ -11428,6 +12344,15 @@ kanban-plugin: basic
 
         // Sub-view Toggle for Timeblocking (1 Dia vs Semana Multi-Day)
         if (this.hasActiveDockView('timeblock')) {
+            const balanceBtn = tb.createEl('button', {
+                cls: 'kt-nav-btn kt-tb-balance-btn',
+                text: '📊 Balanço da Semana'
+            });
+            balanceBtn.title = 'Abrir gráfico de distribuição e balanço de horas da semana';
+            balanceBtn.onclick = () => {
+                new WeeklyTimeBalanceModal(this.app, this.plugin, this).open();
+            };
+
             const subToggle = tb.createDiv('kt-subview-toggle');
             const curSub = this.plugin.settings.timeblockSubView || 'day';
 
@@ -11576,6 +12501,46 @@ kanban-plugin: basic
         const mode = isCalActive ? 'month' : (this.plugin.settings.ganttDaysMode || '14');
         
         if (mode === 'month') {
+            if (this.calendarCentered) {
+                const now = new Date();
+                const nowStart = new Date(now);
+                nowStart.setHours(0, 0, 0, 0);
+
+                // Monday of current week
+                const nowDow = nowStart.getDay();
+                const nowDiff = nowDow === 0 ? -6 : 1 - nowDow;
+                const currentWeekMon = new Date(nowStart);
+                currentWeekMon.setDate(currentWeekMon.getDate() + nowDiff);
+
+                // Start 1 week prior (Row 1 Monday) + apply monthOffset * 4 weeks if user navigated
+                const offsetWeeks = (this.monthOffset || 0) * 4;
+                const gridStart = new Date(currentWeekMon);
+                gridStart.setDate(gridStart.getDate() - 7 + (offsetWeeks * 7));
+
+                const days = [];
+                const cur = new Date(gridStart);
+                for (let i = 0; i < 42; i++) { // 6 full weeks
+                    days.push(new Date(cur));
+                    cur.setDate(cur.getDate() + 1);
+                }
+
+                const weeksCount = 6;
+                const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+                const curMonthName = monthNames[now.getMonth()];
+                const monthLabel = `Hoje Centralizado (${curMonthName} ${now.getFullYear()})`;
+
+                return {
+                    isMonthMode: true,
+                    isCenteredMode: true,
+                    targetDate: currentWeekMon,
+                    monthLabel,
+                    targetMonth: now.getMonth(),
+                    targetYear: now.getFullYear(),
+                    days,
+                    weeksCount
+                };
+            }
+
             const now = new Date();
             const baseMonth = now.getMonth() + (this.monthOffset || 0);
             const targetDate = new Date(now.getFullYear(), baseMonth, 1);
@@ -11605,6 +12570,7 @@ kanban-plugin: basic
 
             return {
                 isMonthMode: true,
+                isCenteredMode: false,
                 targetDate,
                 monthLabel,
                 targetMonth: m,
@@ -11752,7 +12718,7 @@ kanban-plugin: basic
                 const globalDayIdx = w * 7 + colIdx;
                 const isToday = sameDay(d, new Date());
                 const isWeekend = (d.getDay() === 0 || d.getDay() === 6);
-                const isOtherMonth = d.getMonth() !== monthInfo.targetMonth;
+                const isOtherMonth = !monthInfo.isCenteredMode && (d.getMonth() !== monthInfo.targetMonth);
 
                 const dayCell = weekBg.createDiv(`kt-cal-day-cell${isToday ? ' kt-is-today' : ''}${isWeekend ? ' kt-is-weekend' : ''}${isOtherMonth ? ' kt-is-other-month' : ''}`);
                 dayCell.dataset.dayIndex = String(globalDayIdx);
@@ -21568,47 +22534,7 @@ kanban-plugin: basic
 
         // Section: BACKLOG GERAL SEM DATA
         const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
-        sidebar.createEl('p', { cls: 'kt-section-label', text: `📋 BACKLOG GERAL (${unscheduled.length})` });
-        if (unscheduled.length === 0) {
-            const emptyNotice = sidebar.createDiv('kt-empty');
-            emptyNotice.setText('Nenhum card no backlog.');
-        } else {
-            unscheduled.forEach(card => {
-                const c = sidebar.createDiv('kt-sb-card');
-                c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
-                if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
-                c.createDiv('kt-c-title').setText(card.title);
-                const metaRow = c.createDiv('kt-card-meta-row');
-                this.renderTagPills(metaRow, card.tags, true);
-                if (card.estimateMinutes && card.estimateMinutes > 0) {
-                    const estBadge = metaRow.createSpan('kt-card-est-badge');
-                    estBadge.setText(`⏱ ${card.estimateText}`);
-                }
-                c.title = 'Arraste para qualquer dia da semana para agendar horário';
-                c.setAttribute('draggable', 'true');
-
-                c.addEventListener('dragstart', (e) => {
-                    this.draggedCard = card;
-                    const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
-                    try {
-                        e.dataTransfer.setData('text/plain', cardIdStr);
-                        e.dataTransfer.effectAllowed = 'move';
-                    } catch(err) {}
-                    c.classList.add('kt-dragging');
-                    document.body.classList.add('kt-is-card-dragging');
-                });
-
-                c.addEventListener('dragend', () => {
-                    c.classList.remove('kt-dragging');
-                    document.body.classList.remove('kt-is-card-dragging');
-                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
-                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
-                    this.draggedCard = null;
-                });
-
-                c.onclick = () => this.openCardOptionsModal(card);
-            });
-        }
+        this.renderTbBacklogSection(sidebar, unscheduled, null);
 
         // Main MultiDayView
         const main = split.createDiv('kt-tb-main kt-tb-week-main');
@@ -22016,10 +22942,69 @@ kanban-plugin: basic
 
         // Section 2: BACKLOG GERAL SEM DATA (Exclui blocos de rotina/reunião)
         const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
-        if (unscheduled.length > 0) {
-            sidebar.createEl('p', { cls: 'kt-section-label', text: `📋 BACKLOG GERAL (${unscheduled.length})` });
-            unscheduled.forEach(card => {
-                const c = sidebar.createDiv('kt-sb-card');
+        this.renderTbBacklogSection(sidebar, unscheduled, day);
+    }
+
+    renderTbBacklogSection(sidebar, unscheduled, day = null) {
+        if (!unscheduled || unscheduled.length === 0) {
+            sidebar.createEl('p', { cls: 'kt-section-label', text: '📋 BACKLOG GERAL (0)' });
+            const emptyNotice = sidebar.createDiv('kt-empty');
+            emptyNotice.setText('Nenhum card no backlog.');
+            return;
+        }
+
+        const sectionHeader = sidebar.createEl('p', { cls: 'kt-section-label' });
+
+        // Search bar
+        const searchBox = sidebar.createDiv('kt-tb-search-box');
+        searchBox.createSpan({ cls: 'kt-tb-search-icon', text: '🔍' });
+        const searchInput = searchBox.createEl('input', {
+            cls: 'kt-tb-search-input',
+            type: 'text',
+            placeholder: 'Buscar no backlog geral...'
+        });
+        searchInput.value = this.tbBacklogSearchQuery || '';
+
+        const clearBtn = searchBox.createEl('button', {
+            cls: 'kt-tb-search-clear',
+            text: '✕'
+        });
+        clearBtn.title = 'Limpar busca';
+        clearBtn.style.display = this.tbBacklogSearchQuery ? 'inline-flex' : 'none';
+
+        const cardsContainer = sidebar.createDiv('kt-tb-backlog-items');
+
+        const updateBacklogCards = () => {
+            const query = (this.tbBacklogSearchQuery || '').trim().toLowerCase();
+            clearBtn.style.display = query ? 'inline-flex' : 'none';
+
+            let filtered = unscheduled;
+            if (query) {
+                filtered = unscheduled.filter(c => {
+                    const titleMatch = (c.title || '').toLowerCase().includes(query);
+                    const cleanTitleMatch = (c.cleanTitle || '').toLowerCase().includes(query);
+                    const colMatch = (c.column || '').toLowerCase().includes(query);
+                    const tagMatch = c.tags && c.tags.some(t => t.toLowerCase().includes(query));
+                    return titleMatch || cleanTitleMatch || colMatch || tagMatch;
+                });
+            }
+
+            if (query) {
+                sectionHeader.setText(`📋 BACKLOG GERAL (${filtered.length} / ${unscheduled.length})`);
+            } else {
+                sectionHeader.setText(`📋 BACKLOG GERAL (${unscheduled.length})`);
+            }
+
+            cardsContainer.empty();
+
+            if (filtered.length === 0) {
+                const emptyNotice = cardsContainer.createDiv('kt-empty');
+                emptyNotice.setText(`Nenhum card encontrado para "${query}".`);
+                return;
+            }
+
+            filtered.forEach(card => {
+                const c = cardsContainer.createDiv('kt-sb-card');
                 c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
                 if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
                 c.createDiv('kt-c-title').setText(card.title);
@@ -22037,7 +23022,7 @@ kanban-plugin: basic
                     earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
                     earnBadge.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
                 }
-                c.title = 'Arraste para a grade de horários ou clique para abrir detalhes';
+                c.title = day ? 'Arraste para a grade de horários ou clique para abrir detalhes' : 'Arraste para qualquer dia da semana para agendar horário';
                 c.setAttribute('draggable', 'true');
 
                 c.addEventListener('dragstart', (e) => {
@@ -22059,9 +23044,31 @@ kanban-plugin: basic
                     this.draggedCard = null;
                 });
 
-                c.onclick = () => this.openCardOptionsModal(card);
+                c.onclick = () => {
+                    if (day) {
+                        this.openCardOptionsModal(card, day);
+                    } else {
+                        this.openCardOptionsModal(card);
+                    }
+                };
             });
-        }
+        };
+
+        searchInput.addEventListener('input', (e) => {
+            this.tbBacklogSearchQuery = e.target.value;
+            updateBacklogCards();
+        });
+
+        clearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.tbBacklogSearchQuery = '';
+            searchInput.value = '';
+            searchInput.focus();
+            updateBacklogCards();
+        });
+
+        // Initial render
+        updateBacklogCards();
     }
 
     renderDayGrid(parent) {
@@ -22348,6 +23355,25 @@ kanban-plugin: basic
                 });
         });
 
+        // Habits Context Menu Integration
+        const habits = this.plugin.settings.habits || [];
+        if (habits.length > 0) {
+            menu.addSeparator();
+            habits.forEach(habit => {
+                const targetText = habit.type === 'time' ? ` (${habit.target || 30} min)` : (habit.type === 'count' ? ` (${habit.target || 1}x)` : ' (30 min)');
+                const icon = habit.icon ? habit.icon + ' ' : '✨ ';
+                menu.addItem(item => {
+                    item.setTitle(`${icon}${habit.name}${targetText}`)
+                        .setIcon('sparkles')
+                        .onClick(() => {
+                            new HabitEventModal(this.app, this.plugin, habit, day, h, m, async (hObj, date, startVal, endVal, repRule, cDays, repWeeks) => {
+                                await this.createHabitTimeEvent(hObj, date, startVal, endVal, repRule, cDays, repWeeks);
+                            }).open();
+                        });
+                });
+            });
+        }
+
         menu.addSeparator();
 
         menu.addItem(item => {
@@ -22541,6 +23567,12 @@ kanban-plugin: basic
         } else if (card.isEvent) {
             el.addClass('kt-tb-card-event');
             el.addClass(`kt-tb-card-${card.eventType || 'break'}`);
+            if (card.eventType === 'habit' || card.isHabit) {
+                el.addClass('kt-tb-card-habit');
+                const hColor = card.habitColor || card.projectColor || '#10b981';
+                el.style.setProperty('--proj-color', hColor);
+                el.style.borderLeftColor = hColor;
+            }
         } else {
             el.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
             if (card.priorityColor) el.style.setProperty('--prio-color', card.priorityColor);
@@ -22555,6 +23587,10 @@ kanban-plugin: basic
         const heightPx = Math.max(26, duration * pxPerMin - 2);
         el.style.top    = `${topPx}px`;
         el.style.height = `${heightPx}px`;
+
+        if (heightPx < 52) {
+            el.addClass('kt-tb-card-short');
+        }
 
         // Posicionamento Horizontal Anti-Sobreposição (Lado a Lado)
         const colIndex  = layoutInfo ? layoutInfo.colIndex : 0;
@@ -22587,7 +23623,7 @@ kanban-plugin: basic
         }
 
         // Conteúdo do Card
-        const isRoutineOrEvent = card.isEvent || card.column === 'Rotina' || !!card.seriesId;
+        const isRoutineOrEvent = card.isEvent || card.isHabit || card.column === 'Rotina' || !!card.seriesId || !!card.habitId;
 
         const openEditModal = () => {
             if (card.isRemoteCalendarEvent) {
@@ -22636,6 +23672,7 @@ kanban-plugin: basic
         timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para editar este horário');
         timeLabel.style.cursor = 'pointer';
         timeLabel.onclick = (e) => {
+            if (el._ktJustMoved && Date.now() - el._ktJustMoved < 300) return;
             e.stopPropagation();
             openEditModal();
         };
@@ -22645,6 +23682,18 @@ kanban-plugin: basic
         titleEl.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para abrir e editar a tarefa');
         titleEl.style.cursor = 'pointer';
         titleEl.onclick = (e) => {
+            if (el._ktJustMoved && Date.now() - el._ktJustMoved < 300) return;
+            e.stopPropagation();
+            if (!card.isRemoteCalendarEvent && !isRoutineOrEvent) {
+                this.openCardOptionsModal(card, day);
+            } else {
+                openEditModal();
+            }
+        };
+
+        el.onclick = (e) => {
+            if (el._ktJustMoved && Date.now() - el._ktJustMoved < 300) return;
+            if (e.target.closest('.kt-tb-card-time') || e.target.closest('.kt-tb-subtask-chk') || e.target.closest('a') || e.target.classList.contains('kt-tb-resize-edge')) return;
             e.stopPropagation();
             if (!card.isRemoteCalendarEvent && !isRoutineOrEvent) {
                 this.openCardOptionsModal(card, day);
@@ -22849,6 +23898,7 @@ kanban-plugin: basic
 
     attachTimeblockTopResize(handleEl, card, day, cardEl, dayStart, dayEnd, pxPerMin, instanceIndex = 0, currentStart = null, currentEnd = null) {
         handleEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
 
@@ -22874,6 +23924,12 @@ kanban-plugin: basic
                 cardEl.style.top    = `${newTop}px`;
                 cardEl.style.height = `${newHeight}px`;
 
+                if (newHeight < 52) {
+                    cardEl.classList.add('kt-tb-card-short');
+                } else {
+                    cardEl.classList.remove('kt-tb-card-short');
+                }
+
                 if (timeLabel) {
                     timeLabel.setText(`⏰ ${minutesToTime(previewStartMin)} – ${minutesToTime(origEndMin)}`);
                 }
@@ -22896,6 +23952,15 @@ kanban-plugin: basic
                 document.removeEventListener('pointerup', onPointerUp);
                 document.body.classList.remove('kt-is-tb-resizing');
 
+                if (hasMoved) {
+                    cardEl._ktJustMoved = Date.now();
+                    const blockClick = (clickEvt) => {
+                        clickEvt.stopPropagation();
+                        clickEvt.preventDefault();
+                    };
+                    window.addEventListener('click', blockClick, { capture: true, once: true });
+                }
+
                 if (hasMoved && previewStartMin !== origStartMin) {
                     const ts = minutesToTime(previewStartMin);
                     const te = minutesToTime(origEndMin);
@@ -22911,6 +23976,7 @@ kanban-plugin: basic
 
     attachTimeblockBottomResize(handleEl, card, day, cardEl, dayStart, dayEnd, pxPerMin, instanceIndex = 0, currentStart = null, currentEnd = null) {
         handleEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
 
@@ -22932,6 +23998,12 @@ kanban-plugin: basic
 
                 const newHeight = Math.max(26, (previewEndMin - origStartMin) * pxPerMin - 2);
                 cardEl.style.height = `${newHeight}px`;
+
+                if (newHeight < 52) {
+                    cardEl.classList.add('kt-tb-card-short');
+                } else {
+                    cardEl.classList.remove('kt-tb-card-short');
+                }
 
                 if (timeLabel) {
                     timeLabel.setText(`⏰ ${minutesToTime(origStartMin)} – ${minutesToTime(previewEndMin)}`);
@@ -22955,6 +24027,15 @@ kanban-plugin: basic
                 document.removeEventListener('pointerup', onPointerUp);
                 document.body.classList.remove('kt-is-tb-resizing');
 
+                if (hasMoved) {
+                    cardEl._ktJustMoved = Date.now();
+                    const blockClick = (clickEvt) => {
+                        clickEvt.stopPropagation();
+                        clickEvt.preventDefault();
+                    };
+                    window.addEventListener('click', blockClick, { capture: true, once: true });
+                }
+
                 if (hasMoved && previewEndMin !== origEndMin) {
                     const ts = minutesToTime(origStartMin);
                     const te = minutesToTime(previewEndMin);
@@ -22970,6 +24051,7 @@ kanban-plugin: basic
 
     attachTimeblockCardMove(cardEl, card, day, dayStart, dayEnd, pxPerMin, instanceIndex = 0, currentStart = null, currentEnd = null) {
         cardEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
             if (e.target.classList.contains('kt-tb-resize-edge')) return;
             if (e.target.closest('.kt-tb-card-time') || e.target.closest('.kt-tb-subtask-chk') || e.target.closest('.kt-tag-pill') || e.target.closest('a')) return;
 
@@ -23009,29 +24091,20 @@ kanban-plugin: basic
                 document.body.classList.remove('kt-is-tb-resizing');
                 cardEl.classList.remove('kt-dragging');
 
+                if (hasMoved) {
+                    cardEl._ktJustMoved = Date.now();
+                    const blockClick = (clickEvt) => {
+                        clickEvt.stopPropagation();
+                        clickEvt.preventDefault();
+                    };
+                    window.addEventListener('click', blockClick, { capture: true, once: true });
+                }
+
                 if (hasMoved && previewStartMin !== origStartMin) {
                     const ts = minutesToTime(previewStartMin);
                     const te = minutesToTime(previewEndMin);
                     await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
                     await this.refresh();
-                } else if (!hasMoved) {
-                    new TimeBlockModal(
-                        this.app,
-                        card,
-                        day,
-                        parseInt(currentStart || '9'),
-                        async (newTitle, ts, te) => {
-                            await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
-                            await this.refresh();
-                        },
-                        async (deleteAll, inst) => {
-                            await this.persistTimeBlock(card, day, null, null, inst !== null && inst !== undefined ? inst : instanceIndex, 'delete');
-                            await this.refresh();
-                        },
-                        instanceIndex,
-                        currentStart,
-                        currentEnd
-                    ).open();
                 }
             };
 
