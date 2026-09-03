@@ -10539,6 +10539,106 @@ class KanbanTimelineSettingsTab extends obsidian.PluginSettingTab {
                     });
             });
 
+        // Section: Canvas LMS Integration
+        containerEl.createEl('h3', { text: '🎓 Integração com Canvas LMS' });
+        
+        new obsidian.Setting(containerEl)
+            .setName('Canvas URL')
+            .setDesc('URL do seu Canvas (ex: https://canvas.instructure.com ou https://pucminas.instructure.com)')
+            .addText(t => t
+                .setPlaceholder('https://...')
+                .setValue(this.plugin.settings.canvasUrl || '')
+                .onChange(async v => {
+                    this.plugin.settings.canvasUrl = v.trim();
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new obsidian.Setting(containerEl)
+            .setName('Access Token')
+            .setDesc('Token de Acesso (Gerado no seu Perfil Canvas > Settings > New Access Token)')
+            .addText(t => t
+                .setPlaceholder('Token...')
+                .setValue(this.plugin.settings.canvasToken || '')
+                .onChange(async v => {
+                    this.plugin.settings.canvasToken = v.trim();
+                    await this.plugin.saveSettings();
+                })
+            );
+            
+        new obsidian.Setting(containerEl)
+            .setName('Coluna de Backlog (Canvas)')
+            .setDesc('Nome da coluna onde as tarefas do Canvas serão inseridas (ex: Backlog ou PUC)')
+            .addText(t => t
+                .setPlaceholder('Backlog')
+                .setValue(this.plugin.settings.canvasBacklogColumn || 'Backlog')
+                .onChange(async v => {
+                    this.plugin.settings.canvasBacklogColumn = v.trim();
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new obsidian.Setting(containerEl)
+            .setName('Período de Atividades (Meses)')
+            .setDesc('Quantos meses a partir de hoje buscar tarefas e atividades no Canvas (padrão: 5 meses)')
+            .addSlider(slider => slider
+                .setLimits(1, 12, 1)
+                .setValue(this.plugin.settings.canvasMonthsAhead ?? 5)
+                .setDynamicTooltip()
+                .onChange(async v => {
+                    this.plugin.settings.canvasMonthsAhead = v;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new obsidian.Setting(containerEl)
+            .setName('Hashtags Adicionais')
+            .setDesc('Hashtags extras para incluir em todos os cards importados (ex: #puc ou #puc #faculdade)')
+            .addText(t => t
+                .setPlaceholder('#puc')
+                .setValue(this.plugin.settings.canvasExtraTags || '')
+                .onChange(async v => {
+                    this.plugin.settings.canvasExtraTags = v.trim();
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new obsidian.Setting(containerEl)
+            .setName('Ponto de Corte da Tag da Matéria')
+            .setDesc('Texto a partir do qual o nome da matéria será cortado ao gerar a hashtag (ex: "-Engenharia" ou "Engenharia"). Tudo a partir desse ponto será descartado na tag.')
+            .addText(t => t
+                .setPlaceholder('-Engenharia')
+                .setValue(this.plugin.settings.canvasTagCutoff || '')
+                .onChange(async v => {
+                    this.plugin.settings.canvasTagCutoff = v.trim();
+                    await this.plugin.saveSettings();
+                })
+            );
+            
+        new obsidian.Setting(containerEl)
+            .setName('Sincronização Automática')
+            .setDesc('Sincronizar automaticamente as tarefas do Canvas a cada 15 minutos')
+            .addToggle(t => t
+                .setValue(this.plugin.settings.canvasAutoSync !== false)
+                .onChange(async v => {
+                    this.plugin.settings.canvasAutoSync = v;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new obsidian.Setting(containerEl)
+            .addButton(b => b
+                .setButtonText('🔄 Sincronizar Canvas Agora')
+                .setCta()
+                .onClick(async () => {
+                    b.setButtonText('Sincronizando...');
+                    b.setDisabled(true);
+                    await this.plugin.syncCanvasAssignments(true);
+                    b.setButtonText('🔄 Sincronizar Canvas Agora');
+                    b.setDisabled(false);
+                })
+            );
+
         // Section: Remote Calendars (Google Agenda / iCal)
         containerEl.createEl('h3', { text: '🗓️ Calendários Remotos (Google Agenda / iCal)' });
         containerEl.createEl('p', {
@@ -24174,6 +24274,13 @@ kanban-plugin: basic
 
 const DEFAULT_SETTINGS = {
     kanbanFile:            'Kanban.md',
+    canvasUrl:             '',
+    canvasToken:           '',
+    canvasBacklogColumn:   'Backlog',
+    canvasAutoSync:        true,
+    canvasMonthsAhead:     5,
+    canvasExtraTags:       '',
+    canvasTagCutoff:       '',
     dayStart:              7,
     dayEnd:                22,
     backlogHeight:         280,
@@ -24278,17 +24385,357 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
             },
         });
 
+        this.addCommand({
+            id:       'sync-canvas-lms',
+            name:     'Sincronizar Tarefas do Canvas LMS',
+            callback: async () => {
+                await this.syncCanvasAssignments(true);
+            },
+        });
+
         this.addSettingTab(new KanbanTimelineSettingsTab(this.app, this));
 
         // Initial background sync
         this.syncAllRemoteCalendars(false);
+        if (this.settings.canvasAutoSync) {
+            this.syncCanvasAssignments(false);
+        }
 
         // Periodic sync every 15 minutes
         this.registerInterval(
             window.setInterval(() => {
                 this.syncAllRemoteCalendars(false);
+                if (this.settings.canvasAutoSync) {
+                    this.syncCanvasAssignments(false);
+                }
             }, 15 * 60 * 1000)
         );
+    }
+
+    async syncCanvasAssignments(force = false) {
+        if (!this.settings.canvasUrl || !this.settings.canvasToken) {
+            if (force) new obsidian.Notice('Canvas URL ou Token não configurados.');
+            return 0;
+        }
+        
+        try {
+            const cleanUrl = this.settings.canvasUrl.replace(/\/$/, '');
+            const now = new Date();
+            
+            // Format dates as YYYY-MM-DD
+            const formatYYYYMMDD = (d) => {
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                return `${yyyy}-${mm}-${dd}`;
+            };
+
+            const startDateStr = formatYYYYMMDD(now);
+            const monthsAhead = this.settings.canvasMonthsAhead || 5;
+            const endDate = new Date(now.getFullYear(), now.getMonth() + monthsAhead, now.getDate(), 23, 59, 59);
+            const endDateStr = formatYYYYMMDD(endDate);
+
+            let assignments = [];
+            const headers = {
+                'Authorization': `Bearer ${this.settings.canvasToken}`,
+                'Accept': 'application/json'
+            };
+
+            // Pre-fetch courses map to obtain official subject names
+            const coursesMap = {};
+            try {
+                const coursesRes = await obsidian.requestUrl({
+                    url: `${cleanUrl}/api/v1/courses?enrollment_state=active&per_page=100`,
+                    headers: headers
+                });
+                if (coursesRes.status === 200 && Array.isArray(coursesRes.json)) {
+                    for (const c of coursesRes.json) {
+                        if (c.id && (c.name || c.course_code)) {
+                            coursesMap[String(c.id)] = c.name || c.course_code;
+                        }
+                    }
+                }
+            } catch (errCourses) {
+                console.warn('[Kanban Timeline] Não foi possível carregar lista de matérias:', errCourses);
+            }
+
+            // Helper to generate clean Obsidian #hashtag for course subject with cutoff support
+            const formatCourseTag = (rawCourseName, cutoffStr) => {
+                if (!rawCourseName || typeof rawCourseName !== 'string') return '';
+                let clean = rawCourseName
+                    .replace(/\(.*?\)/g, '')
+                    .replace(/\[.*?\]/g, '')
+                    .replace(/-\s*\d{4}[\/-]\d+/g, '')
+                    .replace(/\d{4}[\/-]\d+/g, '')
+                    .trim();
+
+                if (!clean) clean = rawCourseName.trim();
+
+                // 1. Cutoff in raw/clean text if cutoffStr is provided
+                if (cutoffStr && typeof cutoffStr === 'string' && cutoffStr.trim()) {
+                    const cut = cutoffStr.trim();
+                    const idx = clean.toLowerCase().indexOf(cut.toLowerCase());
+                    if (idx !== -1) {
+                        clean = clean.slice(0, idx).trim();
+                    }
+                }
+
+                // Normalize accents for universal compatibility (e.g. "Cálculo" -> "Calculo")
+                clean = clean.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+                // Remove unwanted symbols
+                clean = clean.replace(/[^a-zA-Z0-9\s_-]/g, '').trim();
+
+                // Format spaces and underscores into hyphens
+                clean = clean.replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+                // 2. Also check if cutoff matches within the hyphenated tag string (e.g. "-Engenharia" or "Engenharia")
+                if (cutoffStr && typeof cutoffStr === 'string' && cutoffStr.trim()) {
+                    let cutTag = cutoffStr.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    cutTag = cutTag.replace(/[^a-zA-Z0-9\s_-]/g, '').trim().replace(/[\s_]+/g, '-');
+                    if (cutTag) {
+                        const idxTag = clean.toLowerCase().indexOf(cutTag.toLowerCase());
+                        if (idxTag !== -1) {
+                            clean = clean.slice(0, idxTag).replace(/-+$/, '').trim();
+                        }
+                    }
+                }
+
+                return clean ? `#${clean}` : '';
+            };
+
+            // Helper to format extra tags (e.g. "#puc" or "#puc #faculdade")
+            const formatExtraTags = (extraTagsStr) => {
+                if (!extraTagsStr || typeof extraTagsStr !== 'string') return '';
+                const parts = extraTagsStr.split(/[\s,]+/);
+                const formatted = parts
+                    .map(p => p.trim())
+                    .filter(p => p.length > 0)
+                    .map(p => p.startsWith('#') ? p : `#${p}`)
+                    .join(' ');
+                return formatted ? ` ${formatted}` : '';
+            };
+
+            // Helper to clean task titles from Canvas LMS before importing to Kanban
+            const cleanCanvasTaskName = (rawTitle) => {
+                if (!rawTitle || typeof rawTitle !== 'string') return '';
+
+                let text = rawTitle;
+
+                // 1. Decode common HTML entities
+                text = text
+                    .replace(/&amp;/g, '&')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;|&apos;/g, "'")
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&nbsp;/g, ' ')
+                    .replace(/&#(\d+);/g, (m, dec) => String.fromCharCode(dec))
+                    .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+                // 2. Strip HTML comments & tags
+                text = text.replace(/<!--[\s\S]*?-->/g, '');
+                text = text.replace(/<[^>]+>/g, ' ');
+
+                // 3. Extract text from markdown links & wikilinks
+                // Wikilinks: [[target|alias]] -> alias, [[target]] -> target
+                text = text.replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1');
+                // Markdown links: [text](url) -> text
+                text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+                // 4. Remove image/embed syntax: ![alt](url) or ![[file]]
+                text = text.replace(/!\[.*?\](?:\(.*?\)|\[\[.*?\]\])/g, '');
+
+                // 5. Remove plugin metadata / timeline date / time markers if present in raw name
+                text = text.replace(/@\{[^}]*\}/g, '');
+                text = text.replace(/⏰/g, '');
+
+                // 6. Remove Markdown formatting characters:
+                // *, _, ~, `, =, ^, #, >, |, \, [, ], {, }, @
+                text = text.replace(/[*_~`=^#>|\\\[\]{}@]/g, ' ');
+
+                // 7. Remove leading list/checkbox markers: e.g. - [ ], - [x], - , + , 1. 
+                text = text.replace(/^[\s\-*+>]+(?:\s*\[[ xX]\])?\s*/, '');
+                text = text.replace(/^\d+\.\s+/, '');
+
+                // 8. Fix spacing before punctuation
+                text = text.replace(/\s+([,:;.!?])/g, '$1');
+
+                // 9. Normalize whitespace (remove newlines, collapse spaces)
+                text = text.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+                // 10. Clean dangling punctuation at start/end
+                text = text.replace(/^[-:;,.\s]+|[-:;,.\s]+$/g, '').trim();
+
+                return text;
+            };
+
+            // 1. Primary: Canvas Planner API (fetches assignments, quizzes, discussions scheduled within the period)
+            try {
+                let nextUrl = `${cleanUrl}/api/v1/planner/items?start_date=${startDateStr}&end_date=${endDateStr}&per_page=100`;
+                let pageCount = 0;
+                const maxPages = 10;
+
+                while (nextUrl && pageCount < maxPages) {
+                    pageCount++;
+                    const res = await obsidian.requestUrl({
+                        url: nextUrl,
+                        headers: headers
+                    });
+
+                    if (res.status === 200 && Array.isArray(res.json)) {
+                        assignments.push(...res.json);
+
+                        const linkHeader = res.headers && (res.headers['link'] || res.headers['Link']);
+                        if (linkHeader) {
+                            const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/i);
+                            nextUrl = match ? match[1] : null;
+                        } else if (res.json.length === 100) {
+                            try {
+                                const urlObj = new URL(nextUrl);
+                                const currentPage = parseInt(urlObj.searchParams.get('page') || '1', 10);
+                                urlObj.searchParams.set('page', String(currentPage + 1));
+                                nextUrl = urlObj.toString();
+                            } catch (e) {
+                                nextUrl = null;
+                            }
+                        } else {
+                            nextUrl = null;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            } catch (errPlanner) {
+                console.warn('[Kanban Timeline] Planner API falhou, tentando calendar_events:', errPlanner);
+            }
+
+            // 2. Secondary fallback: Calendar Events API (if Planner returned nothing or is disabled)
+            if (assignments.length === 0) {
+                try {
+                    const calUrl = `${cleanUrl}/api/v1/calendar_events?type=assignment&start_date=${startDateStr}&end_date=${endDateStr}&per_page=100&all_events=true`;
+                    const resCal = await obsidian.requestUrl({
+                        url: calUrl,
+                        headers: headers
+                    });
+                    if (resCal.status === 200 && Array.isArray(resCal.json)) {
+                        assignments.push(...resCal.json);
+                    }
+                } catch (errCal) {
+                    console.warn('[Kanban Timeline] Calendar events API falhou:', errCal);
+                }
+            }
+
+            // 3. Tertiary fallback: /users/self/todo
+            if (assignments.length === 0) {
+                try {
+                    const todoUrl = `${cleanUrl}/api/v1/users/self/todo`;
+                    const resTodo = await obsidian.requestUrl({
+                        url: todoUrl,
+                        headers: headers
+                    });
+                    if (resTodo.status === 200) {
+                        if (Array.isArray(resTodo.json)) {
+                            assignments.push(...resTodo.json);
+                        } else if (resTodo.json && typeof resTodo.json === 'object') {
+                            assignments.push(resTodo.json);
+                        }
+                    }
+                } catch (errTodo) {
+                    console.warn('[Kanban Timeline] Todo API falhou:', errTodo);
+                }
+            }
+
+            let addedCount = 0;
+            const file = this.app.vault.getAbstractFileByPath(this.settings.kanbanFile);
+            if (file instanceof obsidian.TFile) {
+                let content = await this.app.vault.read(file);
+                const colName = this.settings.canvasBacklogColumn || 'Backlog';
+                const parser = new KanbanParser();
+                const seenTitles = new Set();
+                const newTasks = [];
+
+                for (const task of assignments) {
+                    const taskObj = task.plannable || task.assignment || task.quiz || task;
+                    
+                    const rawName = (taskObj.title || taskObj.name || task.plannable_title || task.title || '').trim();
+                    const name = cleanCanvasTaskName(rawName);
+                    if (!name) continue;
+
+                    let courseId = task.course_id || taskObj.course_id;
+                    if (!courseId && task.context_code && typeof task.context_code === 'string' && task.context_code.startsWith('course_')) {
+                        courseId = task.context_code.replace('course_', '');
+                    }
+
+                    const titleKey = name.toLowerCase();
+                    if (seenTitles.has(titleKey)) continue;
+                    seenTitles.add(titleKey);
+
+                    // Check if already in kanban file
+                    if (content.includes(name)) {
+                        continue;
+                    }
+
+                    let courseName = task.context_name || taskObj.context_name || (courseId ? coursesMap[String(courseId)] : '') || '';
+                    const courseTag = formatCourseTag(courseName, this.settings.canvasTagCutoff);
+                    const extraTagsPart = formatExtraTags(this.settings.canvasExtraTags);
+
+                    let due = '';
+                    let dueTime = Infinity;
+                    const due_at = taskObj.due_at || task.plannable_date || taskObj.todo_date || task.due_at || taskObj.end_at || task.end_at || taskObj.start_at || task.start_at;
+                    if (due_at) {
+                        const d = new Date(due_at);
+                        if (!isNaN(d.getTime())) {
+                            dueTime = d.getTime();
+                            const dd = String(d.getDate()).padStart(2, '0');
+                            const mm = String(d.getMonth() + 1).padStart(2, '0');
+                            const yyyy = d.getFullYear();
+                            due = ` @{${dd}-${mm}-${yyyy}}`;
+                        }
+                    }
+
+                    const tagPart = courseTag ? ` ${courseTag}` : '';
+                    const cardTitle = `${name}${tagPart}${extraTagsPart}${due}`.trim();
+
+                    newTasks.push({
+                        cardTitle,
+                        dueTime
+                    });
+                }
+
+                // Sort tasks chronologically: closest deadline first (ascending order)
+                newTasks.sort((a, b) => a.dueTime - b.dueTime);
+
+                // Insert into column in order (process reverse with addCardToColumn so earliest deadline stays at top)
+                for (let i = newTasks.length - 1; i >= 0; i--) {
+                    content = parser.addCardToColumn(content, colName, newTasks[i].cardTitle);
+                    addedCount++;
+                }
+
+                if (addedCount > 0) {
+                    await this.app.vault.modify(file, content);
+                    if (force) {
+                        new obsidian.Notice(`Canvas Sync: ${addedCount} novas tarefas adicionadas ao Backlog.`);
+                    }
+                } else if (force) {
+                    new obsidian.Notice(`Canvas Sync: Nenhuma nova tarefa encontrada para os próximos ${monthsAhead} meses.`);
+                }
+
+                const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+                leaves.forEach(leaf => {
+                    if (leaf.view && typeof leaf.view.refresh === 'function') {
+                        leaf.view.refresh();
+                    }
+                });
+            } else if (force) {
+                new obsidian.Notice(`Arquivo Kanban "${this.settings.kanbanFile}" não encontrado.`);
+            }
+            return addedCount;
+        } catch (err) {
+            console.error('[Kanban Timeline] Erro na API do Canvas:', err);
+            if (force) new obsidian.Notice(`Erro no Canvas: ${err.message}`);
+        }
+        return 0;
     }
 
     async syncAllRemoteCalendars(force = false) {
@@ -24330,6 +24777,15 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
     async loadSettings() {
         const saved = await this.loadData();
         if (saved) Object.assign(this.settings, saved);
+        if (this.settings.canvasMonthsAhead === undefined || this.settings.canvasMonthsAhead === null) {
+            this.settings.canvasMonthsAhead = 5;
+        }
+        if (this.settings.canvasExtraTags === undefined || this.settings.canvasExtraTags === null) {
+            this.settings.canvasExtraTags = '';
+        }
+        if (this.settings.canvasTagCutoff === undefined || this.settings.canvasTagCutoff === null) {
+            this.settings.canvasTagCutoff = '';
+        }
         if (!this.settings.projects || this.settings.projects.length === 0) {
             this.settings.projects = DEFAULT_SETTINGS.projects.slice();
         }
