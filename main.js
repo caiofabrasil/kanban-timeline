@@ -378,26 +378,37 @@ function minutesToTime(mins) {
     return `${h}:${m}`;
 }
 
-function getTimeForDay(card, date) {
-    if (!card || !date) return null;
+function getTimesForDay(card, date) {
+    if (!card || !date) return [];
     if (card.isRemoteCalendarEvent) {
-        if (sameDay(card.startDate, date)) {
-            return { timeStart: card.timeStart, timeEnd: card.timeEnd };
+        if (sameDay(card.startDate, date) && card.timeStart && card.timeEnd) {
+            return [{ timeStart: card.timeStart, timeEnd: card.timeEnd, instanceIndex: 0 }];
         }
-        return null;
+        return [];
     }
     const dStr = formatDate(date);
     if (card.dailyTimes && card.dailyTimes[dStr]) {
-        return card.dailyTimes[dStr];
+        const val = card.dailyTimes[dStr];
+        if (Array.isArray(val)) {
+            return val.filter(s => s && s.timeStart && s.timeEnd).map((s, idx) => ({ ...s, instanceIndex: idx }));
+        }
+        if (val.timeStart && val.timeEnd) {
+            return [{ ...val, instanceIndex: 0 }];
+        }
     }
     if (card.timeStart && card.timeEnd) {
         if (!card.dailyTimes || Object.keys(card.dailyTimes).length === 0) {
             if (sameDay(card.startDate, date)) {
-                return { timeStart: card.timeStart, timeEnd: card.timeEnd };
+                return [{ timeStart: card.timeStart, timeEnd: card.timeEnd, instanceIndex: 0 }];
             }
         }
     }
-    return null;
+    return [];
+}
+
+function getTimeForDay(card, date) {
+    const times = getTimesForDay(card, date);
+    return times.length > 0 ? times[0] : null;
 }
 
 function getCardTimeblockStatus(card) {
@@ -412,8 +423,8 @@ function getCardTimeblockStatus(card) {
     const cur = new Date(start);
     while (cur <= end) {
         totalDays++;
-        const dt = getTimeForDay(card, cur);
-        if (dt && dt.timeStart && dt.timeEnd) {
+        const times = getTimesForDay(card, cur);
+        if (times.length > 0) {
             timeblockedDays++;
         }
         cur.setDate(cur.getDate() + 1);
@@ -577,6 +588,14 @@ class KanbanParser {
             const dailyTimes = {};
             let legacyStart = null, legacyEnd = null;
 
+            const addDailyTime = (dateKey, tStart, tEnd) => {
+                if (!dateKey || !tStart || !tEnd) return;
+                if (!dailyTimes[dateKey]) dailyTimes[dateKey] = [];
+                if (!dailyTimes[dateKey].some(s => s.timeStart === tStart && s.timeEnd === tEnd)) {
+                    dailyTimes[dateKey].push({ timeStart: tStart, timeEnd: tEnd });
+                }
+            };
+
             // 1. Comment-based time block tags: <!-- tb: ... --> or <!-- ⏰ ... -->
             const commentRegex = /<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/g;
             let cm;
@@ -586,15 +605,18 @@ class KanbanParser {
                 let idm;
                 let foundDated = false;
                 while ((idm = innerDatedRegex.exec(commentBody)) !== null) {
-                    dailyTimes[idm[1]] = { timeStart: idm[2], timeEnd: idm[3] };
+                    addDailyTime(idm[1], idm[2], idm[3]);
                     foundDated = true;
                 }
                 if (!foundDated) {
-                    const innerSimpleRegex = /(?:^|\s)(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                    const innerSimpleRegex = /(?:^|\s|,)(\d{2}:\d{2})-(\d{2}:\d{2})/g;
                     let ism;
                     while ((ism = innerSimpleRegex.exec(commentBody)) !== null) {
                         legacyStart = ism[1];
                         legacyEnd   = ism[2];
+                        if (startDate) {
+                            addDailyTime(formatDate(startDate), ism[1], ism[2]);
+                        }
                     }
                 }
             }
@@ -604,7 +626,7 @@ class KanbanParser {
             const datedTimeRegex = /⏰\s*(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
             let dtm;
             while ((dtm = datedTimeRegex.exec(rest)) !== null) {
-                dailyTimes[dtm[1]] = { timeStart: dtm[2], timeEnd: dtm[3] };
+                addDailyTime(dtm[1], dtm[2], dtm[3]);
             }
             rest = rest.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
 
@@ -614,29 +636,43 @@ class KanbanParser {
             while ((stm = simpleTimeRegex.exec(rest)) !== null) {
                 legacyStart = stm[1];
                 legacyEnd   = stm[2];
+                if (startDate) {
+                    addDailyTime(formatDate(startDate), stm[1], stm[2]);
+                }
             }
             rest = rest.replace(/⏰\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
 
             // Fallback: If legacy time was found and startDate exists, map to startDate
             if (legacyStart && legacyEnd && startDate) {
                 const sStr = formatDate(startDate);
-                if (!dailyTimes[sStr]) {
-                    dailyTimes[sStr] = { timeStart: legacyStart, timeEnd: legacyEnd };
-                }
+                addDailyTime(sStr, legacyStart, legacyEnd);
             }
 
+            // Sort slots within each day chronologically
+            Object.keys(dailyTimes).forEach(k => {
+                dailyTimes[k].sort((a, b) => timeToMinutes(a.timeStart) - timeToMinutes(b.timeStart));
+            });
+
             const firstDateKey = Object.keys(dailyTimes)[0];
-            const timeStart = legacyStart || (firstDateKey ? dailyTimes[firstDateKey].timeStart : null);
-            const timeEnd   = legacyEnd   || (firstDateKey ? dailyTimes[firstDateKey].timeEnd   : null);
+            const firstSlot = firstDateKey && dailyTimes[firstDateKey].length > 0 ? dailyTimes[firstDateKey][0] : null;
+            const timeStart = legacyStart || (firstSlot ? firstSlot.timeStart : null);
+            const timeEnd   = legacyEnd   || (firstSlot ? firstSlot.timeEnd   : null);
 
             // Calculate workload duration directly from Timeblocking time slots (timeEnd - timeStart)
             let tbDurationMinutes = 0;
             const dKeys = Object.keys(dailyTimes);
             if (dKeys.length > 0) {
                 for (const dKey of dKeys) {
-                    const dt = dailyTimes[dKey];
-                    if (dt.timeStart && dt.timeEnd) {
-                        const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                    const slots = dailyTimes[dKey];
+                    if (Array.isArray(slots)) {
+                        for (const dt of slots) {
+                            if (dt.timeStart && dt.timeEnd) {
+                                const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                                if (dur > 0) tbDurationMinutes += dur;
+                            }
+                        }
+                    } else if (slots && slots.timeStart && slots.timeEnd) {
+                        const dur = timeToMinutes(slots.timeEnd) - timeToMinutes(slots.timeStart);
                         if (dur > 0) tbDurationMinutes += dur;
                     }
                 }
@@ -661,16 +697,25 @@ class KanbanParser {
 
             // Detect if this is an Event/Routine block (Pausa, Reunião, Foco, etc.)
             let isEvent = false;
-            let eventType = 'task'; // 'break' | 'meeting' | 'focus' | 'custom'
+            let eventType = 'task'; // 'break' | 'meeting' | 'focus' | 'custom' | 'habit'
 
             // Check comments for event type
             const rawComment = (m[2].match(/<!--\s*([\s\S]*?)-->/) || [])[1] || '';
+            let habitId = null;
+            let habitColor = null;
+            const habitIdMatch = rawComment.match(/habitId:([^\s]+)/i);
+            if (habitIdMatch) habitId = habitIdMatch[1];
+            const habitColorMatch = rawComment.match(/habitColor:([^\s]+)/i);
+            if (habitColorMatch) habitColor = habitColorMatch[1];
+
             if (/type:(?:break|pausa|almoco|refeicao)/i.test(rawComment)) {
                 isEvent = true; eventType = 'break';
             } else if (/type:(?:meeting|reuniao|call|sync)/i.test(rawComment)) {
                 isEvent = true; eventType = 'meeting';
             } else if (/type:(?:focus|foco|estudo)/i.test(rawComment)) {
                 isEvent = true; eventType = 'focus';
+            } else if (/type:habit/i.test(rawComment) || habitId) {
+                isEvent = true; eventType = 'habit';
             } else if (/type:(?:custom|event|rotina)/i.test(rawComment)) {
                 isEvent = true; eventType = 'custom';
             } else if (/^[☕🍽️🍵🍎⏸️]/.test(title)) {
@@ -684,9 +729,9 @@ class KanbanParser {
             const seriesMatch = rawComment.match(/series:([^\s]+)/i);
             const seriesId = seriesMatch ? seriesMatch[1] : null;
 
-            const tagColor = isEvent ? null : getCardTagColor(tags, customProjects);
+            const tagColor = isEvent ? (habitColor || null) : getCardTagColor(tags, customProjects);
             const colColor = isEvent ? null : getColumnColor(currentColumn, { ...customColors, ...colColors }, customProjects);
-            const projColor = isEvent ? null : getProjectColor(tags, currentColumn, { ...customColors, ...colColors }, customProjects);
+            const projColor = isEvent ? (habitColor || null) : getProjectColor(tags, currentColumn, { ...customColors, ...colColors }, customProjects);
 
             const card = {
                 id:              `${i}-${title}`,
@@ -707,10 +752,13 @@ class KanbanParser {
                 dailyTimes,
                 isEvent,
                 eventType,
+                habitId,
+                habitColor,
+                isHabit:         eventType === 'habit' || !!habitId,
                 seriesId,
                 lineIndex:       i,
                 tagColor:        tagColor,
-                projectColor:    isEvent ? null : (projColor || '#6366f1'),
+                projectColor:    isEvent ? (habitColor || null) : (projColor || '#6366f1'),
                 priorityColor:   isEvent ? null : getPriorityColor(tags),
             };
 
@@ -804,11 +852,12 @@ class KanbanParser {
     }
 
     /** Delete a card block including subtasks */
-    deleteCard(content, cardLineIndex) {
+    deleteCard(content, cardLineIndex, card = null) {
         const lines = content.split('\n');
-        if (cardLineIndex < 0 || cardLineIndex >= lines.length) return content;
+        const idx = this.findActualCardLineIndex(lines, cardLineIndex, card);
+        if (idx === -1) return content;
 
-        let endIndex = cardLineIndex + 1;
+        let endIndex = idx + 1;
         while (endIndex < lines.length) {
             const raw = lines[endIndex];
             const trimmed = raw.trim();
@@ -817,7 +866,7 @@ class KanbanParser {
             endIndex++;
         }
 
-        lines.splice(cardLineIndex, endIndex - cardLineIndex);
+        lines.splice(idx, endIndex - idx);
         return lines.join('\n');
     }
 
@@ -1235,7 +1284,9 @@ class KanbanParser {
         const cardLines = items.map(item => {
             const dateStr = formatDate(item.date);
             const seriesTag = item.seriesId ? ` series:${item.seriesId}` : '';
-            return `- [ ] ${item.title} @{${dateStr}} <!-- tb: ${dateStr} ${item.timeStart}-${item.timeEnd} type:${item.eventType || 'break'}${seriesTag} -->`;
+            const habitTag = item.habitId ? ` habitId:${item.habitId}` : '';
+            const colorTag = item.color ? ` habitColor:${item.color}` : '';
+            return `- [ ] ${item.title} @{${dateStr}} <!-- tb: ${dateStr} ${item.timeStart}-${item.timeEnd} type:${item.eventType || 'break'}${habitTag}${colorTag}${seriesTag} -->`;
         });
 
         const lines = content.split('\n');
@@ -1299,8 +1350,12 @@ class KanbanParser {
                         const curType = newEventType || (typeMatch ? typeMatch[1] : 'break');
                         const sId = seriesId || (commentMatch[1].match(/series:([^\s]+)/) || [])[1] || '';
                         const sIdTag = sId ? ` series:${sId}` : '';
+                        const hIdMatch = commentMatch[1].match(/habitId:([^\s]+)/i);
+                        const hColMatch = commentMatch[1].match(/habitColor:([^\s]+)/i);
+                        const hIdTag = hIdMatch ? ` habitId:${hIdMatch[1]}` : '';
+                        const hColTag = hColMatch ? ` habitColor:${hColMatch[1]}` : '';
 
-                        const newComment = `<!-- tb: ${curDateStr} ${newTimeStart}-${newTimeEnd} type:${curType}${sIdTag} -->`;
+                        const newComment = `<!-- tb: ${curDateStr} ${newTimeStart}-${newTimeEnd} type:${curType}${hIdTag}${hColTag}${sIdTag} -->`;
                         updatedLine = updatedLine.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/, newComment);
                     }
                 }
@@ -1312,10 +1367,18 @@ class KanbanParser {
     }
 
     /** Delete all routine/event cards in a recurring series */
-    deleteTimeEventSeries(content, seriesId, titleMatch, fromDate = null) {
+    deleteTimeEventSeries(content, seriesId, titleMatch, fromDate = null, habitId = null) {
         const lines = content.split('\n');
         const fromDateObj = fromDate ? startOfDay(fromDate) : null;
         const filtered = [];
+
+        // Clean titleMatch of date tags, comments, emojis, and extra whitespace
+        const cleanTitle = (titleMatch || '')
+            .replace(/@\{[\s\S]*?\}/g, '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .trim()
+            .toLowerCase();
+        const titleLettersOnly = cleanTitle.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
@@ -1325,9 +1388,26 @@ class KanbanParser {
             }
 
             const hasSeries = seriesId && line.includes(`series:${seriesId}`);
-            const hasTitleMatch = !seriesId && titleMatch && line.includes(titleMatch);
+            const hasHabit = habitId && line.includes(`habitId:${habitId}`);
+            
+            // Extract line's title
+            const lineTitle = line
+                .replace(/^-\s+\[[ x]\]\s*/, '')
+                .replace(/@\{[\s\S]*?\}/g, '')
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .trim()
+                .toLowerCase();
+            const lineLettersOnly = lineTitle.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
 
-            if (hasSeries || hasTitleMatch) {
+            const hasTitleMatch = cleanTitle && (
+                lineTitle === cleanTitle || 
+                lineTitle.includes(cleanTitle) || 
+                cleanTitle.includes(lineTitle) ||
+                (titleLettersOnly.length > 2 && lineLettersOnly === titleLettersOnly) ||
+                (titleLettersOnly.length > 2 && lineLettersOnly.includes(titleLettersOnly))
+            );
+
+            if (hasSeries || hasHabit || hasTitleMatch) {
                 if (fromDateObj) {
                     const dateMatch = line.match(/@\{([\d-]+)/);
                     if (dateMatch) {
@@ -1347,11 +1427,43 @@ class KanbanParser {
         return filtered.join('\n');
     }
 
+    findActualCardLineIndex(lines, lineIndex, card = null) {
+        let searchTitle = null;
+        if (typeof card === 'string' && card.trim()) {
+            searchTitle = card.trim();
+        } else if (card && (card.title || card.cleanTitle)) {
+            searchTitle = (card.cleanTitle || card.title).trim();
+        }
+
+        // 1. If lineIndex points directly to the line containing the card title
+        if (typeof lineIndex === 'number' && lineIndex >= 0 && lineIndex < lines.length) {
+            const l = lines[lineIndex];
+            if (searchTitle && l.includes(searchTitle)) return lineIndex;
+            if (!searchTitle && /^-\s+\[([ xX])\]/.test(l.trim())) return lineIndex;
+        }
+
+        // 2. If card title is provided, search across all lines for the matching card
+        if (searchTitle) {
+            for (let i = 0; i < lines.length; i++) {
+                if (/^-\s+\[([ xX])\]/.test(lines[i].trim()) && lines[i].includes(searchTitle)) {
+                    return i;
+                }
+            }
+        }
+
+        // 3. Fallback to lineIndex if valid
+        if (typeof lineIndex === 'number' && lineIndex >= 0 && lineIndex < lines.length) {
+            return lineIndex;
+        }
+        return -1;
+    }
+
     /** Replace or add a date range metadatum in a card line */
-    updateDateRange(content, lineIndex, startDate, endDate) {
+    updateDateRange(content, lineIndex, startDate, endDate, card = null) {
         const lines = content.split('\n');
-        if (lineIndex >= lines.length) return content;
-        let line = lines[lineIndex];
+        const idx = this.findActualCardLineIndex(lines, lineIndex, card);
+        if (idx === -1) return content;
+        let line = lines[idx];
         const newDate = sameDay(startDate, endDate)
             ? `@{${formatDate(startDate)}}`
             : `@{${formatDate(startDate)}..${formatDate(endDate)}}`;
@@ -1361,33 +1473,43 @@ class KanbanParser {
         } else {
             line = line.trimEnd() + ' ' + newDate;
         }
-        lines[lineIndex] = line;
+        lines[idx] = line;
         return lines.join('\n');
     }
 
     /** Remove date range and timeblocks from a card, putting it back in backlog */
-    removeDateRange(content, lineIndex) {
+    removeDateRange(content, lineIndex, card = null) {
         const lines = content.split('\n');
-        if (lineIndex >= lines.length) return content;
-        let line = lines[lineIndex];
+        const idx = this.findActualCardLineIndex(lines, lineIndex, card);
+        if (idx === -1) return content;
+        let line = lines[idx];
         line = line.replace(/@\{[\d-]+(?:\.\.[\d-]+)?\}/g, '');
         line = line.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/g, '');
         line = line.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
         line = line.replace(/⏰\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
         line = line.replace(/\s+/g, ' ').trimEnd();
-        lines[lineIndex] = line;
+        lines[idx] = line;
         return lines.join('\n');
     }
 
     /** Replace or add a per-day time block metadatum in a card line (as hidden markdown comment) */
-    updateTimeBlock(content, lineIndex, date, timeStart, timeEnd) {
+    updateTimeBlock(content, lineIndex, date, timeStart, timeEnd, instanceIndex = null, mode = 'set', card = null) {
         const lines = content.split('\n');
-        if (lineIndex >= lines.length) return content;
-        let line = lines[lineIndex];
+        const idx = this.findActualCardLineIndex(lines, lineIndex, card);
+        if (idx === -1) return content;
+        let line = lines[idx];
         const targetDateStr = formatDate(date);
 
         // Read all existing daily times from comments or legacy tags
         const dailyMap = {};
+
+        const addSlot = (dStr, ts, te) => {
+            if (!dStr || !ts || !te) return;
+            if (!dailyMap[dStr]) dailyMap[dStr] = [];
+            if (!dailyMap[dStr].some(s => s.timeStart === ts && s.timeEnd === te)) {
+                dailyMap[dStr].push({ timeStart: ts, timeEnd: te });
+            }
+        };
 
         // 1. From comments
         const commentRegex = /<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/g;
@@ -1398,15 +1520,14 @@ class KanbanParser {
             let idm;
             let foundDated = false;
             while ((idm = innerDatedRegex.exec(commentBody)) !== null) {
-                dailyMap[idm[1]] = `${idm[2]}-${idm[3]}`;
+                addSlot(idm[1], idm[2], idm[3]);
                 foundDated = true;
             }
             if (!foundDated) {
-                const innerSimpleRegex = /(?:^|\s)(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                const innerSimpleRegex = /(?:^|\s|,)(\d{2}:\d{2})-(\d{2}:\d{2})/g;
                 let ism;
                 while ((ism = innerSimpleRegex.exec(commentBody)) !== null) {
-                    const sStr = targetDateStr;
-                    if (!dailyMap[sStr]) dailyMap[sStr] = `${ism[1]}-${ism[2]}`;
+                    addSlot(targetDateStr, ism[1], ism[2]);
                 }
             }
         }
@@ -1415,7 +1536,7 @@ class KanbanParser {
         const datedRegex = /⏰\s*(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
         let match;
         while ((match = datedRegex.exec(line)) !== null) {
-            dailyMap[match[1]] = `${match[2]}-${match[3]}`;
+            addSlot(match[1], match[2], match[3]);
         }
 
         const simpleRegex = /⏰\s*(\d{2}:\d{2})-(\d{2}:\d{2})/;
@@ -1427,21 +1548,66 @@ class KanbanParser {
 
         if (simpleMatch && isMultiDay) {
             const cardStartStr = drm ? drm[1] : targetDateStr;
-            if (!dailyMap[cardStartStr]) {
-                dailyMap[cardStartStr] = `${simpleMatch[1]}-${simpleMatch[2]}`;
-            }
+            addSlot(cardStartStr, simpleMatch[1], simpleMatch[2]);
         } else if (simpleMatch && !isMultiDay) {
             const cardStartStr = dsm ? dsm[1] : targetDateStr;
-            if (!dailyMap[cardStartStr]) {
-                dailyMap[cardStartStr] = `${simpleMatch[1]}-${simpleMatch[2]}`;
+            addSlot(cardStartStr, simpleMatch[1], simpleMatch[2]);
+        }
+
+        // Apply mutation
+        if (timeStart && timeEnd) {
+            if (mode === 'add') {
+                addSlot(targetDateStr, timeStart, timeEnd);
+            } else if (instanceIndex !== null && typeof instanceIndex === 'number' && instanceIndex >= 0) {
+                if (!dailyMap[targetDateStr]) dailyMap[targetDateStr] = [];
+                if (instanceIndex < dailyMap[targetDateStr].length) {
+                    dailyMap[targetDateStr][instanceIndex] = { timeStart, timeEnd };
+                } else {
+                    dailyMap[targetDateStr].push({ timeStart, timeEnd });
+                }
+            } else {
+                if (!dailyMap[targetDateStr] || dailyMap[targetDateStr].length <= 1) {
+                    dailyMap[targetDateStr] = [{ timeStart, timeEnd }];
+                } else {
+                    dailyMap[targetDateStr].push({ timeStart, timeEnd });
+                }
+            }
+        } else {
+            // Delete
+            if (instanceIndex !== null && typeof instanceIndex === 'number' && dailyMap[targetDateStr]) {
+                dailyMap[targetDateStr].splice(instanceIndex, 1);
+                if (dailyMap[targetDateStr].length === 0) {
+                    delete dailyMap[targetDateStr];
+                }
+            } else {
+                delete dailyMap[targetDateStr];
             }
         }
 
-        // Update target date
-        if (timeStart && timeEnd) {
-            dailyMap[targetDateStr] = `${timeStart}-${timeEnd}`;
-        } else {
-            delete dailyMap[targetDateStr];
+        // Sort slots within each day chronologically
+        Object.keys(dailyMap).forEach(d => {
+            if (dailyMap[d]) {
+                dailyMap[d].sort((a, b) => timeToMinutes(a.timeStart) - timeToMinutes(b.timeStart));
+            }
+        });
+
+        // Extract metadata from existing comment or card object
+        let curType = (card && card.eventType && card.eventType !== 'task') ? card.eventType : null;
+        let curHabitId = (card && card.habitId) ? card.habitId : null;
+        let curHabitColor = (card && (card.habitColor || (card.isHabit ? card.projectColor : null))) ? (card.habitColor || card.projectColor) : null;
+        let curSeriesId = (card && card.seriesId) ? card.seriesId : null;
+
+        const rawCommentMatch = line.match(/<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/);
+        if (rawCommentMatch) {
+            const rawBody = rawCommentMatch[1];
+            const typeMatch = rawBody.match(/type:([^\s]+)/i);
+            if (typeMatch && !curType) curType = typeMatch[1];
+            const hIdMatch = rawBody.match(/habitId:([^\s]+)/i);
+            if (hIdMatch && !curHabitId) curHabitId = hIdMatch[1];
+            const hColMatch = rawBody.match(/habitColor:([^\s]+)/i);
+            if (hColMatch && !curHabitColor) curHabitColor = hColMatch[1];
+            const sIdMatch = rawBody.match(/series:([^\s]+)/i);
+            if (sIdMatch && !curSeriesId) curSeriesId = sIdMatch[1];
         }
 
         // Clean all old comments and legacy time tags from the line
@@ -1453,11 +1619,28 @@ class KanbanParser {
         // Format updated time tags into a clean, 100% invisible HTML comment
         const dateKeys = Object.keys(dailyMap).sort();
         if (dateKeys.length > 0) {
-            const formattedBlocks = dateKeys.map(d => `${d} ${dailyMap[d]}`).join(' ');
-            line = `${line} <!-- tb: ${formattedBlocks} -->`;
+            const formattedBlocks = [];
+            dateKeys.forEach(d => {
+                const slots = dailyMap[d];
+                if (slots && slots.length > 0) {
+                    slots.forEach(s => {
+                        formattedBlocks.push(`${d} ${s.timeStart}-${s.timeEnd}`);
+                    });
+                }
+            });
+            if (formattedBlocks.length > 0) {
+                const metaTags = [];
+                if (curType && curType !== 'task') metaTags.push(`type:${curType}`);
+                if (curHabitId) metaTags.push(`habitId:${curHabitId}`);
+                if (curHabitColor) metaTags.push(`habitColor:${curHabitColor}`);
+                if (curSeriesId) metaTags.push(`series:${curSeriesId}`);
+                const metaStr = metaTags.length > 0 ? ` ${metaTags.join(' ')}` : '';
+
+                line = `${line} <!-- tb: ${formattedBlocks.join(' ')}${metaStr} -->`;
+            }
         }
 
-        lines[lineIndex] = line;
+        lines[idx] = line;
         return lines.join('\n');
     }
 }
@@ -1618,6 +1801,248 @@ class DateRangeModal extends obsidian.Modal {
     }
 
     onClose() { this.contentEl.empty(); }
+}
+
+// ================================================================
+// HASHTAG & PROJECT QUICK SUGGESTIONS COMPONENT
+// ================================================================
+
+function renderHashtagSuggestionsBar(container, inputOrTextarea, app, plugin) {
+    if (!container || !inputOrTextarea) return null;
+
+    const wrap = container.createDiv('kt-hashtag-suggestions-wrap');
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // 1. Gather all tags
+    // A. Projects (from plugin.settings.projects)
+    const projects = plugin?.settings?.projects || [];
+    const projectTagsMap = new Map();
+
+    projects.forEach(p => {
+        if (p.tag) {
+            const cleanTag = p.tag.replace(/^#/, '').trim();
+            if (cleanTag) {
+                const norm = cleanTag.toLowerCase();
+                projectTagsMap.set(norm, {
+                    label: `#${cleanTag}`,
+                    rawTag: cleanTag,
+                    color: p.color || null,
+                    icon: p.icon || null,
+                    name: p.name || cleanTag,
+                    isProject: true
+                });
+            }
+        }
+        if (p.name) {
+            const cleanName = p.name.replace(/\s+/g, '').replace(/^#/, '').trim();
+            if (cleanName) {
+                const norm = cleanName.toLowerCase();
+                if (!projectTagsMap.has(norm)) {
+                    projectTagsMap.set(norm, {
+                        label: `#${cleanName}`,
+                        rawTag: cleanName,
+                        color: p.color || null,
+                        icon: p.icon || null,
+                        name: p.name,
+                        isProject: true
+                    });
+                }
+            }
+        }
+    });
+
+    // B. Calculate Recency for all tags (Vault + Kanban Cards + Persistent History)
+    const generalTagsMap = new Map();
+    const tagFrequencies = new Map();
+    const tagRecencyMap = new Map();
+
+    // 1. Persistent recent tags history from plugin settings
+    const persistedRecent = plugin?.settings?.recentTags || {};
+    Object.entries(persistedRecent).forEach(([t, time]) => {
+        const norm = t.replace(/^#/, '').toLowerCase().trim();
+        if (norm && typeof time === 'number') {
+            tagRecencyMap.set(norm, Math.max(tagRecencyMap.get(norm) || 0, time));
+        }
+    });
+
+    // 2. From Kanban Cards (scan cards with dates and active column status)
+    const cards = plugin?.cards || [];
+    cards.forEach(c => {
+        let cardTime = 0;
+        if (c.endDate instanceof Date && !isNaN(c.endDate.getTime())) {
+            cardTime = c.endDate.getTime();
+        } else if (c.startDate instanceof Date && !isNaN(c.startDate.getTime())) {
+            cardTime = c.startDate.getTime();
+        } else {
+            const col = (c.column || '').toLowerCase().trim();
+            if (col && !col.includes('done') && !col.includes('conclu') && !col.includes('finish') && !col.includes('arquiv')) {
+                cardTime = Date.now() - (7 * 86400000); // Active cards in board are recent
+            } else {
+                cardTime = Date.now() - (60 * 86400000);
+            }
+        }
+
+        (c.tags || []).forEach(t => {
+            const clean = t.replace(/^#/, '').trim();
+            if (clean) {
+                const norm = clean.toLowerCase();
+                tagFrequencies.set(norm, (tagFrequencies.get(norm) || 0) + 1);
+                tagRecencyMap.set(norm, Math.max(tagRecencyMap.get(norm) || 0, cardTime));
+
+                if (!projectTagsMap.has(norm) && !generalTagsMap.has(norm)) {
+                    generalTagsMap.set(norm, {
+                        label: `#${clean}`,
+                        rawTag: clean,
+                        color: null,
+                        isProject: false
+                    });
+                }
+            }
+        });
+    });
+
+    // 3. From Obsidian Vault Markdown Files (mtime of file containing tag)
+    try {
+        const files = app?.vault?.getMarkdownFiles ? app.vault.getMarkdownFiles() : [];
+        files.forEach(file => {
+            const cache = app.metadataCache.getFileCache(file);
+            if (cache && Array.isArray(cache.tags)) {
+                const mtime = file.stat?.mtime || 0;
+                cache.tags.forEach(tObj => {
+                    const clean = (tObj.tag || '').replace(/^#/, '').trim();
+                    if (clean) {
+                        const norm = clean.toLowerCase();
+                        tagFrequencies.set(norm, (tagFrequencies.get(norm) || 0) + 1);
+                        tagRecencyMap.set(norm, Math.max(tagRecencyMap.get(norm) || 0, mtime));
+
+                        if (!projectTagsMap.has(norm) && !generalTagsMap.has(norm)) {
+                            generalTagsMap.set(norm, {
+                                label: `#${clean}`,
+                                rawTag: clean,
+                                color: null,
+                                isProject: false
+                            });
+                        }
+                    }
+                });
+            }
+        });
+    } catch (e) {}
+
+    // Sort general tags strictly by RECENCY first, then by frequency
+    const sortedGeneralTags = Array.from(generalTagsMap.values())
+        .sort((a, b) => {
+            const normA = a.rawTag.toLowerCase();
+            const normB = b.rawTag.toLowerCase();
+            const recA = tagRecencyMap.get(normA) || 0;
+            const recB = tagRecencyMap.get(normB) || 0;
+
+            if (recB !== recA) {
+                return recB - recA; // Most recently used first
+            }
+            return (tagFrequencies.get(normB) || 0) - (tagFrequencies.get(normA) || 0);
+        });
+
+    const allSuggestions = [
+        ...Array.from(projectTagsMap.values()),
+        ...sortedGeneralTags.slice(0, 18)
+    ];
+
+    if (allSuggestions.length === 0) {
+        ['DECA', 'Trabalho', 'Estudos', 'Urgente', 'Bug', 'Feature', 'Life'].forEach(ft => {
+            allSuggestions.push({
+                label: `#${ft}`,
+                rawTag: ft,
+                color: null,
+                isProject: false
+            });
+        });
+    }
+
+    const hdr = wrap.createDiv('kt-hashtag-suggestions-hdr');
+    const hdrLeft = hdr.createDiv('kt-hashtag-suggestions-title');
+    hdrLeft.createSpan({ cls: 'kt-hashtag-suggestions-icon', text: '🏷️' });
+    hdrLeft.createSpan({ text: 'Sugestões de Tags / Projetos:' });
+
+    const chipsList = wrap.createDiv('kt-hashtag-chips-list');
+
+    const checkActiveTags = () => {
+        const text = inputOrTextarea.value || '';
+        chipsList.querySelectorAll('.kt-hashtag-chip').forEach((chipEl) => {
+            const rawTag = chipEl.dataset.rawTag;
+            if (!rawTag) return;
+            const re = new RegExp(`(?:^|\\s)#${escapeRegex(rawTag)}(?:$|\\s|[.,!?;:])`, 'i');
+            const isActive = re.test(text);
+            chipEl.classList.toggle('is-active', isActive);
+            const checkIcon = chipEl.querySelector('.kt-hashtag-check-icon');
+            if (checkIcon) {
+                checkIcon.style.display = isActive ? 'inline' : 'none';
+            }
+        });
+    };
+
+    allSuggestions.forEach(s => {
+        const chip = chipsList.createDiv('kt-hashtag-chip');
+        chip.dataset.rawTag = s.rawTag;
+        chip.title = s.isProject ? `Projeto: ${s.name} (Clique para adicionar/remover tag)` : `Tag: #${s.rawTag} (Clique para adicionar/remover)`;
+        
+        if (s.color) {
+            chip.style.setProperty('--chip-color', s.color);
+            chip.classList.add('has-custom-color');
+            const dot = chip.createSpan('kt-hashtag-color-dot');
+            dot.style.backgroundColor = s.color;
+        }
+
+        const checkIcon = chip.createSpan('kt-hashtag-check-icon');
+        checkIcon.setText('✓ ');
+        checkIcon.style.display = 'none';
+
+        if (s.icon) {
+            chip.createSpan({ cls: 'kt-hashtag-proj-icon', text: `${s.icon} ` });
+        }
+
+        chip.createSpan({ cls: 'kt-hashtag-text', text: s.label });
+
+        chip.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            let curVal = inputOrTextarea.value || '';
+            const rawTag = s.rawTag;
+            const re = new RegExp(`(^|\\s)#${escapeRegex(rawTag)}(?=$|\\s|[.,!?;:])`, 'i');
+
+            if (re.test(curVal)) {
+                // Remove the tag
+                const removeRe = new RegExp(`(^|\\s)#${escapeRegex(rawTag)}(?:$|\\s)`, 'i');
+                curVal = curVal.replace(removeRe, ' ').replace(/\s+/g, ' ').trim();
+                inputOrTextarea.value = curVal;
+            } else {
+                // Add the tag
+                const tagToAdd = `#${rawTag}`;
+                if (curVal.trim() === '') {
+                    inputOrTextarea.value = tagToAdd;
+                } else {
+                    inputOrTextarea.value = `${curVal.trim()} ${tagToAdd}`;
+                }
+            }
+
+            // Update persistent recency
+            if (plugin && plugin.settings) {
+                if (!plugin.settings.recentTags) plugin.settings.recentTags = {};
+                plugin.settings.recentTags[s.rawTag.toLowerCase()] = Date.now();
+                plugin.saveSettings().catch(() => {});
+            }
+
+            inputOrTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+            inputOrTextarea.focus();
+            checkActiveTags();
+        };
+    });
+
+    inputOrTextarea.addEventListener('input', checkActiveTags);
+    checkActiveTags();
+
+    return wrap;
 }
 
 // ================================================================
@@ -1875,6 +2300,7 @@ class CardOptionsModal extends obsidian.Modal {
         });
         textarea.value = this.initialText;
         new CardTextareaSuggester(this.app, textarea, () => (this.plugin.settings.projects || []).map(p => p.tag).filter(Boolean));
+        renderHashtagSuggestionsBar(contentSection, textarea, this.app, this.plugin);
 
         const helperHint = contentSection.createDiv('kt-edit-helper-hint');
         helperHint.setText('💡 Dica: Você pode colar imagens com ![[imagem.png]] e checklists com - [ ]');
@@ -1947,6 +2373,19 @@ class CardOptionsModal extends obsidian.Modal {
             const sDate = startVal ? parseDate(startVal) : null;
             const eDate = endVal   ? parseDate(endVal)   : sDate;
             const updatedText = textarea.value.trim() || card.title;
+
+            if (this.plugin && this.plugin.settings && updatedText) {
+                const tagMatches = updatedText.match(/#([\w-]+)/g);
+                if (tagMatches) {
+                    if (!this.plugin.settings.recentTags) this.plugin.settings.recentTags = {};
+                    tagMatches.forEach(tm => {
+                        const clean = tm.replace(/^#/, '').toLowerCase().trim();
+                        if (clean) this.plugin.settings.recentTags[clean] = Date.now();
+                    });
+                    this.plugin.saveSettings().catch(() => {});
+                }
+            }
+
             this.close();
             if (this.onSave) await this.onSave(selectedCol, card.column, sDate, eDate, tsVal, teVal, updatedText);
         };
@@ -2166,7 +2605,7 @@ class ProjectReportModal extends obsidian.Modal {
             const dKeys = Object.keys(c.dailyTimes || {});
             if (dKeys.length > 0) {
                 for (const dKey of dKeys) {
-                    const dt = c.dailyTimes[dKey];
+                    const slots = Array.isArray(c.dailyTimes[dKey]) ? c.dailyTimes[dKey] : [c.dailyTimes[dKey]];
                     const slotDate = parseDate(dKey);
                     
                     if (slotDate) {
@@ -2175,20 +2614,22 @@ class ProjectReportModal extends obsidian.Modal {
                         if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) continue;
                     }
 
-                    if (dt.timeStart && dt.timeEnd) {
-                        const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
-                        if (dur > 0) {
-                            entries.push({
-                                card: c,
-                                title: c.title,
-                                dateStr: dKey,
-                                dateObj: slotDate || now,
-                                timeStart: dt.timeStart,
-                                timeEnd: dt.timeEnd,
-                                durationMinutes: dur,
-                                isDone,
-                                column: c.column
-                            });
+                    for (const dt of slots) {
+                        if (dt && dt.timeStart && dt.timeEnd) {
+                            const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                            if (dur > 0) {
+                                entries.push({
+                                    card: c,
+                                    title: c.title,
+                                    dateStr: dKey,
+                                    dateObj: slotDate || now,
+                                    timeStart: dt.timeStart,
+                                    timeEnd: dt.timeEnd,
+                                    durationMinutes: dur,
+                                    isDone,
+                                    column: c.column
+                                });
+                            }
                         }
                     }
                 }
@@ -2634,6 +3075,467 @@ class ProjectReportModal extends obsidian.Modal {
         link.click();
         document.body.removeChild(link);
         new obsidian.Notice(`✓ Arquivo CSV exportado: ${fileName}`);
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
+// WEEKLY TIME BALANCE & DISTRIBUTION MODAL (Pie Chart / KPIs)
+// ================================================================
+
+class WeeklyTimeBalanceModal extends obsidian.Modal {
+    constructor(app, plugin, view) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.view = view;
+    }
+
+    onOpen() {
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-balance-modal-wrapper');
+        this.modalEl.style.width = '860px';
+        this.modalEl.style.maxWidth = '95vw';
+        this.modalEl.style.maxHeight = '92vh';
+        this.renderModal();
+    }
+
+    getWeeklyData() {
+        const ws = this.view ? this.view.getWeekStart() : startOfWeek(new Date());
+        const hideWeekends = !!this.plugin.settings.timeblockHideWeekends;
+        const daysCount = hideWeekends ? 5 : 7;
+        const days = [];
+        for (let i = 0; i < daysCount; i++) {
+            const d = new Date(ws);
+            d.setDate(d.getDate() + i);
+            days.push(d);
+        }
+        const weekDatesSet = new Set(days.map(d => formatDate(d)));
+        const we = days[days.length - 1];
+
+        const projects = this.plugin.settings.projects || [];
+        const groupsMap = new Map();
+
+        const addBlock = (name, color, minutes, category, hourlyRate = 0, card = null) => {
+            if (minutes <= 0) return;
+            if (!groupsMap.has(name)) {
+                groupsMap.set(name, {
+                    name,
+                    color: color || '#6366f1',
+                    minutes: 0,
+                    count: 0,
+                    earnings: 0,
+                    category: category || 'work',
+                    hourlyRate: hourlyRate || 0
+                });
+            }
+            const g = groupsMap.get(name);
+            g.minutes += minutes;
+            g.count += 1;
+            if (hourlyRate > 0) {
+                g.earnings += (minutes / 60) * hourlyRate;
+            }
+        };
+
+        const isMeeting = (title, eventType) => {
+            if (eventType === 'meeting') return true;
+            const t = (title || '').toLowerCase();
+            return t.includes('reunião') || t.includes('reuniao') || t.includes('standup') || t.includes('sync') || t.includes('alinhamento') || t.includes('call') || t.includes('1:1') || t.includes('1on1');
+        };
+
+        const isRoutineOrPersonal = (title, eventType, column) => {
+            if (eventType === 'break' || column === 'Rotina') return true;
+            const t = (title || '').toLowerCase();
+            return t.includes('almoço') || t.includes('almoco') || t.includes('pausa') || t.includes('descanso') || t.includes('boxe') || t.includes('jiu') || t.includes('treino') || t.includes('academia') || t.includes('psicólog') || t.includes('psicolog') || t.includes('médic') || t.includes('medic') || t.includes('saúde') || t.includes('saude');
+        };
+
+        // Iterate through each day of the week, exactly matching the Timeblock week grid
+        const cards = this.view ? this.view.cards : [];
+        const customEvents = (this.plugin.settings.customEvents || []).concat(this.plugin.settings.calendarEvents || []);
+        const habits = this.plugin.settings.habits || [];
+
+        days.forEach(day => {
+            const dateStr = formatDate(day);
+
+            // 1. Kanban cards active on this day (including Rotina, habits, and tasks)
+            const dayCards = cards.filter(c => {
+                if (!c.startDate) return false;
+                const s = startOfDay(c.startDate);
+                const e = endOfDay(c.endDate || c.startDate);
+                return startOfDay(day) >= s && startOfDay(day) <= e;
+            });
+
+            dayCards.forEach(card => {
+                const slots = getTimesForDay(card, day);
+                slots.forEach(slot => {
+                    if (slot && slot.timeStart && slot.timeEnd) {
+                        const dur = timeToMinutes(slot.timeEnd) - timeToMinutes(slot.timeStart);
+                        if (dur > 0) {
+                            const cleanCardTitle = (card.title || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+
+                            const matchedHabit = habits.find(h => {
+                                if (card.habitId && card.habitId === h.id) return true;
+                                const cleanHName = (h.name || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+                                return cleanHName && (cleanCardTitle === cleanHName || cleanCardTitle.includes(cleanHName) || cleanHName.includes(cleanCardTitle));
+                            });
+
+                            const isBreak = card.eventType === 'break' || /^(?:☕|🍽️|🍵|🍎|⏸️|almoço|almoco|pausa|refeicao|lanche)/i.test(card.title || '');
+                            const isMeet = isMeeting(card.title, card.eventType);
+                            const isPers = isBreak || isRoutineOrPersonal(card.title, card.eventType, card.column) || card.isHabit || !!matchedHabit;
+
+                            const matchedProj = (!matchedHabit && !card.isEvent && card.column !== 'Rotina') ? getProjectForCard(card, projects) : null;
+                            const hRate = matchedProj ? (matchedProj.hourlyRate || 0) : 0;
+                            
+                            if (matchedHabit) {
+                                const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
+                                addBlock(hTitle, card.habitColor || matchedHabit.color || '#10b981', dur, 'personal', 0, card);
+                            } else if (card.isHabit || card.eventType === 'habit') {
+                                addBlock(card.title || 'Hábito', card.habitColor || '#10b981', dur, 'personal', 0, card);
+                            } else if (matchedProj) {
+                                addBlock(matchedProj.name, matchedProj.color || '#6366f1', dur, 'work', hRate, card);
+                            } else if (card.tags && card.tags.length > 0 && !card.isEvent && card.column !== 'Rotina') {
+                                const primaryTag = card.tags[0];
+                                const tagCol = getCardTagColor([primaryTag], projects) || '#3b82f6';
+                                const cat = isMeet ? 'meetings' : (isPers ? 'personal' : 'work');
+                                addBlock(primaryTag, tagCol, dur, cat, 0, card);
+                            } else if (isMeet) {
+                                addBlock('Reuniões & Standups', '#a855f7', dur, 'meetings', 0, card);
+                            } else if (isBreak) {
+                                addBlock('Pausas & Almoço', '#f59e0b', dur, 'personal', 0, card);
+                            } else if (isPers) {
+                                addBlock(card.title || 'Rotina & Pessoal', '#10b981', dur, 'personal', 0, card);
+                            } else {
+                                addBlock('Geral / Backlog', '#64748b', dur, 'other', 0, card);
+                            }
+                        }
+                    }
+                });
+            });
+
+            // 2. Custom Events / Routines on this day
+            customEvents.forEach(evt => {
+                if (!evt) return;
+                let matches = false;
+                if (evt.date === dateStr) {
+                    matches = true;
+                } else if (evt.recurrence && evt.recurrence !== 'none') {
+                    const dayIdx = day.getDay();
+                    if (evt.recurrence === 'daily') matches = true;
+                    else if (evt.recurrence === 'weekdays' && dayIdx >= 1 && dayIdx <= 5) matches = true;
+                    else if (evt.recurrence === 'custom_days' && evt.customDays && evt.customDays.includes(dayIdx)) matches = true;
+                }
+
+                if (matches && evt.timeStart && evt.timeEnd) {
+                    if (dayCards.some(c => c.title === evt.title)) return;
+                    const dur = timeToMinutes(evt.timeEnd) - timeToMinutes(evt.timeStart);
+                    if (dur > 0) {
+                        const matchedHabit = habits.find(h => 
+                            (evt.habitId && evt.habitId === h.id) || 
+                            (evt.title && evt.title.toLowerCase().includes(h.name.toLowerCase()))
+                        );
+
+                        if (matchedHabit) {
+                            const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
+                            addBlock(hTitle, evt.color || matchedHabit.color || '#10b981', dur, 'personal', 0);
+                        } else {
+                            const isMeet = isMeeting(evt.title, evt.eventType);
+                            const isPers = isRoutineOrPersonal(evt.title, evt.eventType, 'Rotina');
+                            const cat = isMeet ? 'meetings' : (isPers ? 'personal' : 'other');
+                            const grpName = isMeet ? 'Reuniões & Standups' : (isPers ? (evt.eventType === 'break' ? 'Pausas & Almoço' : 'Rotina & Hábitos') : (evt.title || 'Eventos'));
+                            const grpCol = evt.color || (isMeet ? '#a855f7' : (isPers ? '#10b981' : '#f59e0b'));
+                            addBlock(grpName, grpCol, dur, cat, 0);
+                        }
+                    }
+                }
+            });
+
+            // 3. Remote Calendar Events on this day
+            const remoteEvents = this.view ? this.view.getRemoteEventsForDay(day) : (this.plugin.remoteCalendarEvents || []).filter(e => e.date === dateStr);
+            remoteEvents.forEach(evt => {
+                if (evt.timeStart && evt.timeEnd) {
+                    const dur = timeToMinutes(evt.timeEnd) - timeToMinutes(evt.timeStart);
+                    if (dur > 0) {
+                        const matchedHabit = habits.find(h => 
+                            evt.title && evt.title.toLowerCase().includes(h.name.toLowerCase())
+                        );
+                        if (matchedHabit) {
+                            const hTitle = `${matchedHabit.icon ? matchedHabit.icon + ' ' : '✨ '}${matchedHabit.name}`;
+                            addBlock(hTitle, matchedHabit.color || evt.calendarColor || '#10b981', dur, 'personal', 0);
+                        } else {
+                            const grpName = evt.calendarName || evt.title || 'Calendário Externo';
+                            const grpCol = evt.calendarColor || '#ec4899';
+                            const isMeet = isMeeting(evt.title);
+                            const cat = isMeet ? 'meetings' : 'personal';
+                            addBlock(grpName, grpCol, dur, cat, 0);
+                        }
+                    }
+                }
+            });
+        });
+
+        // Calculate Totals & Percentages
+        let totalMinutes = 0;
+        let totalEarnings = 0;
+        let workMinutes = 0;
+        let meetingMinutes = 0;
+        let personalMinutes = 0;
+        let otherMinutes = 0;
+
+        const groups = Array.from(groupsMap.values());
+        groups.forEach(g => {
+            totalMinutes += g.minutes;
+            totalEarnings += g.earnings;
+            if (g.category === 'work') workMinutes += g.minutes;
+            else if (g.category === 'meetings') meetingMinutes += g.minutes;
+            else if (g.category === 'personal') personalMinutes += g.minutes;
+            else otherMinutes += g.minutes;
+        });
+
+        // Sort descending by duration
+        groups.sort((a, b) => b.minutes - a.minutes);
+        groups.forEach(g => {
+            g.percent = totalMinutes > 0 ? (g.minutes / totalMinutes) * 100 : 0;
+        });
+
+        return {
+            ws,
+            we,
+            daysCount,
+            totalMinutes,
+            totalEarnings,
+            workMinutes,
+            workPercent: totalMinutes > 0 ? (workMinutes / totalMinutes) * 100 : 0,
+            meetingMinutes,
+            meetingPercent: totalMinutes > 0 ? (meetingMinutes / totalMinutes) * 100 : 0,
+            personalMinutes,
+            personalPercent: totalMinutes > 0 ? (personalMinutes / totalMinutes) * 100 : 0,
+            otherMinutes,
+            otherPercent: totalMinutes > 0 ? (otherMinutes / totalMinutes) * 100 : 0,
+            groups
+        };
+    }
+
+    renderModal() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass('kt-balance-modal-content');
+
+        const data = this.getWeeklyData();
+
+        // 1. Header
+        const header = contentEl.createDiv('kt-balance-modal-hdr');
+        const titleRow = header.createDiv('kt-balance-title-row');
+        titleRow.createEl('h2', { text: '📊 Balanço de Horas da Semana' });
+
+        const wsLabel = this.view ? this.view.dayLabel(data.ws, false) : formatDate(data.ws);
+        const weLabel = this.view ? this.view.dayLabel(data.we, false) : formatDate(data.we);
+        const totalHoursText = formatMinutesToHours(data.totalMinutes) || '0h';
+
+        header.createEl('p', {
+            cls: 'kt-balance-modal-subtitle',
+            text: `Período: ${wsLabel} — ${weLabel} • ${totalHoursText} alocadas no total`
+        });
+
+        if (data.totalMinutes === 0) {
+            const emptyWrap = contentEl.createDiv('kt-balance-empty');
+            emptyWrap.createDiv({ cls: 'kt-balance-empty-icon', text: '📅' });
+            emptyWrap.createEl('h3', { text: 'Nenhuma tarefa ou horário agendado nesta semana.' });
+            emptyWrap.createEl('p', { text: 'Arraste cards da barra lateral para a grade semanal para planejar seus horários e visualizar a distribuição.' });
+            return;
+        }
+
+        // 2. Macro Ratio Bar (Trabalho vs Reuniões vs Pessoal vs Outros)
+        const ratioSection = contentEl.createDiv('kt-balance-ratio-section');
+        ratioSection.createDiv({ cls: 'kt-balance-section-label', text: 'MACRO-DISTRIBUIÇÃO DA SEMANA' });
+
+        const ratioBar = ratioSection.createDiv('kt-balance-ratio-bar');
+        if (data.workPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-work');
+            seg.style.width = `${data.workPercent}%`;
+            seg.title = `💼 Trabalho: ${formatMinutesToHours(data.workMinutes)} (${data.workPercent.toFixed(1)}%)`;
+        }
+        if (data.meetingPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-meetings');
+            seg.style.width = `${data.meetingPercent}%`;
+            seg.title = `👥 Reuniões: ${formatMinutesToHours(data.meetingMinutes)} (${data.meetingPercent.toFixed(1)}%)`;
+        }
+        if (data.personalPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-personal');
+            seg.style.width = `${data.personalPercent}%`;
+            seg.title = `🌿 Pessoal / Rotinas: ${formatMinutesToHours(data.personalMinutes)} (${data.personalPercent.toFixed(1)}%)`;
+        }
+        if (data.otherPercent > 0) {
+            const seg = ratioBar.createDiv('kt-ratio-seg kt-ratio-other');
+            seg.style.width = `${data.otherPercent}%`;
+            seg.title = `📦 Outros: ${formatMinutesToHours(data.otherMinutes)} (${data.otherPercent.toFixed(1)}%)`;
+        }
+
+        // Ratio Legend
+        const ratioLegend = ratioSection.createDiv('kt-balance-ratio-legend');
+        if (data.workMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-work-dot' });
+            pill.createSpan({ text: `💼 Trabalho: ${formatMinutesToHours(data.workMinutes)} (${data.workPercent.toFixed(0)}%)` });
+        }
+        if (data.meetingMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-meetings-dot' });
+            pill.createSpan({ text: `👥 Reuniões: ${formatMinutesToHours(data.meetingMinutes)} (${data.meetingPercent.toFixed(0)}%)` });
+        }
+        if (data.personalMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-personal-dot' });
+            pill.createSpan({ text: `🌿 Pessoal: ${formatMinutesToHours(data.personalMinutes)} (${data.personalPercent.toFixed(0)}%)` });
+        }
+        if (data.otherMinutes > 0) {
+            const pill = ratioLegend.createDiv('kt-ratio-pill');
+            pill.createSpan({ cls: 'kt-ratio-dot kt-ratio-other-dot' });
+            pill.createSpan({ text: `📦 Outros: ${formatMinutesToHours(data.otherMinutes)} (${data.otherPercent.toFixed(0)}%)` });
+        }
+
+        // 3. Split Body: Donut Chart + KPIs (Left) & Project Breakdown List (Right)
+        const bodySplit = contentEl.createDiv('kt-balance-body-split');
+
+        // Left Panel (Chart + KPIs)
+        const leftPanel = bodySplit.createDiv('kt-balance-left-panel');
+
+        // Donut Chart Box
+        const chartBox = leftPanel.createDiv('kt-balance-chart-box');
+        this.renderDonutChart(chartBox, data.groups, data.totalMinutes);
+
+        // KPIs
+        const kpisGrid = leftPanel.createDiv('kt-balance-kpis-grid');
+        
+        const kpi1 = kpisGrid.createDiv('kt-balance-kpi-card');
+        kpi1.createDiv({ cls: 'kt-kpi-val', text: formatMinutesToHours(data.totalMinutes) });
+        kpi1.createDiv({ cls: 'kt-kpi-label', text: '⏱️ Total Planejado' });
+
+        const kpi2 = kpisGrid.createDiv('kt-balance-kpi-card');
+        kpi2.createDiv({ cls: 'kt-kpi-val', text: formatMinutesToHours(data.workMinutes) });
+        kpi2.createDiv({ cls: 'kt-kpi-label', text: '💼 Foco & Projetos' });
+
+        if (data.totalEarnings > 0) {
+            const kpi3 = kpisGrid.createDiv('kt-balance-kpi-card');
+            kpi3.createDiv({ cls: 'kt-kpi-val kt-kpi-earnings', text: formatCurrency(data.totalEarnings, 'R$') });
+            kpi3.createDiv({ cls: 'kt-kpi-label', text: '💵 Ganho Previsto' });
+        }
+
+        // Right Panel (Detailed Breakdown List)
+        const rightPanel = bodySplit.createDiv('kt-balance-right-panel');
+        rightPanel.createDiv({ cls: 'kt-balance-section-label', text: `PROJETOS & CATEGORIAS (${data.groups.length})` });
+
+        const listWrap = rightPanel.createDiv('kt-balance-items-list');
+
+        data.groups.forEach(g => {
+            const item = listWrap.createDiv('kt-balance-item');
+            item.style.setProperty('--item-color', g.color);
+
+            const topRow = item.createDiv('kt-balance-item-top');
+            
+            const leftCol = topRow.createDiv('kt-balance-item-title-col');
+            const dot = leftCol.createSpan('kt-balance-item-dot');
+            dot.style.background = g.color;
+            const nameSpan = leftCol.createSpan('kt-balance-item-name');
+            nameSpan.setText(g.name);
+
+            const rightCol = topRow.createDiv('kt-balance-item-stats-col');
+            const durBadge = rightCol.createSpan('kt-balance-dur-badge');
+            durBadge.setText(formatMinutesToHours(g.minutes));
+            const pctBadge = rightCol.createSpan('kt-balance-pct-badge');
+            pctBadge.setText(`${g.percent.toFixed(1)}%`);
+
+            if (g.earnings > 0) {
+                const earnSpan = rightCol.createSpan('kt-balance-earnings-badge');
+                earnSpan.setText(`💵 ${formatCurrency(g.earnings, 'R$')}`);
+            }
+
+            // Progress Bar
+            const barTrack = item.createDiv('kt-balance-bar-track');
+            const barFill = barTrack.createDiv('kt-balance-bar-fill');
+            barFill.style.width = `${Math.max(2, g.percent)}%`;
+            barFill.style.background = g.color;
+        });
+    }
+
+    renderDonutChart(container, groups, totalMinutes) {
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("viewBox", "0 0 180 180");
+        svg.classList.add("kt-donut-svg");
+
+        const R = 62;
+        const C = 2 * Math.PI * R; // ~389.55
+        let cumulativeOffset = 0;
+
+        // Background circle
+        const bgCircle = document.createElementNS(svgNS, "circle");
+        bgCircle.setAttribute("cx", "90");
+        bgCircle.setAttribute("cy", "90");
+        bgCircle.setAttribute("r", String(R));
+        bgCircle.setAttribute("fill", "none");
+        bgCircle.setAttribute("stroke", "var(--background-modifier-border)");
+        bgCircle.setAttribute("stroke-width", "20");
+        svg.appendChild(bgCircle);
+
+        // Center Text
+        const defaultCenterVal = formatMinutesToHours(totalMinutes) || '0h';
+        const defaultCenterLbl = "Total Alocado";
+
+        const centerVal = document.createElementNS(svgNS, "text");
+        centerVal.setAttribute("x", "90");
+        centerVal.setAttribute("y", "86");
+        centerVal.setAttribute("text-anchor", "middle");
+        centerVal.classList.add("kt-donut-center-val");
+        centerVal.textContent = defaultCenterVal;
+        svg.appendChild(centerVal);
+
+        const centerLbl = document.createElementNS(svgNS, "text");
+        centerLbl.setAttribute("x", "90");
+        centerLbl.setAttribute("y", "104");
+        centerLbl.setAttribute("text-anchor", "middle");
+        centerLbl.classList.add("kt-donut-center-lbl");
+        centerLbl.textContent = defaultCenterLbl;
+        svg.appendChild(centerLbl);
+
+        groups.forEach(g => {
+            if (g.minutes <= 0) return;
+            const pct = g.minutes / totalMinutes;
+            const dashLength = pct * C;
+            const gapLength = C - dashLength;
+
+            const slice = document.createElementNS(svgNS, "circle");
+            slice.setAttribute("cx", "90");
+            slice.setAttribute("cy", "90");
+            slice.setAttribute("r", String(R));
+            slice.setAttribute("fill", "none");
+            slice.setAttribute("stroke", g.color || "#6366f1");
+            slice.setAttribute("stroke-width", "20");
+            slice.setAttribute("stroke-dasharray", `${dashLength} ${gapLength}`);
+            slice.setAttribute("stroke-dashoffset", String(-cumulativeOffset));
+            slice.setAttribute("transform", "rotate(-90 90 90)");
+            slice.classList.add("kt-donut-slice");
+
+            slice.addEventListener("mouseenter", () => {
+                slice.style.filter = "brightness(1.2)";
+                slice.style.opacity = "0.9";
+                centerVal.textContent = formatMinutesToHours(g.minutes);
+                centerLbl.textContent = `${g.name} (${g.percent.toFixed(1)}%)`;
+            });
+
+            slice.addEventListener("mouseleave", () => {
+                slice.style.filter = "none";
+                slice.style.opacity = "1";
+                centerVal.textContent = defaultCenterVal;
+                centerLbl.textContent = defaultCenterLbl;
+            });
+
+            svg.appendChild(slice);
+            cumulativeOffset += dashLength;
+        });
+
+        container.appendChild(svg);
     }
 
     onClose() {
@@ -3286,6 +4188,172 @@ class CustomEventModal extends obsidian.Modal {
     onClose() { this.contentEl.empty(); }
 }
 
+class HabitEventModal extends obsidian.Modal {
+    constructor(app, plugin, habit, date, defaultHour, defaultMin, onSave) {
+        super(app);
+        this.plugin      = plugin;
+        this.habit       = habit;
+        this.date        = date;
+        this.defaultHour = defaultHour;
+        this.defaultMin  = defaultMin;
+        this.onSave      = onSave;
+    }
+
+    onOpen() {
+        const { contentEl, date, habit } = this;
+        contentEl.addClass('kt-modal');
+        contentEl.addClass('kt-habit-modal');
+
+        const headerRow = contentEl.createDiv('kt-habit-modal-header');
+        headerRow.style.display = 'flex';
+        headerRow.style.alignItems = 'center';
+        headerRow.style.gap = '12px';
+        headerRow.style.marginBottom = '16px';
+
+        const iconBadge = headerRow.createDiv('kt-habit-icon-badge');
+        iconBadge.style.width = '38px';
+        iconBadge.style.height = '38px';
+        iconBadge.style.borderRadius = '8px';
+        iconBadge.style.display = 'flex';
+        iconBadge.style.alignItems = 'center';
+        iconBadge.style.justifyContent = 'center';
+        iconBadge.style.fontSize = '20px';
+        iconBadge.style.background = colorMixHex(habit.color || '#10b981', 0.2);
+        iconBadge.style.border = `1.5px solid ${habit.color || '#10b981'}`;
+        iconBadge.setText(habit.icon || '✨');
+
+        const titleInfo = headerRow.createDiv();
+        const titleH2 = titleInfo.createEl('h2', { text: `Agendar Hábito: ${habit.name}` });
+        titleH2.style.margin = '0 0 2px 0';
+        titleH2.style.fontSize = '16px';
+
+        const dateSub = titleInfo.createEl('span', { text: `Data selecionada: ${formatDate(date)}` });
+        dateSub.style.fontSize = '12px';
+        dateSub.style.color = 'var(--text-muted)';
+
+        let durationMins = 30;
+        if (habit.type === 'time' && habit.target && habit.target > 0) {
+            durationMins = habit.target;
+        }
+
+        const startMin = this.defaultHour * 60 + this.defaultMin;
+        let startVal = minutesToTime(startMin);
+        let endVal   = minutesToTime(Math.min(23 * 60 + 59, startMin + durationMins));
+
+        let repeatRule = 'none';
+        let repeatWeeks = 4;
+        let customDays = [date.getDay()];
+
+        new obsidian.Setting(contentEl)
+            .setName('Horário de Início')
+            .addText(t => { t.setValue(startVal); t.onChange(v => startVal = v); });
+
+        new obsidian.Setting(contentEl)
+            .setName('Horário de Término')
+            .addText(t => { t.setValue(endVal); t.onChange(v => endVal = v); });
+
+        const dowNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const todayDowName = dowNames[date.getDay()];
+
+        const repeatSetting = new obsidian.Setting(contentEl)
+            .setName('Repetição')
+            .setDesc('Preencher automaticamente em múltiplos dias');
+
+        const customDaysWrap = contentEl.createDiv('kt-custom-days-wrap');
+        customDaysWrap.style.display = 'none';
+        customDaysWrap.style.margin = '4px 0 14px 0';
+        customDaysWrap.style.padding = '8px 12px';
+        customDaysWrap.style.background = 'var(--background-secondary)';
+        customDaysWrap.style.borderRadius = '6px';
+
+        const customDaysTitle = customDaysWrap.createEl('div', { text: 'Repetir em quais dias da semana:', cls: 'kt-custom-days-label' });
+        customDaysTitle.style.fontSize = '12px';
+        customDaysTitle.style.marginBottom = '6px';
+        customDaysTitle.style.color = 'var(--text-muted)';
+
+        const daysBtnRow = customDaysWrap.createDiv('kt-custom-days-row');
+        daysBtnRow.style.display = 'flex';
+        daysBtnRow.style.gap = '6px';
+
+        const dayAbbrs = [
+            { dow: 1, label: 'Seg' },
+            { dow: 2, label: 'Ter' },
+            { dow: 3, label: 'Qua' },
+            { dow: 4, label: 'Qui' },
+            { dow: 5, label: 'Sex' },
+            { dow: 6, label: 'Sáb' },
+            { dow: 0, label: 'Dom' },
+        ];
+
+        dayAbbrs.forEach(dInfo => {
+            const b = daysBtnRow.createEl('button', {
+                text: dInfo.label,
+                cls: `kt-day-select-btn ${customDays.includes(dInfo.dow) ? 'is-active' : ''}`
+            });
+            b.style.padding = '4px 8px';
+            b.style.fontSize = '11.5px';
+            b.onclick = (e) => {
+                e.preventDefault();
+                if (customDays.includes(dInfo.dow)) {
+                    customDays = customDays.filter(x => x !== dInfo.dow);
+                    b.classList.remove('is-active');
+                } else {
+                    customDays.push(dInfo.dow);
+                    b.classList.add('is-active');
+                }
+            };
+        });
+
+        const horizonSetting = new obsidian.Setting(contentEl)
+            .setName('Duração da Série')
+            .setDesc('Quantas semanas preencher automaticamente')
+            .addDropdown(d => {
+                d.addOption('4', '4 semanas (~1 mês)');
+                d.addOption('8', '8 semanas (~2 meses)');
+                d.addOption('12', '12 semanas (~3 meses)');
+                d.addOption('26', '26 semanas (~6 meses)');
+                d.setValue('4');
+                d.onChange(v => repeatWeeks = parseInt(v, 10) || 4);
+            });
+        horizonSetting.settingEl.style.display = 'none';
+
+        repeatSetting.addDropdown(d => {
+            d.addOption('none', 'Não se repete (Apenas hoje)');
+            d.addOption('daily', 'Todos os dias (Seg a Dom)');
+            d.addOption('weekdays', 'Dias úteis (Segunda a Sexta)');
+            d.addOption('weekly', `Semanalmente (Toda ${todayDowName})`);
+            d.addOption('custom', 'Personalizado (Escolher dias da semana)');
+            d.setValue(repeatRule);
+            d.onChange(v => {
+                repeatRule = v;
+                if (v === 'none') {
+                    customDaysWrap.style.display = 'none';
+                    horizonSetting.settingEl.style.display = 'none';
+                } else if (v === 'custom') {
+                    customDaysWrap.style.display = 'block';
+                    horizonSetting.settingEl.style.display = 'flex';
+                } else {
+                    customDaysWrap.style.display = 'none';
+                    horizonSetting.settingEl.style.display = 'flex';
+                }
+            });
+        });
+
+        new obsidian.Setting(contentEl)
+            .addButton(b => b.setButtonText('💾 Agendar Hábito').setCta().onClick(() => {
+                if (!/^\d{2}:\d{2}$/.test(startVal) || !/^\d{2}:\d{2}$/.test(endVal)) {
+                    new obsidian.Notice('⚠️ Horário inválido. Use HH:mm');
+                    return;
+                }
+                this.onSave(habit, date, startVal, endVal, repeatRule, customDays, repeatWeeks);
+                this.close();
+            }))
+            .addButton(b => b.setButtonText('Cancelar').onClick(() => this.close()));
+    }
+
+    onClose() { this.contentEl.empty(); }
+}
+
 // ================================================================
 // CALENDAR EVENT & SPECIAL DATES MODAL (Aniversários, Lembretes, Recorrência)
 // ================================================================
@@ -3571,12 +4639,13 @@ class QuickCreateTaskModal extends obsidian.Modal {
 
         // Autocomplete for project tags
         new CardTextareaSuggester(this.app, inputEl, () => (this.plugin.settings.projects || []).map(p => p.tag).filter(Boolean));
+        renderHashtagSuggestionsBar(contentSection, inputEl, this.app, this.plugin);
 
         setTimeout(() => {
             inputEl.focus();
         }, 30);
 
-        // 2. Untimed Cards Quick Selector (if there are existing cards on this day without time)
+        // 2. Existing Cards Selector (allows assigning or adding another block to an existing card)
         let selectedExistingCard = null;
         if (this.untimedCards.length > 0) {
             const existingWrap = contentEl.createDiv('kt-untimed-quick-select-wrap');
@@ -3586,11 +4655,16 @@ class QuickCreateTaskModal extends obsidian.Modal {
             existingWrap.style.borderRadius = '6px';
 
             new obsidian.Setting(existingWrap)
-                .setName('Ou vincular card existente:')
+                .setName('Ou vincular a um card existente:')
+                .setDesc('Adiciona este horário ao card (podendo ter múltiplos blocos no dia)')
                 .addDropdown(d => {
                     d.addOption('__new__', '-- Criar nova tarefa digitada acima --');
                     this.untimedCards.forEach(c => {
-                        d.addOption(String(c.lineIndex), c.title);
+                        const slots = getTimesForDay(c, day);
+                        const label = slots.length > 0
+                            ? `${c.title} (${slots.length} bloco${slots.length > 1 ? 's' : ''} existente${slots.length > 1 ? 's' : ''} → +1 novo)`
+                            : c.title;
+                        d.addOption(String(c.lineIndex), label);
                     });
                     d.setValue('__new__');
                     d.onChange(v => {
@@ -3655,6 +4729,19 @@ class QuickCreateTaskModal extends obsidian.Modal {
                 new obsidian.Notice('⚠️ Horário inválido. Use HH:mm');
                 return;
             }
+
+            if (this.plugin && this.plugin.settings && trimmed) {
+                const tagMatches = trimmed.match(/#([\w-]+)/g);
+                if (tagMatches) {
+                    if (!this.plugin.settings.recentTags) this.plugin.settings.recentTags = {};
+                    tagMatches.forEach(tm => {
+                        const clean = tm.replace(/^#/, '').toLowerCase().trim();
+                        if (clean) this.plugin.settings.recentTags[clean] = Date.now();
+                    });
+                    this.plugin.saveSettings().catch(() => {});
+                }
+            }
+
             this.close();
 
             if (selectedExistingCard && this.onAssignExisting) {
@@ -8257,35 +9344,460 @@ class HealthVaccineModal extends obsidian.Modal {
     }
 }
 
+class HealthMedicationModal extends obsidian.Modal {
+    constructor(app, profile, medication, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.medication = medication ? Object.assign({}, medication) : {
+            id: `med-${Date.now()}`,
+            name: '',
+            dosage: '',
+            category: 'remedio',
+            timeOfDay: 'Manhã',
+            stock: 30,
+            stockAlertThreshold: 5,
+            unit: 'comprimidos',
+            notes: '',
+            active: true
+        };
+        this.isNew = !medication;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '540px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.isNew ? 'Cadastrar Medicamento / Suplemento' : 'Editar Medicamento' });
+
+        // Row 1: Name & Dosage
+        const row1 = contentEl.createDiv('kt-form-row');
+        const nameField = row1.createDiv('kt-form-field');
+        nameField.createEl('label', { text: 'Nome do Medicamento / Suplemento:' });
+        const nameInput = nameField.createEl('input', { type: 'text', value: this.medication.name });
+        nameInput.placeholder = 'Ex: Escitalopram, Ritalina, Creatina, Vitamina D';
+
+        const doseField = row1.createDiv('kt-form-field');
+        doseField.createEl('label', { text: 'Dosagem:' });
+        const doseInput = doseField.createEl('input', { type: 'text', value: this.medication.dosage });
+        doseInput.placeholder = 'Ex: 10mg, 500mg, 1 scoop, 5 gotas';
+
+        // Row 2: Category & Schedule / Time of Day
+        const row2 = contentEl.createDiv('kt-form-row');
+        const catField = row2.createDiv('kt-form-field');
+        catField.createEl('label', { text: 'Categoria:' });
+        const catSelect = catField.createEl('select');
+        [
+            { v: 'remedio', l: 'Medicamento Contínuo' },
+            { v: 'suplemento', l: 'Suplemento / Fitoterápico' },
+            { v: 'vitamina', l: 'Vitamina / Mineral' },
+            { v: 'sos', l: 'Uso Pontual / SOS' }
+        ].forEach(opt => {
+            const el = catSelect.createEl('option', { value: opt.v, text: opt.l });
+            if (opt.v === (this.medication.category || 'remedio')) el.selected = true;
+        });
+
+        const timeField = row2.createDiv('kt-form-field');
+        timeField.createEl('label', { text: 'Horário / Turno Habitual:' });
+        const timeInput = timeField.createEl('input', { type: 'text', value: this.medication.timeOfDay || 'Manhã' });
+        timeInput.placeholder = 'Ex: Manhã (em jejum), Noite, 08:00 e 20:00';
+
+        // Row 3: Stock & Alert Threshold
+        const row3 = contentEl.createDiv('kt-form-row');
+        const stockField = row3.createDiv('kt-form-field');
+        stockField.createEl('label', { text: 'Estoque Atual (Qtd Restante):' });
+        const stockInput = stockField.createEl('input', { type: 'number', min: '0', step: '1', value: String(this.medication.stock !== undefined ? this.medication.stock : 30) });
+
+        const threshField = row3.createDiv('kt-form-field');
+        threshField.createEl('label', { text: 'Alerta de Estoque Baixo:' });
+        const threshInput = threshField.createEl('input', { type: 'number', min: '0', step: '1', value: String(this.medication.stockAlertThreshold !== undefined ? this.medication.stockAlertThreshold : 5) });
+
+        // Row 4: Unit & Status Active
+        const row4 = contentEl.createDiv('kt-form-row');
+        const unitField = row4.createDiv('kt-form-field');
+        unitField.createEl('label', { text: 'Unidade de Medida:' });
+        const unitSelect = unitField.createEl('select');
+        ['comprimidos', 'cápsulas', 'gotas', 'doses', 'ml', 'unidades'].forEach(u => {
+            const el = unitSelect.createEl('option', { value: u, text: u });
+            if (u === (this.medication.unit || 'comprimidos')) el.selected = true;
+        });
+
+        const activeField = row4.createDiv('kt-form-field');
+        activeField.createEl('label', { text: 'Status do Tratamento:' });
+        const activeSelect = activeField.createEl('select');
+        [
+            { v: 'true', l: 'Ativo (em uso diário)' },
+            { v: 'false', l: 'Pausado / Concluído' }
+        ].forEach(opt => {
+            const el = activeSelect.createEl('option', { value: opt.v, text: opt.l });
+            if (String(this.medication.active !== false) === opt.v) el.selected = true;
+        });
+
+        // Instructions & Notes
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Instruções Médicas / Observações:' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.medication.notes || '';
+        notesInput.rows = 2;
+        notesInput.placeholder = 'Ex: Tomar após o almoço com bastante água...';
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (!this.isNew && this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.medication.id);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Medicamento' });
+        saveBtn.onclick = () => {
+            const name = nameInput.value.trim();
+            if (!name) {
+                new obsidian.Notice('Por favor, informe o nome do medicamento.');
+                return;
+            }
+            this.medication.name = name;
+            this.medication.dosage = doseInput.value.trim();
+            this.medication.category = catSelect.value;
+            this.medication.timeOfDay = timeInput.value.trim() || 'Manhã';
+            this.medication.stock = Math.max(0, parseInt(stockInput.value, 10) || 0);
+            this.medication.stockAlertThreshold = Math.max(0, parseInt(threshInput.value, 10) || 5);
+            this.medication.unit = unitSelect.value;
+            this.medication.active = activeSelect.value === 'true';
+            this.medication.notes = notesInput.value.trim();
+
+            this.close();
+            this.onSave(this.medication);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthMedicationRefillModal extends obsidian.Modal {
+    constructor(app, medication, onRefill) {
+        super(app);
+        this.medication = medication;
+        this.onRefill = onRefill;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '420px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: `Repor Estoque: ${this.medication.name}` });
+
+        const infoBox = contentEl.createDiv({ cls: 'kt-health-med-stock-box', style: 'margin-bottom:14px;' });
+        infoBox.innerHTML = `
+            <div style="font-size:12px; color:var(--text-muted);">Estoque Atual: <b>${this.medication.stock || 0} ${this.medication.unit || 'comprimidos'}</b></div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">Selecione a quantidade de novas unidades para somar ao estoque:</div>
+        `;
+
+        const quickBtns = contentEl.createDiv({ style: 'display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:14px;' });
+        [30, 60, 90].forEach(qty => {
+            const btn = quickBtns.createEl('button', { cls: 'kt-fin-smart-btn', text: `+${qty} ${this.medication.unit || 'cps'}` });
+            btn.onclick = () => {
+                this.close();
+                this.onRefill(qty);
+            };
+        });
+
+        const customField = contentEl.createDiv('kt-form-field');
+        customField.createEl('label', { text: 'Ou digite outra quantidade a somar:' });
+        const customInput = customField.createEl('input', { type: 'number', min: '1', step: '1', value: '30' });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '8px';
+        footer.style.marginTop = '16px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const addBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Adicionar ao Estoque' });
+        addBtn.onclick = () => {
+            const qty = parseInt(customInput.value, 10);
+            if (isNaN(qty) || qty <= 0) {
+                new obsidian.Notice('Informe uma quantidade válida maior que 0.');
+                return;
+            }
+            this.close();
+            this.onRefill(qty);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthJournalEntryModal extends obsidian.Modal {
+    constructor(app, profile, profileData, dateStr, onSave, onDelete) {
+        super(app);
+        this.profile = profile;
+        this.profileData = profileData;
+        this.dateStr = dateStr || new Date().toISOString().split('T')[0];
+        const currentLog = profileData.dailyLogs?.[this.dateStr] || {};
+        this.log = Object.assign({
+            mood: 3,
+            stress: 2,
+            energy: 3,
+            sleepHours: undefined,
+            emotions: [],
+            journal: '',
+            medicationsTaken: []
+        }, currentLog);
+        if (!Array.isArray(this.log.emotions)) this.log.emotions = [];
+        if (!Array.isArray(this.log.medicationsTaken)) this.log.medicationsTaken = [];
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '640px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: `Diário Emocional & Registro — ${this.profile.name}` });
+
+        // Date Picker
+        const dateField = contentEl.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data da Entrada:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.dateStr });
+
+        // Mood Group
+        const moodField = contentEl.createDiv('kt-form-field');
+        moodField.createEl('label', { text: 'Como você se sentiu nesse dia? (Humor):' });
+        const moodGroup = moodField.createDiv('kt-health-mood-group');
+        let selectedMood = this.log.mood || 3;
+        const moodConfigs = [
+            { score: 5, emoji: '😄', text: 'Radiante / Ótimo' },
+            { score: 4, emoji: '😊', text: 'Bom / Calmo' },
+            { score: 3, emoji: '😐', text: 'Neutro / Ok' },
+            { score: 2, emoji: '😟', text: 'Ansioso / Baixo' },
+            { score: 1, emoji: '😫', text: 'Esgotado / Mal' }
+        ];
+        const moodBtns = [];
+        moodConfigs.forEach(m => {
+            const btn = moodGroup.createDiv(`kt-health-mood-btn ${selectedMood === m.score ? 'is-selected' : ''}`);
+            btn.createDiv({ cls: 'kt-health-mood-emoji', text: m.emoji });
+            btn.createDiv({ cls: 'kt-health-mood-text', text: m.text });
+            btn.onclick = () => {
+                selectedMood = m.score;
+                moodBtns.forEach((b, idx) => {
+                    b.classList.toggle('is-selected', moodConfigs[idx].score === selectedMood);
+                });
+            };
+            moodBtns.push(btn);
+        });
+
+        // Scales: Stress & Energy
+        const rowScales = contentEl.createDiv('kt-form-row');
+        
+        // Stress
+        const stressField = rowScales.createDiv('kt-form-field');
+        stressField.createEl('label', { text: 'Nível de Estresse (1 a 5):' });
+        const stressSelect = stressField.createEl('select');
+        [
+            { v: 1, l: '1 - Muito Baixo / Relaxado' },
+            { v: 2, l: '2 - Baixo / Sob Controle' },
+            { v: 3, l: '3 - Moderado' },
+            { v: 4, l: '4 - Alto / Sob Pressão' },
+            { v: 5, l: '5 - Crítico / Risco Burnout' }
+        ].forEach(opt => {
+            const el = stressSelect.createEl('option', { value: String(opt.v), text: opt.l });
+            if (opt.v === (this.log.stress || 2)) el.selected = true;
+        });
+
+        // Energy
+        const energyField = rowScales.createDiv('kt-form-field');
+        energyField.createEl('label', { text: 'Nível de Energia / Foco (1 a 5):' });
+        const energySelect = energyField.createEl('select');
+        [
+            { v: 1, l: '1 - Muito Baixo / Sem Energia' },
+            { v: 2, l: '2 - Baixo / Lento' },
+            { v: 3, l: '3 - Moderado / Normal' },
+            { v: 4, l: '4 - Alto / Produtivo' },
+            { v: 5, l: '5 - Máximo / Imparável' }
+        ].forEach(opt => {
+            const el = energySelect.createEl('option', { value: String(opt.v), text: opt.l });
+            if (opt.v === (this.log.energy || 3)) el.selected = true;
+        });
+
+        // Emotion & Trigger Tags
+        const tagsField = contentEl.createDiv('kt-form-field');
+        tagsField.createEl('label', { text: 'Sentimentos & Gatilhos do Dia (clique para alternar):' });
+        const tagsListWrap = tagsField.createDiv('kt-health-tags-list');
+        const defaultTags = ['#Grato', '#Produtivo', '#Ansioso', '#Focado', '#Cansado', '#Trabalho', '#Estudos', '#SonoRuim', '#Exercício', '#Família', '#Paz', '#Sobrecarga'];
+        const activeEmotions = new Set(this.log.emotions || []);
+        
+        const renderTags = () => {
+            tagsListWrap.innerHTML = '';
+            defaultTags.forEach(t => {
+                const isAct = activeEmotions.has(t);
+                const chip = tagsListWrap.createDiv(`kt-health-emotion-chip ${isAct ? 'is-active' : ''}`);
+                chip.setText(t);
+                chip.onclick = () => {
+                    if (activeEmotions.has(t)) activeEmotions.delete(t);
+                    else activeEmotions.add(t);
+                    renderTags();
+                };
+            });
+        };
+        renderTags();
+
+        // Journal Textarea
+        const journalField = contentEl.createDiv('kt-form-field');
+        journalField.createEl('label', { text: 'Diário & Reflexão do Dia (escreva livremente):' });
+        const journalTextarea = journalField.createEl('textarea', { cls: 'kt-health-journal-textarea' });
+        journalTextarea.value = this.log.journal || this.log.notes || '';
+        journalTextarea.rows = 4;
+        journalTextarea.placeholder = 'Como foi seu dia? O que aconteceu, reflexões, conquistas, preocupações, gratidão...';
+
+        // Medications Taken Checklist
+        const activeMeds = (this.profileData.medications || []).filter(m => m.active !== false);
+        const takenMeds = new Set(this.log.medicationsTaken || []);
+        if (activeMeds.length > 0) {
+            const medCheckSection = contentEl.createDiv('kt-health-med-checklist-wrap');
+            medCheckSection.createEl('div', { cls: 'kt-health-scale-label', text: 'Medicamentos & Suplementos Tomados:' });
+            const listDiv = medCheckSection.createDiv('kt-health-med-check-list');
+
+            activeMeds.forEach(m => {
+                const isTaken = takenMeds.has(m.id);
+                const itemCard = listDiv.createDiv(`kt-health-med-check-card ${isTaken ? 'is-taken' : ''}`);
+                const info = itemCard.createDiv('kt-health-med-check-info');
+                info.createDiv({ cls: 'kt-health-med-check-name', text: `${m.name} ${m.dosage || ''}` });
+                info.createDiv({ cls: 'kt-health-med-check-meta', text: `${m.timeOfDay || 'Manhã'} • Estoque: ${m.stock || 0} ${m.unit || 'cps'}` });
+
+                const toggleBtn = itemCard.createEl('button', {
+                    cls: `kt-health-med-toggle-btn ${isTaken ? 'is-taken' : ''}`,
+                    text: isTaken ? '✓ Tomado' : '○ Não Tomado'
+                });
+                toggleBtn.onclick = () => {
+                    if (takenMeds.has(m.id)) {
+                        takenMeds.delete(m.id);
+                        toggleBtn.setText('○ Não Tomado');
+                        toggleBtn.removeClass('is-taken');
+                        itemCard.removeClass('is-taken');
+                    } else {
+                        takenMeds.add(m.id);
+                        toggleBtn.setText('✓ Tomado');
+                        toggleBtn.addClass('is-taken');
+                        itemCard.addClass('is-taken');
+                    }
+                };
+            });
+        }
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        if (this.onDelete) {
+            const delBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Excluir Entrada' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.dateStr);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Diário' });
+        saveBtn.onclick = () => {
+            const targetDate = dateInput.value;
+            if (!targetDate) {
+                new obsidian.Notice('Por favor, selecione uma data válida.');
+                return;
+            }
+            this.log.mood = selectedMood;
+            this.log.stress = parseInt(stressSelect.value, 10);
+            this.log.energy = parseInt(energySelect.value, 10);
+            this.log.emotions = Array.from(activeEmotions);
+            this.log.journal = journalTextarea.value.trim();
+            this.log.notes = journalTextarea.value.trim();
+            this.log.medicationsTaken = Array.from(takenMeds);
+
+            this.close();
+            this.onSave(targetDate, this.log);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
 // ================================================================
 // TIME BLOCK MODAL
 // ================================================================
 
 class TimeBlockModal extends obsidian.Modal {
-    constructor(app, card, date, defaultHour, onSave, onDelete) {
+    constructor(app, card, date, defaultHour, onSave, onDelete, instanceIndex = null, initialStart = null, initialEnd = null) {
         super(app);
-        this.card        = card;
-        this.date        = date;
-        this.defaultHour = defaultHour;
-        this.onSave      = onSave;
-        this.onDelete    = onDelete;
+        this.card          = card;
+        this.date          = date;
+        this.defaultHour   = defaultHour;
+        this.onSave        = onSave;
+        this.onDelete      = onDelete;
+        this.instanceIndex = instanceIndex;
+        this.initialStart  = initialStart;
+        this.initialEnd    = initialEnd;
     }
 
     onOpen() {
-        const { contentEl, card, date } = this;
+        const { contentEl, card, date, instanceIndex } = this;
         contentEl.addClass('kt-modal');
         const dateStr = date ? formatDate(date) : null;
-        contentEl.createEl('h2', { text: `⏰ Horário: ${card.title}${dateStr ? ` (${dateStr})` : ''}` });
+        
+        const allSlots = getTimesForDay(card, date);
+        const hasMultiple = allSlots.length > 1;
+        const instLabel = (instanceIndex !== null && hasMultiple) ? ` (Bloco #${instanceIndex + 1})` : '';
+        
+        contentEl.createEl('h2', { text: `⏰ Horário: ${card.title}${dateStr ? ` • ${dateStr}` : ''}${instLabel}` });
 
         const pad = n => String(n).padStart(2, '0');
-        const dayTime = getTimeForDay(card, date);
+        const slot = (instanceIndex !== null && allSlots[instanceIndex]) ? allSlots[instanceIndex] : getTimeForDay(card, date);
 
         let titleVal = card.title;
-        let startVal = dayTime?.timeStart || `${pad(this.defaultHour)}:00`;
-        let endVal   = dayTime?.timeEnd   || `${pad(this.defaultHour + 1)}:00`;
+        let startVal = this.initialStart || slot?.timeStart || `${pad(this.defaultHour)}:00`;
+        let endVal   = this.initialEnd   || slot?.timeEnd   || `${pad(this.defaultHour + 1)}:00`;
         let applyToAll = false;
 
-        const isRoutineOrEvent = card.isEvent || card.column === 'Rotina' || !!card.seriesId;
+        const isRoutineOrEvent = card.isEvent || card.isHabit || card.column === 'Rotina' || !!card.seriesId || !!card.habitId;
 
         if (isRoutineOrEvent) {
             new obsidian.Setting(contentEl)
@@ -8321,24 +9833,25 @@ class TimeBlockModal extends obsidian.Modal {
                 new obsidian.Notice('Formato inválido. Use HH:mm');
                 return;
             }
-            this.onSave(titleVal, startVal, endVal, applyToAll);
+            this.onSave(titleVal, startVal, endVal, applyToAll, instanceIndex);
             this.close();
         }));
 
-        buttonsRow.addButton(b => b.setButtonText('Limpar deste dia').setWarning().onClick(() => {
+        const delBtnLabel = (instanceIndex !== null && hasMultiple) ? 'Excluir apenas este bloco' : 'Limpar deste dia';
+        buttonsRow.addButton(b => b.setButtonText(delBtnLabel).setWarning().onClick(() => {
             if (this.onDelete) {
-                this.onDelete(false);
+                this.onDelete(false, instanceIndex);
             } else {
-                this.onSave(titleVal, null, null, false);
+                this.onSave(titleVal, null, null, false, instanceIndex);
             }
             this.close();
         }));
 
         if (isRoutineOrEvent) {
             buttonsRow.addButton(b => b.setButtonText('Excluir toda a série').setWarning().onClick(() => {
-                new ConfirmDeleteModal(this.app, `toda a série "${card.title}"`, () => {
+                new ConfirmDeleteModal(this.app, `toda a série "${card.title}"`, async () => {
                     if (this.onDelete) {
-                        this.onDelete(true);
+                        await this.onDelete(true);
                     }
                     this.close();
                 }).open();
@@ -9490,22 +11003,62 @@ kanban-plugin: basic
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         const content = await this.app.vault.read(file);
-        const updated = this.parser.updateDateRange(content, card.lineIndex, start, end);
+        const updated = this.parser.updateDateRange(content, card.lineIndex, start, end, card);
         await this.app.vault.modify(file, updated);
         new obsidian.Notice(`${card.title} → ${formatDate(start)}${sameDay(start, end) ? '' : ' – ' + formatDate(end)}`);
     }
 
-    async persistTimeBlock(card, date, ts, te) {
+    async persistTimeBlock(card, date, ts, te, instanceIndex = null, mode = 'set') {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         const content = await this.app.vault.read(file);
         const targetDate = date || this.selectedDay || card.startDate || new Date();
-        const updated = this.parser.updateTimeBlock(content, card.lineIndex, targetDate, ts, te);
+        const updated = this.parser.updateTimeBlock(content, card.lineIndex, targetDate, ts, te, instanceIndex, mode, card);
         await this.app.vault.modify(file, updated);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         if (ts && te) {
             new obsidian.Notice(`${card.title} (${formatDate(targetDate).slice(0,5)}) → ${ts} – ${te}`);
         } else {
             new obsidian.Notice(`Horário removido de ${card.title}`);
+        }
+    }
+
+    async persistTimeBlockAndDateRange(card, date, ts, te, mode = 'set', instanceIndex = null) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+        const targetDay = startOfDay(date || this.selectedDay || card.startDate || new Date());
+
+        // 1. Check date range
+        let newStart = card.startDate ? startOfDay(card.startDate) : null;
+        let newEnd   = card.endDate ? endOfDay(card.endDate) : (card.startDate ? endOfDay(card.startDate) : null);
+
+        if (!newStart) {
+            newStart = targetDay;
+            newEnd   = targetDay;
+            content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+        } else {
+            if (targetDay < newStart) {
+                newStart = targetDay;
+                content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+            } else if (targetDay > newEnd) {
+                newEnd = targetDay;
+                content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+            }
+        }
+
+        // 2. Update time block
+        content = this.parser.updateTimeBlock(content, card.lineIndex, targetDay, ts, te, instanceIndex, mode, card);
+
+        // 3. Atomically write to disk
+        await this.app.vault.modify(file, content);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
+        if (ts && te) {
+            new obsidian.Notice(`✓ ${card.title} (${formatDate(targetDay).slice(0,5)}) → ${ts} – ${te}`);
         }
     }
 
@@ -9515,6 +11068,74 @@ kanban-plugin: basic
         const ts       = minutesToTime(startMin);
         const te       = minutesToTime(endMin);
         await this.createCustomTimeEvent(title, date, ts, te, eventType, 'none');
+    }
+
+    async createHabitTimeEvent(habit, date, ts, te, repeatRule = 'none', customDays = [], repeatWeeks = 4) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+
+        const items = [];
+        const baseDate = startOfDay(date);
+        const habitTitle = `${habit.icon ? habit.icon + ' ' : '✨ '}${habit.name}`;
+
+        if (repeatRule === 'none') {
+            items.push({
+                title: habitTitle,
+                date: baseDate,
+                timeStart: ts,
+                timeEnd: te,
+                eventType: 'habit',
+                habitId: habit.id,
+                color: habit.color || '#10b981'
+            });
+        } else {
+            const seriesId = 'series_' + Date.now();
+            const totalDays = repeatWeeks * 7;
+
+            for (let i = 0; i < totalDays; i++) {
+                const curDate = new Date(baseDate);
+                curDate.setDate(curDate.getDate() + i);
+                const dow = curDate.getDay();
+
+                let shouldAdd = false;
+                if (repeatRule === 'daily') {
+                    shouldAdd = true;
+                } else if (repeatRule === 'weekdays') {
+                    shouldAdd = (dow >= 1 && dow <= 5);
+                } else if (repeatRule === 'weekly') {
+                    shouldAdd = (dow === baseDate.getDay());
+                } else if (repeatRule === 'custom') {
+                    shouldAdd = customDays.includes(dow);
+                }
+
+                if (shouldAdd) {
+                    items.push({
+                        title: habitTitle,
+                        date: curDate,
+                        timeStart: ts,
+                        timeEnd: te,
+                        eventType: 'habit',
+                        habitId: habit.id,
+                        color: habit.color || '#10b981',
+                        seriesId
+                    });
+                }
+            }
+        }
+
+        let content = await this.app.vault.read(file);
+        content = this.parser.addTimeEventsBatch(content, items);
+        await this.app.vault.modify(file, content);
+
+        // Update habitLogs in settings
+        await this.syncAllHabitLogs(habit.id);
+
+        if (items.length > 1) {
+            new obsidian.Notice(`✓ Criados ${items.length} blocos recorrentes para o hábito "${habit.name}" (${ts} – ${te})!`);
+        } else {
+            new obsidian.Notice(`✓ Hábito "${habit.name}" agendado (${ts} – ${te}) e registrado na aba Hábitos!`);
+        }
+        await this.refresh();
     }
 
     async createCustomTimeEvent(title, date, ts, te, eventType, repeatRule = 'none', customDays = [], repeatWeeks = 4) {
@@ -9577,7 +11198,7 @@ kanban-plugin: basic
         let content = await this.app.vault.read(file);
 
         if (!applyToAll) {
-            content = this.parser.updateTimeBlock(content, card.lineIndex, day, newTs, newTe);
+            content = this.parser.updateTimeBlock(content, card.lineIndex, day, newTs, newTe, null, 'set', card);
             if (newTitle && newTitle !== card.title) {
                 content = this.parser.saveCardEdit(content, card.lineIndex, newTitle, card.column, card.column, card.startDate, card.endDate);
             }
@@ -9586,6 +11207,9 @@ kanban-plugin: basic
         }
 
         await this.app.vault.modify(file, content);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         new obsidian.Notice('Evento(s) atualizado(s)');
         await this.refresh();
     }
@@ -9596,14 +11220,146 @@ kanban-plugin: basic
         let content = await this.app.vault.read(file);
 
         if (!deleteAll) {
-            content = this.parser.deleteCard(content, card.lineIndex);
+            content = this.parser.deleteCard(content, card.lineIndex, card);
         } else {
-            content = this.parser.deleteTimeEventSeries(content, card.seriesId, card.title, day);
+            content = this.parser.deleteTimeEventSeries(content, card.seriesId, card.title, null, card.habitId);
         }
 
         await this.app.vault.modify(file, content);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         new obsidian.Notice(deleteAll ? `Série "${card.title}" excluída` : `Evento excluído`);
         await this.refresh();
+    }
+
+    async syncAllHabitLogs(targetHabitId = null) {
+        if (!this.plugin.settings.habitLogs) this.plugin.settings.habitLogs = {};
+        const habits = this.plugin.settings.habits || [];
+        const targetHabits = targetHabitId ? habits.filter(h => h.id === targetHabitId) : habits;
+        if (targetHabits.length === 0) return;
+
+        const now = new Date();
+        const todayStart = startOfDay(now);
+        const curMin = now.getHours() * 60 + now.getMinutes();
+
+        // Parse all current cards from file
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        let allCards = this.cards || [];
+        if (file) {
+            try {
+                const content = await this.app.vault.read(file);
+                const parsed = this.parser.parseFile(content);
+                allCards = parsed.cards || [];
+            } catch(e) {}
+        }
+
+        targetHabits.forEach(h => {
+            if (!this.plugin.settings.habitLogs[h.id]) this.plugin.settings.habitLogs[h.id] = {};
+
+            // Find all cards matching this habit
+            const habitCards = allCards.filter(c => {
+                if (c.habitId && c.habitId === h.id) return true;
+                const cleanCardTitle = (c.title || '').replace(/[^\p{L}\p{N}\s]/gu, '').trim().toLowerCase();
+                const cleanHabitName = (h.name || '').replace(/[^\p{L}\p{N}\s]/gu, '').trim().toLowerCase();
+                return cleanHabitName && (cleanCardTitle === cleanHabitName || cleanCardTitle.includes(cleanHabitName));
+            });
+
+            // Rebuild habit day logs ONLY for dates where habit has been completed / concluded
+            const daysMap = new Map(); // dateKey -> { totalMinutes, count }
+
+            habitCards.forEach(c => {
+                // Collect dates strictly from dailyTimes (cards must have actual time slots)
+                const cardDates = [];
+                if (c.dailyTimes) {
+                    Object.keys(c.dailyTimes).forEach(dStr => {
+                        const d = parseDate(dStr);
+                        if (d) cardDates.push(d);
+                    });
+                }
+
+                cardDates.forEach(dateObj => {
+                    const dKey = getHabitDateKey(dateObj);
+                    const slots = getTimesForDay(c, dateObj);
+                    if (!slots || slots.length === 0) return;
+
+                    const dayStartObj = startOfDay(dateObj);
+                    const isPastDay = dayStartObj < todayStart;
+                    const isToday = sameDay(dateObj, now);
+                    const isFutureDay = dayStartObj > todayStart;
+
+                    // Future days CANNOT be marked as done unless explicitly checked [x]
+                    if (isFutureDay && !c.isCompleted) {
+                        return;
+                    }
+
+                    let dayMins = 0;
+                    let dayCount = 0;
+                    let hasCompletedSlot = false;
+
+                    slots.forEach(s => {
+                        if (s.timeStart && s.timeEnd) {
+                            const dur = timeToMinutes(s.timeEnd) - timeToMinutes(s.timeStart);
+                            const endMin = timeToMinutes(s.timeEnd);
+
+                            // Determine if this specific slot has concluded
+                            let slotConcluded = false;
+                            if (c.isCompleted) {
+                                slotConcluded = true;
+                            } else if (isPastDay) {
+                                slotConcluded = true;
+                            } else if (isToday) {
+                                slotConcluded = (curMin >= endMin);
+                            }
+
+                            if (slotConcluded && dur > 0) {
+                                dayMins += dur;
+                                dayCount += 1;
+                                hasCompletedSlot = true;
+                            }
+                        }
+                    });
+
+                    if (hasCompletedSlot || c.isCompleted) {
+                        if (!daysMap.has(dKey)) {
+                            daysMap.set(dKey, { totalMinutes: 0, count: 0 });
+                        }
+                        const cur = daysMap.get(dKey);
+                        cur.totalMinutes += dayMins;
+                        cur.count += dayCount > 0 ? dayCount : 1;
+                    }
+                });
+            });
+
+            // Clean keys that no longer have completed habit timeblocks
+            const existingKeys = Object.keys(this.plugin.settings.habitLogs[h.id] || {});
+            existingKeys.forEach(k => {
+                if (!daysMap.has(k)) {
+                    delete this.plugin.settings.habitLogs[h.id][k];
+                }
+            });
+
+            // Set new values
+            daysMap.forEach((data, dKey) => {
+                if (h.type === 'boolean') {
+                    this.plugin.settings.habitLogs[h.id][dKey] = data.count > 0;
+                } else if (h.type === 'time') {
+                    if (data.totalMinutes > 0) {
+                        this.plugin.settings.habitLogs[h.id][dKey] = data.totalMinutes;
+                    } else {
+                        delete this.plugin.settings.habitLogs[h.id][dKey];
+                    }
+                } else if (h.type === 'count') {
+                    if (data.count > 0) {
+                        this.plugin.settings.habitLogs[h.id][dKey] = data.count;
+                    } else {
+                        delete this.plugin.settings.habitLogs[h.id][dKey];
+                    }
+                }
+            });
+        });
+
+        await this.plugin.saveSettings();
     }
 
     async deleteCardLine(lineIndex) {
@@ -9612,6 +11368,7 @@ kanban-plugin: basic
         const content = await this.app.vault.read(file);
         const updated = this.parser.deleteCard(content, lineIndex);
         await this.app.vault.modify(file, updated);
+        await this.syncAllHabitLogs();
         new obsidian.Notice('Card excluído');
     }
 
@@ -9619,8 +11376,11 @@ kanban-plugin: basic
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         const content = await this.app.vault.read(file);
-        const updated = this.parser.removeDateRange(content, card.lineIndex);
+        const updated = this.parser.removeDateRange(content, card.lineIndex, card);
         await this.app.vault.modify(file, updated);
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
         new obsidian.Notice(`${card.title} removido do cronograma`);
         await this.refresh();
     }
@@ -10525,6 +12285,7 @@ kanban-plugin: basic
         kanbanTab.onclick   = () => switchMainView('kanban');
         projectsTab.onclick = () => switchMainView('projects');
         habitsTab.onclick   = async () => {
+            await this.syncAllHabitLogs();
             await switchMainView('habits');
             if (this.plugin.settings.awConnected) {
                 const now = Date.now();
@@ -10654,6 +12415,22 @@ kanban-plugin: basic
             };
 
             if (isCalActive) {
+                const isCentered = !!this.calendarCentered;
+                const centerBtn = nav.createEl('button', { 
+                    cls: `kt-nav-btn kt-center-today-btn${isCentered ? ' kt-nav-btn-active' : ''}`, 
+                    text: isCentered ? '🎯 Centralizado' : '🎯 Centralizar' 
+                });
+                centerBtn.title = isCentered 
+                    ? 'Modo rolagem ativo: Semana atual na 2ª linha. Clique para voltar ao mês civil padrão.' 
+                    : 'Centralizar a semana atual na 2ª linha para visualizar as próximas semanas à frente.';
+                centerBtn.onclick = () => {
+                    this.calendarCentered = !this.calendarCentered;
+                    if (this.calendarCentered) {
+                        this.monthOffset = 0;
+                    }
+                    this.render();
+                };
+
                 const addEvtBtn = nav.createEl('button', { cls: 'kt-nav-btn kt-add-calevt-nav-btn', text: '＋ Evento' });
                 addEvtBtn.title = 'Criar novo evento, data especial, aniversário ou lembrete';
                 addEvtBtn.onclick = () => {
@@ -10678,6 +12455,15 @@ kanban-plugin: basic
 
         // Sub-view Toggle for Timeblocking (1 Dia vs Semana Multi-Day)
         if (this.hasActiveDockView('timeblock')) {
+            const balanceBtn = tb.createEl('button', {
+                cls: 'kt-nav-btn kt-tb-balance-btn',
+                text: '📊 Balanço da Semana'
+            });
+            balanceBtn.title = 'Abrir gráfico de distribuição e balanço de horas da semana';
+            balanceBtn.onclick = () => {
+                new WeeklyTimeBalanceModal(this.app, this.plugin, this).open();
+            };
+
             const subToggle = tb.createDiv('kt-subview-toggle');
             const curSub = this.plugin.settings.timeblockSubView || 'day';
 
@@ -10826,6 +12612,46 @@ kanban-plugin: basic
         const mode = isCalActive ? 'month' : (this.plugin.settings.ganttDaysMode || '14');
         
         if (mode === 'month') {
+            if (this.calendarCentered) {
+                const now = new Date();
+                const nowStart = new Date(now);
+                nowStart.setHours(0, 0, 0, 0);
+
+                // Monday of current week
+                const nowDow = nowStart.getDay();
+                const nowDiff = nowDow === 0 ? -6 : 1 - nowDow;
+                const currentWeekMon = new Date(nowStart);
+                currentWeekMon.setDate(currentWeekMon.getDate() + nowDiff);
+
+                // Start 1 week prior (Row 1 Monday) + apply monthOffset * 4 weeks if user navigated
+                const offsetWeeks = (this.monthOffset || 0) * 4;
+                const gridStart = new Date(currentWeekMon);
+                gridStart.setDate(gridStart.getDate() - 7 + (offsetWeeks * 7));
+
+                const days = [];
+                const cur = new Date(gridStart);
+                for (let i = 0; i < 42; i++) { // 6 full weeks
+                    days.push(new Date(cur));
+                    cur.setDate(cur.getDate() + 1);
+                }
+
+                const weeksCount = 6;
+                const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+                const curMonthName = monthNames[now.getMonth()];
+                const monthLabel = `Hoje Centralizado (${curMonthName} ${now.getFullYear()})`;
+
+                return {
+                    isMonthMode: true,
+                    isCenteredMode: true,
+                    targetDate: currentWeekMon,
+                    monthLabel,
+                    targetMonth: now.getMonth(),
+                    targetYear: now.getFullYear(),
+                    days,
+                    weeksCount
+                };
+            }
+
             const now = new Date();
             const baseMonth = now.getMonth() + (this.monthOffset || 0);
             const targetDate = new Date(now.getFullYear(), baseMonth, 1);
@@ -10855,6 +12681,7 @@ kanban-plugin: basic
 
             return {
                 isMonthMode: true,
+                isCenteredMode: false,
                 targetDate,
                 monthLabel,
                 targetMonth: m,
@@ -11002,7 +12829,7 @@ kanban-plugin: basic
                 const globalDayIdx = w * 7 + colIdx;
                 const isToday = sameDay(d, new Date());
                 const isWeekend = (d.getDay() === 0 || d.getDay() === 6);
-                const isOtherMonth = d.getMonth() !== monthInfo.targetMonth;
+                const isOtherMonth = !monthInfo.isCenteredMode && (d.getMonth() !== monthInfo.targetMonth);
 
                 const dayCell = weekBg.createDiv(`kt-cal-day-cell${isToday ? ' kt-is-today' : ''}${isWeekend ? ' kt-is-weekend' : ''}${isOtherMonth ? ' kt-is-other-month' : ''}`);
                 dayCell.dataset.dayIndex = String(globalDayIdx);
@@ -11322,8 +13149,11 @@ kanban-plugin: basic
                 bar.setAttribute('draggable', 'true');
                 bar.addEventListener('dragstart', (e) => {
                     this.draggedCard = card;
-                    e.dataTransfer.setData('text/plain', card.id);
-                    e.dataTransfer.effectAllowed = 'move';
+                    const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
+                    try {
+                        e.dataTransfer.setData('text/plain', cardIdStr);
+                        e.dataTransfer.effectAllowed = 'move';
+                    } catch(err) {}
                     bar.classList.add('kt-dragging');
                     document.body.classList.add('kt-is-card-dragging');
                 });
@@ -11810,13 +13640,17 @@ kanban-plugin: basic
         if (dayShift !== 0 && card.dailyTimes && Object.keys(card.dailyTimes).length > 0) {
             const oldKeys = Object.keys(card.dailyTimes);
             for (const oldKey of oldKeys) {
-                const oldDt = card.dailyTimes[oldKey];
+                const oldSlots = Array.isArray(card.dailyTimes[oldKey]) ? card.dailyTimes[oldKey] : [card.dailyTimes[oldKey]];
                 const oldDate = parseDate(oldKey);
                 if (oldDate) {
                     const shiftedDate = new Date(oldDate);
                     shiftedDate.setDate(shiftedDate.getDate() + dayShift);
                     content = this.parser.updateTimeBlock(content, card.lineIndex, oldDate, null, null);
-                    content = this.parser.updateTimeBlock(content, card.lineIndex, shiftedDate, oldDt.timeStart, oldDt.timeEnd);
+                    for (const slot of oldSlots) {
+                        if (slot && slot.timeStart && slot.timeEnd) {
+                            content = this.parser.updateTimeBlock(content, card.lineIndex, shiftedDate, slot.timeStart, slot.timeEnd, null, 'add');
+                        }
+                    }
                 }
             }
         }
@@ -12281,7 +14115,7 @@ kanban-plugin: basic
 
             if (dKeys.length > 0) {
                 for (const dKey of dKeys) {
-                    const dt = c.dailyTimes[dKey];
+                    const slots = Array.isArray(c.dailyTimes[dKey]) ? c.dailyTimes[dKey] : [c.dailyTimes[dKey]];
                     const slotDate = parseDate(dKey);
                     
                     if (slotDate) {
@@ -12290,29 +14124,31 @@ kanban-plugin: basic
                         if (periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) continue;
                     }
 
-                    if (dt.timeStart && dt.timeEnd) {
-                        const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
-                        if (dur > 0) {
-                            const isFutureSlot = slotDate ? startOfDay(slotDate).getTime() > today.getTime() : false;
-                            if (isDone) {
-                                pastMinutes += dur;
-                                doneMinutes += dur;
-                            } else if (isFutureSlot) {
-                                futureMinutes += dur;
-                            } else {
-                                if (isInDev) inDevMinutes += dur;
-                                else backlogMinutes += dur;
-                            }
+                    for (const dt of slots) {
+                        if (dt && dt.timeStart && dt.timeEnd) {
+                            const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                            if (dur > 0) {
+                                const isFutureSlot = slotDate ? startOfDay(slotDate).getTime() > today.getTime() : false;
+                                if (isDone) {
+                                    pastMinutes += dur;
+                                    doneMinutes += dur;
+                                } else if (isFutureSlot) {
+                                    futureMinutes += dur;
+                                } else {
+                                    if (isInDev) inDevMinutes += dur;
+                                    else backlogMinutes += dur;
+                                }
 
-                            cardTimeSessions.push({
-                                cardTitle: c.title,
-                                date: dKey,
-                                timeStart: dt.timeStart,
-                                timeEnd: dt.timeEnd,
-                                durationMinutes: dur,
-                                isFuture: isFutureSlot && !isDone,
-                                isDone
-                            });
+                                cardTimeSessions.push({
+                                    cardTitle: c.title,
+                                    date: dKey,
+                                    timeStart: dt.timeStart,
+                                    timeEnd: dt.timeEnd,
+                                    durationMinutes: dur,
+                                    isFuture: isFutureSlot && !isDone,
+                                    isDone
+                                });
+                            }
                         }
                     }
                 }
@@ -12618,10 +14454,12 @@ kanban-plugin: basic
                 const dKeys = Object.keys(c.dailyTimes || {});
                 if (dKeys.length > 0) {
                     for (const dk of dKeys) {
-                        const dt = c.dailyTimes[dk];
-                        if (dt.timeStart && dt.timeEnd) {
-                            const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
-                            if (dur > 0) taskDurMinutes += dur;
+                        const slots = Array.isArray(c.dailyTimes[dk]) ? c.dailyTimes[dk] : [c.dailyTimes[dk]];
+                        for (const dt of slots) {
+                            if (dt && dt.timeStart && dt.timeEnd) {
+                                const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                                if (dur > 0) taskDurMinutes += dur;
+                            }
                         }
                     }
                 } else if (c.timeStart && c.timeEnd) {
@@ -17849,6 +19687,7 @@ kanban-plugin: basic
         if (!Array.isArray(pData.exams)) pData.exams = [];
         if (!Array.isArray(pData.biomarkers)) pData.biomarkers = [];
         if (!Array.isArray(pData.vaccines)) pData.vaccines = [];
+        if (!Array.isArray(pData.medications)) pData.medications = [];
         return pData;
     }
 
@@ -17978,7 +19817,7 @@ kanban-plugin: basic
             { id: 'overview', label: 'Geral & Diário' },
             { id: 'biomarkers', label: 'Biomarcadores & Exames' },
             { id: 'consultations', label: isPet ? 'Consultas Veterinárias' : 'Histórico Médico & Consultas' },
-            { id: 'mental', label: 'Saúde Mental & Correlações' }
+            { id: 'mental', label: 'Saúde Mental, Diário & Remédios' }
         ];
 
         if (isPet) {
@@ -19106,18 +20945,543 @@ kanban-plugin: basic
     }
 
     // ----------------------------------------------------------
-    // HEALTH: MENTAL HEALTH & CORRELATION ENGINE TAB
+    // HEALTH: MENTAL HEALTH, EMOTIONAL JOURNAL & MEDICATION TAB
     // ----------------------------------------------------------
 
     renderHealthMentalTab(container, profile, profileData) {
-        const card = container.createDiv('kt-health-card');
-        const cardHdr = card.createDiv('kt-health-card-header');
+        const mentalWrap = container.createDiv('kt-health-mental-container');
 
-        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
-        titleGroup.createSpan({ cls: 'kt-health-card-title', text: 'Saúde Mental, Sono & Prevenção de Burnout' });
-        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Cruzamento preditivo de Estresse Diário vs. Horas de Sono:' });
+        if (!Array.isArray(profileData.medications)) profileData.medications = [];
 
-        // 1. Burnout Early Warning Detector
+        // --- TOP KPI STRIP ---
+        const past7Days = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            past7Days.push(d.toISOString().split('T')[0]);
+        }
+
+        let totalMood7 = 0, countMood7 = 0;
+        let totalStress7 = 0, countStress7 = 0;
+        let totalMedsExpected = 0, totalMedsTaken = 0;
+
+        const activeMeds = profileData.medications.filter(m => m.active !== false);
+
+        past7Days.forEach(dStr => {
+            const l = profileData.dailyLogs[dStr];
+            if (l) {
+                if (l.mood) { totalMood7 += l.mood; countMood7++; }
+                if (l.stress) { totalStress7 += l.stress; countStress7++; }
+                if (activeMeds.length > 0) {
+                    totalMedsExpected += activeMeds.length;
+                    const takenCount = (l.medicationsTaken || []).filter(id => activeMeds.some(m => m.id === id)).length;
+                    totalMedsTaken += takenCount;
+                }
+            }
+        });
+
+        const avgMood7 = countMood7 > 0 ? (totalMood7 / countMood7).toFixed(1) : '-';
+        const avgStress7 = countStress7 > 0 ? (totalStress7 / countStress7).toFixed(1) : '-';
+        const medAdherence = totalMedsExpected > 0 ? Math.round((totalMedsTaken / totalMedsExpected) * 100) : null;
+
+        const outOfStockMeds = activeMeds.filter(m => (m.stock || 0) <= 0);
+        const lowStockMeds = activeMeds.filter(m => (m.stock || 0) > 0 && (m.stock || 0) <= (m.stockAlertThreshold || 5));
+
+        // 1. KPI Cards Grid
+        const kpiGrid = mentalWrap.createDiv('kt-health-kpi-grid');
+
+        // Mood KPI
+        const moodKpi = kpiGrid.createDiv('kt-health-kpi-card');
+        moodKpi.createSpan({ cls: 'kt-health-kpi-label', text: 'Humor Médio (7 dias)' });
+        let moodEmoji = '😐';
+        if (avgMood7 !== '-') {
+            const mVal = parseFloat(avgMood7);
+            if (mVal >= 4.2) moodEmoji = '😄';
+            else if (mVal >= 3.5) moodEmoji = '😊';
+            else if (mVal >= 2.5) moodEmoji = '😐';
+            else if (mVal >= 1.8) moodEmoji = '😟';
+            else moodEmoji = '😫';
+        }
+        moodKpi.createSpan({ cls: 'kt-health-kpi-val', text: avgMood7 !== '-' ? `${moodEmoji} ${avgMood7} / 5` : 'Sem dados' });
+        moodKpi.createSpan({ cls: 'kt-health-kpi-meta', text: 'Equilíbrio emocional recente' });
+
+        // Stress KPI
+        const stressKpi = kpiGrid.createDiv('kt-health-kpi-card');
+        stressKpi.createSpan({ cls: 'kt-health-kpi-label', text: 'Estresse Médio (7 dias)' });
+        stressKpi.createSpan({ cls: 'kt-health-kpi-val', text: avgStress7 !== '-' ? `${avgStress7} / 5` : 'Sem dados' });
+        stressKpi.createSpan({ cls: 'kt-health-kpi-meta', text: parseFloat(avgStress7) >= 3.5 ? '⚠️ Nível sob atenção' : 'Dentro do controle' });
+
+        // Adherence KPI
+        const adhKpi = kpiGrid.createDiv('kt-health-kpi-card');
+        adhKpi.createSpan({ cls: 'kt-health-kpi-label', text: 'Adesão a Remédios (7d)' });
+        adhKpi.createSpan({ cls: 'kt-health-kpi-val', text: medAdherence !== null ? `${medAdherence}%` : (activeMeds.length > 0 ? '0%' : 'Sem remédios') });
+        adhKpi.createSpan({ cls: 'kt-health-kpi-meta', text: activeMeds.length > 0 ? `${activeMeds.length} ativos cadastrados` : 'Nenhum cadastrado' });
+
+        // Stock Alerts KPI
+        const stockKpi = kpiGrid.createDiv('kt-health-kpi-card');
+        stockKpi.createSpan({ cls: 'kt-health-kpi-label', text: 'Alertas de Estoque' });
+        if (outOfStockMeds.length > 0) {
+            stockKpi.createSpan({ cls: 'kt-health-kpi-val', text: `🔴 ${outOfStockMeds.length} Acabou!`, style: 'color:#ef4444;' });
+            stockKpi.createSpan({ cls: 'kt-health-kpi-meta', text: outOfStockMeds.map(m => m.name).join(', ') });
+        } else if (lowStockMeds.length > 0) {
+            stockKpi.createSpan({ cls: 'kt-health-kpi-val', text: `🟡 ${lowStockMeds.length} Estoque Baixo`, style: 'color:#eab308;' });
+            stockKpi.createSpan({ cls: 'kt-health-kpi-meta', text: lowStockMeds.map(m => m.name).join(', ') });
+        } else {
+            stockKpi.createSpan({ cls: 'kt-health-kpi-val', text: '🟢 Em Dia', style: 'color:#22c55e;' });
+            stockKpi.createSpan({ cls: 'kt-health-kpi-meta', text: 'Todos os medicamentos abastecidos' });
+        }
+
+        // Top Action Buttons
+        const topActions = mentalWrap.createDiv({ cls: 'kt-fin-top-actions', style: 'margin-top:-6px;' });
+        
+        const newEntryBtn = topActions.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Nova Entrada no Diário' });
+        newEntryBtn.onclick = () => {
+            new HealthJournalEntryModal(this.app, profile, profileData, null, async (targetDate, logData) => {
+                profileData.dailyLogs[targetDate] = Object.assign(profileData.dailyLogs[targetDate] || {}, logData);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Entrada de diário (${targetDate}) salva!`);
+            }).open();
+        };
+
+        const addMedBtn = topActions.createEl('button', { cls: 'kt-fin-add-btn', text: '+ Cadastrar Medicamento' });
+        addMedBtn.onclick = () => {
+            new HealthMedicationModal(this.app, profile, null, async (savedMed) => {
+                profileData.medications.push(savedMed);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Medicamento "${savedMed.name}" cadastrado!`);
+            }).open();
+        };
+
+        // ----------------------------------------------------
+        // SECTION 1: QUICK CHECK-IN & JOURNAL DO DIA
+        // ----------------------------------------------------
+        const todayStr = new Date().toISOString().split('T')[0];
+        if (!profileData.dailyLogs[todayStr]) {
+            profileData.dailyLogs[todayStr] = {
+                mood: 3,
+                stress: 2,
+                energy: 3,
+                sleepHours: undefined,
+                journal: '',
+                emotions: [],
+                medicationsTaken: []
+            };
+        }
+        const todayLog = profileData.dailyLogs[todayStr];
+        if (!Array.isArray(todayLog.emotions)) todayLog.emotions = [];
+        if (!Array.isArray(todayLog.medicationsTaken)) todayLog.medicationsTaken = [];
+
+        const journalBox = mentalWrap.createDiv('kt-health-journal-box');
+
+        const jHdr = journalBox.createDiv('kt-health-section-hdr');
+        const jHdrLeft = jHdr.createDiv();
+        jHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📖 Diário Emocional & Check-in do Dia' });
+        jHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Registre como você se sentiu, seus pensamentos, gratidão e marque suas doses diárias:' });
+
+        const dateBadge = jHdr.createDiv('kt-health-date-selector');
+        dateBadge.createSpan({ text: '📅 Data:' });
+        const checkinDateInput = dateBadge.createEl('input', { type: 'date', value: todayStr });
+
+        let activeCheckinDate = todayStr;
+        let activeLog = todayLog;
+
+        const dynamicFormWrap = journalBox.createDiv();
+
+        const renderCheckinForm = () => {
+            dynamicFormWrap.innerHTML = '';
+            if (!profileData.dailyLogs[activeCheckinDate]) {
+                profileData.dailyLogs[activeCheckinDate] = {
+                    mood: 3,
+                    stress: 2,
+                    energy: 3,
+                    journal: '',
+                    emotions: [],
+                    medicationsTaken: []
+                };
+            }
+            activeLog = profileData.dailyLogs[activeCheckinDate];
+            if (!Array.isArray(activeLog.emotions)) activeLog.emotions = [];
+            if (!Array.isArray(activeLog.medicationsTaken)) activeLog.medicationsTaken = [];
+
+            // 1. Mood
+            const moodWrap = dynamicFormWrap.createDiv({ style: 'margin-bottom:14px;' });
+            moodWrap.createEl('div', { cls: 'kt-health-scale-label', text: '1. Como você se sentiu hoje? (Humor)' });
+            const moodGroup = moodWrap.createDiv('kt-health-mood-group');
+            const moodOptions = [
+                { score: 5, emoji: '😄', text: 'Radiante' },
+                { score: 4, emoji: '😊', text: 'Bom / Calmo' },
+                { score: 3, emoji: '😐', text: 'Neutro' },
+                { score: 2, emoji: '😟', text: 'Ansioso / Baixo' },
+                { score: 1, emoji: '😫', text: 'Esgotado / Mal' }
+            ];
+            moodOptions.forEach(opt => {
+                const isSel = (activeLog.mood || 3) === opt.score;
+                const btn = moodGroup.createDiv(`kt-health-mood-btn ${isSel ? 'is-selected' : ''}`);
+                btn.createDiv({ cls: 'kt-health-mood-emoji', text: opt.emoji });
+                btn.createDiv({ cls: 'kt-health-mood-text', text: opt.text });
+                btn.onclick = async () => {
+                    activeLog.mood = opt.score;
+                    await this.plugin.saveSettings();
+                    renderCheckinForm();
+                };
+            });
+
+            // 2. Scales: Stress & Energy
+            const scalesGrid = dynamicFormWrap.createDiv('kt-health-scales-grid');
+            scalesGrid.style.marginBottom = '14px';
+
+            // Stress
+            const stressItem = scalesGrid.createDiv('kt-health-scale-item');
+            const stressLbl = stressItem.createDiv('kt-health-scale-label');
+            stressLbl.createSpan({ text: 'Nível de Estresse:' });
+            const stressNames = ['', 'Relaxado', 'Sob Controle', 'Moderado', 'Alto', 'Crítico'];
+            stressLbl.createSpan({ cls: 'kt-health-scale-val-badge', text: `${activeLog.stress || 2}/5 (${stressNames[activeLog.stress || 2]})` });
+            
+            const stressBtns = stressItem.createDiv('kt-health-scale-btns');
+            [1, 2, 3, 4, 5].forEach(s => {
+                const btn = stressBtns.createEl('button', {
+                    cls: `kt-health-scale-btn ${(activeLog.stress || 2) === s ? 'is-selected' : ''}`,
+                    text: String(s)
+                });
+                btn.onclick = async () => {
+                    activeLog.stress = s;
+                    await this.plugin.saveSettings();
+                    renderCheckinForm();
+                };
+            });
+
+            // Energy
+            const energyItem = scalesGrid.createDiv('kt-health-scale-item');
+            const energyLbl = energyItem.createDiv('kt-health-scale-label');
+            energyLbl.createSpan({ text: 'Nível de Energia / Foco:' });
+            const energyNames = ['', 'Esgotado', 'Baixa', 'Normal', 'Alta', 'No Topo'];
+            energyLbl.createSpan({ cls: 'kt-health-scale-val-badge', text: `${activeLog.energy || 3}/5 (${energyNames[activeLog.energy || 3]})` });
+
+            const energyBtns = energyItem.createDiv('kt-health-scale-btns');
+            [1, 2, 3, 4, 5].forEach(e => {
+                const btn = energyBtns.createEl('button', {
+                    cls: `kt-health-scale-btn ${(activeLog.energy || 3) === e ? 'is-selected' : ''}`,
+                    text: String(e)
+                });
+                btn.onclick = async () => {
+                    activeLog.energy = e;
+                    await this.plugin.saveSettings();
+                    renderCheckinForm();
+                };
+            });
+
+            // 3. Emotion Tags
+            const tagsWrap = dynamicFormWrap.createDiv('kt-health-tags-wrap');
+            tagsWrap.style.marginBottom = '14px';
+            tagsWrap.createEl('div', { cls: 'kt-health-scale-label', text: 'Tags & Sentimentos do Dia:' });
+            const tagsList = tagsWrap.createDiv('kt-health-tags-list');
+            const defaultTags = ['#Grato', '#Produtivo', '#Ansioso', '#Focado', '#Cansado', '#Trabalho', '#Estudos', '#SonoRuim', '#Exercício', '#Família', '#Paz', '#Sobrecarga'];
+            const activeEmotions = new Set(activeLog.emotions || []);
+            defaultTags.forEach(t => {
+                const isAct = activeEmotions.has(t);
+                const chip = tagsList.createDiv(`kt-health-emotion-chip ${isAct ? 'is-active' : ''}`);
+                chip.setText(t);
+                chip.onclick = async () => {
+                    if (activeEmotions.has(t)) activeEmotions.delete(t);
+                    else activeEmotions.add(t);
+                    activeLog.emotions = Array.from(activeEmotions);
+                    await this.plugin.saveSettings();
+                    renderCheckinForm();
+                };
+            });
+
+            // 4. Daily Medication Checklist ("Tomei hoje?")
+            if (activeMeds.length > 0) {
+                const medCheckWrap = dynamicFormWrap.createDiv('kt-health-med-checklist-wrap');
+                medCheckWrap.style.marginBottom = '14px';
+                const medCheckHdr = medCheckWrap.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center;' });
+                medCheckHdr.createEl('div', { cls: 'kt-health-scale-label', text: '💊 Remédios do Dia — Você já tomou?' });
+                
+                const takenList = new Set(activeLog.medicationsTaken || []);
+                const medListDiv = medCheckWrap.createDiv('kt-health-med-check-list');
+
+                activeMeds.forEach(m => {
+                    const isTaken = takenList.has(m.id);
+                    const isOutOfStock = (m.stock || 0) <= 0;
+                    const isLowStock = !isOutOfStock && (m.stock || 0) <= (m.stockAlertThreshold || 5);
+
+                    const checkCard = medListDiv.createDiv(`kt-health-med-check-card ${isTaken ? 'is-taken' : ''}`);
+                    const info = checkCard.createDiv('kt-health-med-check-info');
+                    info.createDiv({ cls: 'kt-health-med-check-name', text: `${m.name} ${m.dosage || ''}` });
+                    
+                    let stockMetaText = `${m.timeOfDay || 'Manhã'} • Estoque: ${m.stock || 0} ${m.unit || 'cps'}`;
+                    if (isOutOfStock) stockMetaText += ' 🔴 ACABOU!';
+                    else if (isLowStock) stockMetaText += ' 🟡 Estoque Baixo!';
+                    info.createDiv({ cls: 'kt-health-med-check-meta', text: stockMetaText });
+
+                    const toggleBtn = checkCard.createEl('button', {
+                        cls: `kt-health-med-toggle-btn ${isTaken ? 'is-taken' : ''}`,
+                        text: isTaken ? '✓ Tomado' : '○ Não Tomado'
+                    });
+
+                    toggleBtn.onclick = async () => {
+                        if (isTaken) {
+                            takenList.delete(m.id);
+                            m.stock = (m.stock || 0) + 1;
+                            new obsidian.Notice(`↩ ${m.name} desmarcado (+1 unidade no estoque).`);
+                        } else {
+                            takenList.add(m.id);
+                            if (m.stock > 0) {
+                                m.stock = m.stock - 1;
+                            }
+                            new obsidian.Notice(`✓ ${m.name} marcado como tomado (-1 no estoque).`);
+                        }
+                        activeLog.medicationsTaken = Array.from(takenList);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    };
+                });
+            }
+
+            // 5. Journal Reflection Textarea
+            const jInputWrap = dynamicFormWrap.createDiv('kt-health-journal-input-wrap');
+            jInputWrap.createEl('div', { cls: 'kt-health-scale-label', text: '✍️ Pedacinho para Escrever / Reflexão do Dia:' });
+            const jTextarea = jInputWrap.createEl('textarea', { cls: 'kt-health-journal-textarea' });
+            jTextarea.value = activeLog.journal || activeLog.notes || '';
+            jTextarea.placeholder = 'Como foi seu dia? O que aconteceu, pensamentos, vitórias, preocupações ou coisas pelas quais você é grato...';
+
+            const saveActionRow = dynamicFormWrap.createDiv({ style: 'display:flex; justify-content:flex-end; gap:8px; margin-top:10px;' });
+            const saveJBtn = saveActionRow.createEl('button', { cls: 'mod-cta', text: '💾 Salvar Journal & Check-in' });
+            saveJBtn.onclick = async () => {
+                activeLog.journal = jTextarea.value.trim();
+                activeLog.notes = jTextarea.value.trim();
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✓ Diário de ${activeCheckinDate} salvo com sucesso!`);
+            };
+        };
+
+        checkinDateInput.onchange = () => {
+            if (checkinDateInput.value) {
+                activeCheckinDate = checkinDateInput.value;
+                renderCheckinForm();
+            }
+        };
+
+        renderCheckinForm();
+
+        // ----------------------------------------------------
+        // SECTION 2: CENTRAL DE MEDICAMENTOS & ESTOQUE
+        // ----------------------------------------------------
+        const medSection = mentalWrap.createDiv('kt-health-card');
+        const medHdr = medSection.createDiv('kt-health-section-hdr');
+        const medHdrLeft = medHdr.createDiv();
+        medHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '💊 Tracker de Medicamentos, Suplementos & Estoque' });
+        medHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Acompanhe a dosagem diária, frequência e o controle de frascos/comprimidos restantes:' });
+
+        const medHdrActions = medHdr.createDiv({ style: 'display:flex; gap:8px;' });
+        const addMedBtn2 = medHdrActions.createEl('button', { cls: 'kt-fin-smart-btn', text: '+ Novo Medicamento' });
+        addMedBtn2.onclick = () => addMedBtn.click();
+
+        if (profileData.medications.length === 0) {
+            const emptyBox = medSection.createDiv({ style: 'text-align:center; padding:24px; color:var(--text-muted); font-size:13px;' });
+            emptyBox.createEl('div', { text: 'Nenhum medicamento ou suplemento cadastrado ainda.' });
+            const btn = emptyBox.createEl('button', { cls: 'mod-cta', text: '+ Cadastrar Primeiro Medicamento', style: 'margin-top:10px;' });
+            btn.onclick = () => addMedBtn.click();
+        } else {
+            const medGrid = medSection.createDiv('kt-health-med-grid');
+            profileData.medications.forEach(m => {
+                const isOutOfStock = (m.stock || 0) <= 0;
+                const isLowStock = !isOutOfStock && (m.stock || 0) <= (m.stockAlertThreshold || 5);
+                const card = medGrid.createDiv('kt-health-med-card');
+
+                // Header
+                const cHdr = card.createDiv('kt-health-med-card-hdr');
+                const nameGrp = cHdr.createDiv('kt-health-med-name-group');
+                nameGrp.createDiv({ cls: 'kt-health-med-name', text: m.name });
+                nameGrp.createDiv({ cls: 'kt-health-med-dose-pill', text: m.dosage || 'Sem dosagem especificada' });
+
+                // Category Badge
+                const catBadge = cHdr.createSpan({ cls: 'kt-health-badge is-pending', text: m.category || 'Medicamento' });
+                if (m.category === 'suplemento') {
+                    catBadge.style.color = '#a855f7';
+                    catBadge.style.borderColor = 'rgba(168, 85, 247, 0.3)';
+                    catBadge.style.background = 'rgba(168, 85, 247, 0.1)';
+                } else if (m.category === 'vitamina') {
+                    catBadge.style.color = '#38bdf8';
+                    catBadge.style.borderColor = 'rgba(56, 189, 248, 0.3)';
+                    catBadge.style.background = 'rgba(56, 189, 248, 0.1)';
+                }
+
+                // Info row
+                const infoRow = card.createDiv('kt-health-med-meta-row');
+                infoRow.createSpan({ text: `⏰ ${m.timeOfDay || 'Manhã'}` });
+                if (m.notes) {
+                    infoRow.createSpan({ text: `📝 ${m.notes}`, style: 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;' });
+                }
+
+                // Stock box
+                const stockBox = card.createDiv('kt-health-med-stock-box');
+                const stockRow = stockBox.createDiv('kt-health-med-stock-row');
+                stockRow.createDiv({ cls: 'kt-health-med-stock-text', text: `Restam ${m.stock || 0} ${m.unit || 'comprimidos'}` });
+
+                if (isOutOfStock) {
+                    stockRow.createDiv({ cls: 'kt-health-med-stock-badge is-out', text: '🔴 ACABOU' });
+                } else if (isLowStock) {
+                    stockRow.createDiv({ cls: 'kt-health-med-stock-badge is-low', text: '🟡 ESTOQUE BAIXO' });
+                } else {
+                    stockRow.createDiv({ cls: 'kt-health-med-stock-badge is-ok', text: '🟢 EM DIA' });
+                }
+
+                // Progress bar
+                const pBar = stockBox.createDiv('kt-health-med-stock-bar');
+                const pFill = pBar.createDiv('kt-health-med-stock-fill');
+                const pct = Math.min(100, Math.max(0, ((m.stock || 0) / 30) * 100));
+                pFill.style.width = `${pct}%`;
+                pFill.style.background = isOutOfStock ? '#ef4444' : isLowStock ? '#eab308' : '#22c55e';
+
+                // Actions
+                const actions = card.createDiv('kt-health-med-card-actions');
+                
+                const refillBtn = actions.createEl('button', { cls: 'kt-fin-smart-btn', text: '+ Repor' });
+                refillBtn.onclick = () => {
+                    new HealthMedicationRefillModal(this.app, m, async (addQty) => {
+                        m.stock = (m.stock || 0) + addQty;
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ +${addQty} adicionados ao estoque de ${m.name}!`);
+                    }).open();
+                };
+
+                const rightBtns = actions.createDiv({ style: 'display:flex; gap:6px;' });
+                const editBtn = rightBtns.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+                editBtn.onclick = () => {
+                    new HealthMedicationModal(this.app, profile, m, async (saved) => {
+                        const idx = profileData.medications.findIndex(it => it.id === saved.id);
+                        if (idx >= 0) profileData.medications[idx] = saved;
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ ${saved.name} atualizado!`);
+                    }, async (delId) => {
+                        profileData.medications = profileData.medications.filter(it => it.id !== delId);
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice('✓ Medicamento removido.');
+                    }).open();
+                };
+
+                const delBtn = rightBtns.createEl('button', { cls: 'kt-health-btn-minimal-danger', text: '✕' });
+                delBtn.onclick = async () => {
+                    profileData.medications = profileData.medications.filter(it => it.id !== m.id);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`✓ ${m.name} excluído.`);
+                };
+            });
+        }
+
+        // ----------------------------------------------------
+        // SECTION 3: LINHA DO TEMPO & HISTÓRICO DO DIÁRIO (FEED)
+        // ----------------------------------------------------
+        const feedSection = mentalWrap.createDiv('kt-health-card');
+        const feedHdr = feedSection.createDiv('kt-health-section-hdr');
+        const feedHdrLeft = feedHdr.createDiv();
+        feedHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📜 Linha do Tempo & Entradas do Diário' });
+        feedHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Histórico de reflexões, humor diário e medicamentos tomados:' });
+
+        const entries = Object.entries(profileData.dailyLogs || {})
+            .filter(([date, log]) => log && (log.journal || log.notes || log.mood || log.stress || (log.medicationsTaken && log.medicationsTaken.length > 0)))
+            .sort(([dA], [dB]) => dB.localeCompare(dA));
+
+        if (entries.length === 0) {
+            feedSection.createDiv({ text: 'Nenhum registro no diário ainda. Escreva seu primeiro registro acima!', style: 'color:var(--text-muted); font-size:13px; padding:16px 0;' });
+        } else {
+            const feedList = feedSection.createDiv('kt-health-journal-feed');
+            entries.slice(0, 15).forEach(([dStr, log]) => {
+                const card = feedList.createDiv('kt-health-journal-entry-card');
+
+                const hdr = card.createDiv('kt-health-journal-entry-hdr');
+                
+                const dateParts = dStr.split('-');
+                const dateObj = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
+                const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+                const weekdayStr = weekdays[dateObj.getDay()] || '';
+
+                const dateBadge = hdr.createDiv('kt-health-journal-date-badge');
+                dateBadge.createSpan({ text: `📅 ${dStr} (${weekdayStr})` });
+
+                const pills = hdr.createDiv('kt-health-journal-pills');
+                
+                if (log.mood) {
+                    const moodEmojiMap = { 5: '😄 Radiante', 4: '😊 Bom', 3: '😐 Neutro', 2: '😟 Ansioso', 1: '😫 Esgotado' };
+                    pills.createSpan({ cls: `kt-health-journal-pill is-mood-${log.mood}`, text: `Humor: ${moodEmojiMap[log.mood] || log.mood}` });
+                }
+
+                if (log.stress) {
+                    pills.createSpan({ cls: 'kt-health-journal-pill', text: `Estresse: ${log.stress}/5` });
+                }
+
+                if (log.sleepHours) {
+                    pills.createSpan({ cls: 'kt-health-journal-pill', text: `😴 ${log.sleepHours}h sono` });
+                }
+
+                const editActions = hdr.createDiv({ style: 'display:flex; gap:6px;' });
+                const editEntryBtn = editActions.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+                editEntryBtn.onclick = () => {
+                    new HealthJournalEntryModal(this.app, profile, profileData, dStr, async (targetDate, updatedLog) => {
+                        profileData.dailyLogs[targetDate] = Object.assign(profileData.dailyLogs[targetDate] || {}, updatedLog);
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Registro de ${targetDate} atualizado!`);
+                    }, async (delDate) => {
+                        delete profileData.dailyLogs[delDate];
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Registro de ${delDate} removido.`);
+                    }).open();
+                };
+
+                const delEntryBtn = editActions.createEl('button', { cls: 'kt-health-btn-minimal-danger', text: '✕' });
+                delEntryBtn.onclick = async () => {
+                    delete profileData.dailyLogs[dStr];
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`✓ Entrada de ${dStr} excluída.`);
+                };
+
+                if (Array.isArray(log.emotions) && log.emotions.length > 0) {
+                    const tagRow = card.createDiv('kt-health-tags-list');
+                    log.emotions.forEach(t => {
+                        const ch = tagRow.createDiv('kt-health-emotion-chip is-active');
+                        ch.setText(t);
+                        ch.style.cursor = 'default';
+                    });
+                }
+
+                if (log.journal || log.notes) {
+                    const quoteBox = card.createDiv('kt-health-journal-quote');
+                    quoteBox.setText(log.journal || log.notes);
+                }
+
+                if (Array.isArray(log.medicationsTaken) && log.medicationsTaken.length > 0) {
+                    const medsRow = card.createDiv('kt-health-journal-meds-taken');
+                    medsRow.createSpan({ text: '💊 Remédios Tomados:' });
+                    log.medicationsTaken.forEach(mId => {
+                        const mObj = (profileData.medications || []).find(it => it.id === mId);
+                        const name = mObj ? `${mObj.name} ${mObj.dosage || ''}` : 'Medicamento';
+                        medsRow.createSpan({ cls: 'kt-health-journal-med-chip', text: `✓ ${name}` });
+                    });
+                }
+            });
+        }
+
+        // ----------------------------------------------------
+        // SECTION 4: ANALYTICS & CORRELAÇÃO DE SAÚDE MENTAL
+        // ----------------------------------------------------
+        const analyticsSection = mentalWrap.createDiv('kt-health-card');
+        const anaHdr = analyticsSection.createDiv('kt-health-section-hdr');
+        const anaHdrLeft = anaHdr.createDiv();
+        anaHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📊 Gráficos de Humor, Estresse & Prevenção de Burnout' });
+        anaHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Cruzamento temporal de Humor vs. Estresse Diário vs. Horas de Sono:' });
+
+        // Burnout Detector
         const recentDates = [];
         for (let i = 0; i < 14; i++) {
             const d = new Date();
@@ -19125,9 +21489,7 @@ kanban-plugin: basic
             recentDates.push(d.toISOString().split('T')[0]);
         }
 
-        let consecutiveStress = 0;
         let highStressLowSleepDays = 0;
-
         recentDates.forEach(dStr => {
             const l = profileData.dailyLogs[dStr];
             if (l) {
@@ -19138,59 +21500,27 @@ kanban-plugin: basic
         });
 
         if (highStressLowSleepDays >= 3) {
-            const banner = card.createDiv('kt-health-burnout-banner');
+            const banner = analyticsSection.createDiv('kt-health-burnout-banner');
+            banner.style.marginBottom = '12px';
             const bLeft = banner.createDiv();
-            bLeft.createDiv({ cls: 'kt-health-burnout-title', text: 'Atenção Preventiva: Risco de Sobrecarga / Burnout' });
-            bLeft.createDiv({ cls: 'kt-health-burnout-desc', text: `Detectados ${highStressLowSleepDays} dias recentes com estresse elevado (≥ 4) associados a sono insuficiente (< 6.5h). Considere pausas e ajuste de prazos.` });
+            bLeft.createDiv({ cls: 'kt-health-burnout-title', text: '⚠️ Atenção Preventiva: Risco de Sobrecarga / Burnout' });
+            bLeft.createDiv({ cls: 'kt-health-burnout-desc', text: `Detectados ${highStressLowSleepDays} dias recentes com estresse elevado (≥ 4) associados a sono insuficiente (< 6.5h). Considere pausas e ajuste de prioridades.` });
         }
 
-        // 2. Dual-Axis Correlation Chart (Stress vs Sleep)
-        this.renderHealthMentalCorrelationChart(card, profile, profileData);
-
-        // 3. Insights Cards Grid
-        const insightsGrid = card.createDiv('kt-health-kpi-grid');
-        insightsGrid.style.marginTop = '12px';
-
-        let sleepHighStress = 0, countHighStress = 0;
-        let sleepLowStress = 0, countLowStress = 0;
-
-        Object.values(profileData.dailyLogs).forEach(l => {
-            if (l.sleepHours) {
-                if (l.stress >= 4) {
-                    sleepHighStress += l.sleepHours;
-                    countHighStress++;
-                } else if (l.stress <= 2) {
-                    sleepLowStress += l.sleepHours;
-                    countLowStress++;
-                }
-            }
-        });
-
-        const avgSleepHighStress = countHighStress > 0 ? (sleepHighStress / countHighStress).toFixed(1) : '-';
-        const avgSleepLowStress = countLowStress > 0 ? (sleepLowStress / countLowStress).toFixed(1) : '-';
-
-        const ins1 = insightsGrid.createDiv('kt-health-kpi-card');
-        ins1.createSpan({ cls: 'kt-health-kpi-label', text: 'Sono em Dias de Alto Estresse' });
-        ins1.createSpan({ cls: 'kt-health-kpi-val', text: avgSleepHighStress !== '-' ? `${avgSleepHighStress}h / noite` : 'Sem registros' });
-        ins1.createSpan({ cls: 'kt-health-kpi-meta', text: 'Média de descanso sob pressão' });
-
-        const ins2 = insightsGrid.createDiv('kt-health-kpi-card');
-        ins2.createSpan({ cls: 'kt-health-kpi-label', text: 'Sono em Dias Calmos / Equilibrados' });
-        ins2.createSpan({ cls: 'kt-health-kpi-val', text: avgSleepLowStress !== '-' ? `${avgSleepLowStress}h / noite` : 'Sem registros' });
-        ins2.createSpan({ cls: 'kt-health-kpi-meta', text: 'Média de descanso em dias tranquilos' });
+        this.renderHealthMentalCorrelationChart(analyticsSection, profile, profileData);
     }
 
     renderHealthMentalCorrelationChart(container, profile, profileData) {
         const chartWrap = container.createDiv('kt-health-chart-wrap');
         const svgNS = 'http://www.w3.org/2000/svg';
         const svg = document.createElementNS(svgNS, 'svg');
-        svg.setAttribute('viewBox', '0 0 1000 260');
+        svg.setAttribute('viewBox', '0 0 1000 270');
         svg.classList.add('kt-health-chart-svg');
 
         const padX = 50;
-        const padY = 30;
+        const padY = 40;
         const chartW = 900;
-        const chartH = 190;
+        const chartH = 180;
         const bottomY = padY + chartH;
 
         // Last 14 days series
@@ -19203,14 +21533,15 @@ kanban-plugin: basic
             days.push({
                 date: dStr,
                 label: `${d.getDate()}/${d.getMonth() + 1}`,
+                mood: log.mood || 0,
                 stress: log.stress || 0,
                 sleep: log.sleepHours || 0
             });
         }
 
         // Background Grid
-        for (let g = 0; g <= 3; g++) {
-            const gy = padY + (g / 3) * chartH;
+        for (let g = 0; g <= 4; g++) {
+            const gy = padY + (g / 4) * chartH;
             const gLine = document.createElementNS(svgNS, 'line');
             gLine.setAttribute('x1', String(padX));
             gLine.setAttribute('y1', String(gy));
@@ -19221,16 +21552,33 @@ kanban-plugin: basic
         }
 
         const getX = (idx) => padX + (idx / (days.length - 1)) * chartW;
-        const getStressY = (s) => bottomY - (s / 5) * chartH;
+        const getScoreY = (s) => bottomY - (s / 5) * chartH;
         const getSleepY = (h) => bottomY - (Math.min(12, h) / 12) * chartH;
 
-        // Line 1: Stress Line (Red/Coral)
+        // Line 1: Mood Line (Green)
+        const activeMood = days.filter(d => d.mood > 0);
+        if (activeMood.length >= 2) {
+            let pStr = '';
+            days.forEach((d, idx) => {
+                if (d.mood > 0) {
+                    pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getScoreY(d.mood).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getScoreY(d.mood).toFixed(1)}`;
+                }
+            });
+            const pEl = document.createElementNS(svgNS, 'path');
+            pEl.setAttribute('d', pStr);
+            pEl.setAttribute('fill', 'none');
+            pEl.setAttribute('stroke', '#22c55e');
+            pEl.setAttribute('stroke-width', '2.5');
+            svg.appendChild(pEl);
+        }
+
+        // Line 2: Stress Line (Red/Coral)
         const activeStress = days.filter(d => d.stress > 0);
         if (activeStress.length >= 2) {
             let pStr = '';
             days.forEach((d, idx) => {
                 if (d.stress > 0) {
-                    pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getStressY(d.stress).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getStressY(d.stress).toFixed(1)}`;
+                    pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getScoreY(d.stress).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getScoreY(d.stress).toFixed(1)}`;
                 }
             });
             const pEl = document.createElementNS(svgNS, 'path');
@@ -19241,7 +21589,7 @@ kanban-plugin: basic
             svg.appendChild(pEl);
         }
 
-        // Line 2: Sleep Line (Sky Blue)
+        // Line 3: Sleep Line (Sky Blue Dashed)
         const activeSleep = days.filter(d => d.sleep > 0);
         if (activeSleep.length >= 2) {
             let pStr = '';
@@ -19254,26 +21602,35 @@ kanban-plugin: basic
             pEl.setAttribute('d', pStr);
             pEl.setAttribute('fill', 'none');
             pEl.setAttribute('stroke', '#38bdf8');
-            pEl.setAttribute('stroke-width', '2.5');
+            pEl.setAttribute('stroke-width', '2');
             pEl.setAttribute('stroke-dasharray', '5 3');
             svg.appendChild(pEl);
         }
 
         // Legend
+        const legMood = document.createElementNS(svgNS, 'text');
+        legMood.setAttribute('x', '60');
+        legMood.setAttribute('y', '20');
+        legMood.setAttribute('fill', '#22c55e');
+        legMood.setAttribute('font-size', '11.5');
+        legMood.setAttribute('font-weight', '600');
+        legMood.textContent = '● — Humor (1 a 5)';
+        svg.appendChild(legMood);
+
         const legStress = document.createElementNS(svgNS, 'text');
-        legStress.setAttribute('x', '60');
+        legStress.setAttribute('x', '200');
         legStress.setAttribute('y', '20');
         legStress.setAttribute('fill', '#ef4444');
-        legStress.setAttribute('font-size', '11');
+        legStress.setAttribute('font-size', '11.5');
         legStress.setAttribute('font-weight', '600');
-        legStress.textContent = '— Estresse (1 a 5)';
+        legStress.textContent = '● — Estresse (1 a 5)';
         svg.appendChild(legStress);
 
         const legSleep = document.createElementNS(svgNS, 'text');
-        legSleep.setAttribute('x', '200');
+        legSleep.setAttribute('x', '350');
         legSleep.setAttribute('y', '20');
         legSleep.setAttribute('fill', '#38bdf8');
-        legSleep.setAttribute('font-size', '11');
+        legSleep.setAttribute('font-size', '11.5');
         legSleep.setAttribute('font-weight', '600');
         legSleep.textContent = '- - - Horas de Sono (0 a 12h)';
         svg.appendChild(legSleep);
@@ -19285,18 +21642,28 @@ kanban-plugin: basic
             // X Label
             const lbl = document.createElementNS(svgNS, 'text');
             lbl.setAttribute('x', String(cx));
-            lbl.setAttribute('y', String(bottomY + 16));
+            lbl.setAttribute('y', String(bottomY + 18));
             lbl.setAttribute('text-anchor', 'middle');
             lbl.setAttribute('fill', 'var(--text-muted)');
             lbl.setAttribute('font-size', '10.5');
             lbl.textContent = d.label;
             svg.appendChild(lbl);
 
+            // Mood Dot
+            if (d.mood > 0) {
+                const c = document.createElementNS(svgNS, 'circle');
+                c.setAttribute('cx', String(cx));
+                c.setAttribute('cy', String(getScoreY(d.mood)));
+                c.setAttribute('r', '4');
+                c.setAttribute('fill', '#22c55e');
+                svg.appendChild(c);
+            }
+
             // Stress Dot
             if (d.stress > 0) {
                 const c = document.createElementNS(svgNS, 'circle');
                 c.setAttribute('cx', String(cx));
-                c.setAttribute('cy', String(getStressY(d.stress)));
+                c.setAttribute('cy', String(getScoreY(d.stress)));
                 c.setAttribute('r', '4');
                 c.setAttribute('fill', '#ef4444');
                 svg.appendChild(c);
@@ -19307,7 +21674,7 @@ kanban-plugin: basic
                 const c = document.createElementNS(svgNS, 'circle');
                 c.setAttribute('cx', String(cx));
                 c.setAttribute('cy', String(getSleepY(d.sleep)));
-                c.setAttribute('r', '4');
+                c.setAttribute('r', '3.5');
                 c.setAttribute('fill', '#38bdf8');
                 svg.appendChild(c);
             }
@@ -19951,6 +22318,8 @@ kanban-plugin: basic
         };
         input.addEventListener('input', autoResize);
 
+        renderHashtagSuggestionsBar(form, input, this.app, this.plugin);
+
         const btnRow = form.createDiv('kt-add-card-actions');
         const confirmBtn = btnRow.createEl('button', {
             cls: 'kt-btn-confirm-add',
@@ -19992,6 +22361,18 @@ kanban-plugin: basic
         const submitForm = async () => {
             const val = input.value.trim();
             if (val) {
+                if (this.plugin && this.plugin.settings) {
+                    const tagMatches = val.match(/#([\w-]+)/g);
+                    if (tagMatches) {
+                        if (!this.plugin.settings.recentTags) this.plugin.settings.recentTags = {};
+                        tagMatches.forEach(tm => {
+                            const clean = tm.replace(/^#/, '').toLowerCase().trim();
+                            if (clean) this.plugin.settings.recentTags[clean] = Date.now();
+                        });
+                        this.plugin.saveSettings().catch(() => {});
+                    }
+                }
+
                 await this.addCardToColumn(colName, val);
                 input.value = '';
                 autoResize();
@@ -20142,8 +22523,11 @@ kanban-plugin: basic
 
         cardEl.addEventListener('dragstart', (e) => {
             this.draggedCard = card;
-            e.dataTransfer.setData('text/plain', card.id);
-            e.dataTransfer.effectAllowed = 'move';
+            const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
+            try {
+                e.dataTransfer.setData('text/plain', cardIdStr);
+                e.dataTransfer.effectAllowed = 'move';
+            } catch(err) {}
             cardEl.classList.add('kt-dragging');
             document.body.classList.add('kt-is-card-dragging');
         });
@@ -20261,42 +22645,7 @@ kanban-plugin: basic
 
         // Section: BACKLOG GERAL SEM DATA
         const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
-        sidebar.createEl('p', { cls: 'kt-section-label', text: `📋 BACKLOG GERAL (${unscheduled.length})` });
-        if (unscheduled.length === 0) {
-            const emptyNotice = sidebar.createDiv('kt-empty');
-            emptyNotice.setText('Nenhum card no backlog.');
-        } else {
-            unscheduled.forEach(card => {
-                const c = sidebar.createDiv('kt-sb-card');
-                c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
-                if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
-                c.createDiv('kt-c-title').setText(card.title);
-                const metaRow = c.createDiv('kt-card-meta-row');
-                this.renderTagPills(metaRow, card.tags, true);
-                if (card.estimateMinutes && card.estimateMinutes > 0) {
-                    const estBadge = metaRow.createSpan('kt-card-est-badge');
-                    estBadge.setText(`⏱ ${card.estimateText}`);
-                }
-                c.title = 'Arraste para qualquer dia da semana para agendar horário';
-                c.setAttribute('draggable', 'true');
-
-                c.addEventListener('dragstart', (e) => {
-                    this.draggedCard = card;
-                    e.dataTransfer.setData('text/plain', card.id);
-                    e.dataTransfer.effectAllowed = 'move';
-                    c.classList.add('kt-dragging');
-                    document.body.classList.add('kt-is-card-dragging');
-                });
-
-                c.addEventListener('dragend', () => {
-                    c.classList.remove('kt-dragging');
-                    document.body.classList.remove('kt-is-card-dragging');
-                    this.draggedCard = null;
-                });
-
-                c.onclick = () => this.openCardOptionsModal(card);
-            });
-        }
+        this.renderTbBacklogSection(sidebar, unscheduled, null);
 
         // Main MultiDayView
         const main = split.createDiv('kt-tb-main kt-tb-week-main');
@@ -20421,14 +22770,39 @@ kanban-plugin: basic
             // Events Layer
             const eventsLayer = dayCol.createDiv('kt-tb-events-layer');
 
-            const timedCards = dayCards.filter(c => !!getTimeForDay(c, day));
+            const allDayItems = [];
+            dayCards.forEach(card => {
+                const slots = getTimesForDay(card, day);
+                if (slots.length > 0) {
+                    slots.forEach((slot, instanceIndex) => {
+                        allDayItems.push({
+                            ...card,
+                            instanceIndex,
+                            instanceTimeStart: slot.timeStart,
+                            instanceTimeEnd: slot.timeEnd,
+                            instanceKey: `${card.id || card.lineIndex}_inst_${instanceIndex}`,
+                            _origCard: card
+                        });
+                    });
+                }
+            });
             const remoteEvents = this.getRemoteEventsForDay(day);
-            const allDayItems = [...timedCards, ...remoteEvents];
+            remoteEvents.forEach(evt => {
+                allDayItems.push({
+                    ...evt,
+                    instanceIndex: 0,
+                    instanceTimeStart: evt.timeStart,
+                    instanceTimeEnd: evt.timeEnd,
+                    instanceKey: evt.id || evt.uid || `remote_${Math.random()}`,
+                    _origCard: evt
+                });
+            });
 
             const layoutMap = this.computeTimeblockLayout(allDayItems, day);
-            allDayItems.forEach(card => {
-                const layoutInfo = layoutMap.get(card.id || card.uid || card.lineIndex);
-                this.renderTbCard(eventsLayer, card, day, dayStart, dayEnd, PX_PER_MIN, layoutInfo);
+            allDayItems.forEach(item => {
+                const key = item.instanceKey || item.id || item.uid || item.lineIndex;
+                const layoutInfo = layoutMap.get(key);
+                this.renderTbCard(eventsLayer, item, day, dayStart, dayEnd, PX_PER_MIN, layoutInfo);
             });
 
             // Live Now Indicator on current day
@@ -20449,33 +22823,87 @@ kanban-plugin: basic
                 }
             }
 
-            // Drag & Drop on day column
+            // Drag & Drop on day column with visual preview
+            let weekDropPreviewEl = null;
+
+            const removeWeekDropPreview = () => {
+                if (weekDropPreviewEl && weekDropPreviewEl.parentNode) {
+                    weekDropPreviewEl.remove();
+                }
+                weekDropPreviewEl = null;
+                dayCol.classList.remove('kt-tb-col-drop-hover');
+            };
+
             dayCol.addEventListener('dragover', (e) => {
                 if (!this.draggedCard) return;
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 dayCol.classList.add('kt-tb-col-drop-hover');
-            });
-            dayCol.addEventListener('dragleave', (e) => {
-                if (!dayCol.contains(e.relatedTarget)) {
-                    dayCol.classList.remove('kt-tb-col-drop-hover');
-                }
-            });
-            dayCol.addEventListener('drop', async (e) => {
-                if (!this.draggedCard) return;
-                e.preventDefault();
-                dayCol.classList.remove('kt-tb-col-drop-hover');
 
                 const rect = dayCol.getBoundingClientRect();
                 const relY = e.clientY - rect.top;
                 const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
                 const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
-                const startMins = totalMinutes % 60;
+                const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
+                const startTotalMins = startHours * 60 + startMins;
+
+                const card = this.draggedCard;
+                const existingSlots = getTimesForDay(card, day);
+                let estMin = 60;
+                if (existingSlots.length > 0) {
+                    const dur = timeToMinutes(existingSlots[0].timeEnd) - timeToMinutes(existingSlots[0].timeStart);
+                    if (dur > 0) estMin = dur;
+                } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                    estMin = card.estimateMinutes;
+                }
+                const endTotalMins = Math.min((dayEnd + 1) * 60, startTotalMins + estMin);
+
+                const pad = n => String(n).padStart(2, '0');
+                const ts = `${pad(startHours)}:${pad(startMins)}`;
+                const te = `${pad(Math.floor(endTotalMins / 60))}:${pad(endTotalMins % 60)}`;
+
+                const topPx = (startTotalMins - dayStart * 60) * PX_PER_MIN;
+                const heightPx = Math.max(22, (endTotalMins - startTotalMins) * PX_PER_MIN);
+
+                if (!weekDropPreviewEl) {
+                    weekDropPreviewEl = eventsLayer.createDiv('kt-tb-drop-preview');
+                }
+
+                weekDropPreviewEl.style.top = `${topPx}px`;
+                weekDropPreviewEl.style.height = `${heightPx}px`;
+                const projColor = card.tagColor || card.projectColor || card.priorityColor || 'var(--interactive-accent)';
+                weekDropPreviewEl.style.setProperty('--proj-color', projColor);
+            });
+
+            dayCol.addEventListener('dragleave', (e) => {
+                if (!dayCol.contains(e.relatedTarget)) {
+                    removeWeekDropPreview();
+                }
+            });
+
+            dayCol.addEventListener('drop', async (e) => {
+                removeWeekDropPreview();
+                if (!this.draggedCard) return;
+                e.preventDefault();
+
+                const rect = dayCol.getBoundingClientRect();
+                const relY = e.clientY - rect.top;
+                const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
+                const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
+                const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
 
                 const card = this.draggedCard;
                 this.draggedCard = null;
 
-                const estMin = (card.estimateMinutes && card.estimateMinutes > 0) ? card.estimateMinutes : 60;
+                const existingSlots = getTimesForDay(card, day);
+                let estMin = 60;
+                if (existingSlots.length > 0) {
+                    const dur = timeToMinutes(existingSlots[0].timeEnd) - timeToMinutes(existingSlots[0].timeStart);
+                    if (dur > 0) estMin = dur;
+                } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                    estMin = card.estimateMinutes;
+                }
+
                 const endTotalMin = startHours * 60 + startMins + estMin;
                 const endHours = Math.floor(endTotalMin / 60);
                 const endMins = endTotalMin % 60;
@@ -20484,7 +22912,8 @@ kanban-plugin: basic
                 const ts = `${pad(startHours)}:${pad(startMins)}`;
                 const te = `${pad(endHours)}:${pad(endMins)}`;
 
-                await this.persistTimeBlock(card, day, ts, te);
+                const isAddingExtraSlot = existingSlots.length > 0;
+                await this.persistTimeBlockAndDateRange(card, day, ts, te, isAddingExtraSlot ? 'add' : 'set');
                 await this.refresh();
             });
         });
@@ -20550,32 +22979,47 @@ kanban-plugin: basic
                 c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
                 if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
                 
-                const dayTime = getTimeForDay(card, day);
-                if (dayTime) {
-                    c.createDiv('kt-tb-card-time').setText(`⏰ ${dayTime.timeStart} – ${dayTime.timeEnd}`);
+                const daySlots = getTimesForDay(card, day);
+                if (daySlots.length > 0) {
+                    const timeLabelText = daySlots.length === 1
+                        ? `⏰ ${daySlots[0].timeStart} – ${daySlots[0].timeEnd}`
+                        : `⏰ ${daySlots.map(s => `${s.timeStart}–${s.timeEnd}`).join(', ')}`;
+                    c.createDiv('kt-tb-card-time').setText(timeLabelText);
                 }
 
                 c.createDiv('kt-c-title').setText(isDone ? `✓ ${card.title}` : card.title);
                 const metaRow = c.createDiv('kt-card-meta-row');
                 this.renderTagPills(metaRow, card.tags, true);
-                if (card.estimateMinutes && card.estimateMinutes > 0) {
+
+                let dayMinutes = 0;
+                daySlots.forEach(s => {
+                    const dur = timeToMinutes(s.timeEnd) - timeToMinutes(s.timeStart);
+                    if (dur > 0) dayMinutes += dur;
+                });
+
+                if (dayMinutes > 0) {
+                    const estBadge = metaRow.createSpan('kt-card-est-badge');
+                    const badgeText = daySlots.length > 1
+                        ? `⏱ ${formatMinutesToHours(dayMinutes)} (${daySlots.length}x)`
+                        : `⏱ ${formatMinutesToHours(dayMinutes)}`;
+                    estBadge.setText(badgeText);
+                    estBadge.title = `Duração somada hoje: ${formatMinutesToHours(dayMinutes)} em ${daySlots.length} bloco(s)`;
+                } else if (card.estimateMinutes && card.estimateMinutes > 0) {
                     const estBadge = metaRow.createSpan('kt-card-est-badge');
                     estBadge.setText(`⏱ ${card.estimateText}`);
                 }
+
                 const matchedProj = getProjectForCard(card, this.plugin.settings.projects);
                 if (matchedProj && matchedProj.hourlyRate > 0) {
-                    let minCount = 0;
-                    if (dayTime) {
-                        minCount = Math.max(15, timeToMinutes(dayTime.timeEnd || dayTime.timeStart) - timeToMinutes(dayTime.timeStart));
-                    } else if (card.estimateMinutes && card.estimateMinutes > 0) {
-                        minCount = card.estimateMinutes;
-                    }
+                    let minCount = dayMinutes > 0 ? dayMinutes : (card.estimateMinutes || 0);
                     if (minCount > 0) {
                         const amount = (minCount / 60) * matchedProj.hourlyRate;
                         const curr = matchedProj.currency || 'R$';
                         const earnBadge = metaRow.createSpan('kt-card-earnings-badge');
                         earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
-                        earnBadge.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
+                        earnBadge.title = daySlots.length > 1
+                            ? `Ganho previsto hoje: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h • ${formatMinutesToHours(minCount)} em ${daySlots.length} blocos)`
+                            : `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
                     }
                 }
                 
@@ -20584,8 +23028,11 @@ kanban-plugin: basic
 
                 c.addEventListener('dragstart', (e) => {
                     this.draggedCard = card;
-                    e.dataTransfer.setData('text/plain', card.id);
-                    e.dataTransfer.effectAllowed = 'move';
+                    const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
+                    try {
+                        e.dataTransfer.setData('text/plain', cardIdStr);
+                        e.dataTransfer.effectAllowed = 'move';
+                    } catch(err) {}
                     c.classList.add('kt-dragging');
                     document.body.classList.add('kt-is-card-dragging');
                 });
@@ -20593,6 +23040,8 @@ kanban-plugin: basic
                 c.addEventListener('dragend', () => {
                     c.classList.remove('kt-dragging');
                     document.body.classList.remove('kt-is-card-dragging');
+                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
                     this.draggedCard = null;
                 });
 
@@ -20604,10 +23053,69 @@ kanban-plugin: basic
 
         // Section 2: BACKLOG GERAL SEM DATA (Exclui blocos de rotina/reunião)
         const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
-        if (unscheduled.length > 0) {
-            sidebar.createEl('p', { cls: 'kt-section-label', text: `📋 BACKLOG GERAL (${unscheduled.length})` });
-            unscheduled.forEach(card => {
-                const c = sidebar.createDiv('kt-sb-card');
+        this.renderTbBacklogSection(sidebar, unscheduled, day);
+    }
+
+    renderTbBacklogSection(sidebar, unscheduled, day = null) {
+        if (!unscheduled || unscheduled.length === 0) {
+            sidebar.createEl('p', { cls: 'kt-section-label', text: '📋 BACKLOG GERAL (0)' });
+            const emptyNotice = sidebar.createDiv('kt-empty');
+            emptyNotice.setText('Nenhum card no backlog.');
+            return;
+        }
+
+        const sectionHeader = sidebar.createEl('p', { cls: 'kt-section-label' });
+
+        // Search bar
+        const searchBox = sidebar.createDiv('kt-tb-search-box');
+        searchBox.createSpan({ cls: 'kt-tb-search-icon', text: '🔍' });
+        const searchInput = searchBox.createEl('input', {
+            cls: 'kt-tb-search-input',
+            type: 'text',
+            placeholder: 'Buscar no backlog geral...'
+        });
+        searchInput.value = this.tbBacklogSearchQuery || '';
+
+        const clearBtn = searchBox.createEl('button', {
+            cls: 'kt-tb-search-clear',
+            text: '✕'
+        });
+        clearBtn.title = 'Limpar busca';
+        clearBtn.style.display = this.tbBacklogSearchQuery ? 'inline-flex' : 'none';
+
+        const cardsContainer = sidebar.createDiv('kt-tb-backlog-items');
+
+        const updateBacklogCards = () => {
+            const query = (this.tbBacklogSearchQuery || '').trim().toLowerCase();
+            clearBtn.style.display = query ? 'inline-flex' : 'none';
+
+            let filtered = unscheduled;
+            if (query) {
+                filtered = unscheduled.filter(c => {
+                    const titleMatch = (c.title || '').toLowerCase().includes(query);
+                    const cleanTitleMatch = (c.cleanTitle || '').toLowerCase().includes(query);
+                    const colMatch = (c.column || '').toLowerCase().includes(query);
+                    const tagMatch = c.tags && c.tags.some(t => t.toLowerCase().includes(query));
+                    return titleMatch || cleanTitleMatch || colMatch || tagMatch;
+                });
+            }
+
+            if (query) {
+                sectionHeader.setText(`📋 BACKLOG GERAL (${filtered.length} / ${unscheduled.length})`);
+            } else {
+                sectionHeader.setText(`📋 BACKLOG GERAL (${unscheduled.length})`);
+            }
+
+            cardsContainer.empty();
+
+            if (filtered.length === 0) {
+                const emptyNotice = cardsContainer.createDiv('kt-empty');
+                emptyNotice.setText(`Nenhum card encontrado para "${query}".`);
+                return;
+            }
+
+            filtered.forEach(card => {
+                const c = cardsContainer.createDiv('kt-sb-card');
                 c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
                 if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
                 c.createDiv('kt-c-title').setText(card.title);
@@ -20625,13 +23133,16 @@ kanban-plugin: basic
                     earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
                     earnBadge.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
                 }
-                c.title = 'Arraste para a grade de horários ou clique para abrir detalhes';
+                c.title = day ? 'Arraste para a grade de horários ou clique para abrir detalhes' : 'Arraste para qualquer dia da semana para agendar horário';
                 c.setAttribute('draggable', 'true');
 
                 c.addEventListener('dragstart', (e) => {
                     this.draggedCard = card;
-                    e.dataTransfer.setData('text/plain', card.id);
-                    e.dataTransfer.effectAllowed = 'move';
+                    const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
+                    try {
+                        e.dataTransfer.setData('text/plain', cardIdStr);
+                        e.dataTransfer.effectAllowed = 'move';
+                    } catch(err) {}
                     c.classList.add('kt-dragging');
                     document.body.classList.add('kt-is-card-dragging');
                 });
@@ -20639,12 +23150,36 @@ kanban-plugin: basic
                 c.addEventListener('dragend', () => {
                     c.classList.remove('kt-dragging');
                     document.body.classList.remove('kt-is-card-dragging');
+                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
                     this.draggedCard = null;
                 });
 
-                c.onclick = () => this.openCardOptionsModal(card);
+                c.onclick = () => {
+                    if (day) {
+                        this.openCardOptionsModal(card, day);
+                    } else {
+                        this.openCardOptionsModal(card);
+                    }
+                };
             });
-        }
+        };
+
+        searchInput.addEventListener('input', (e) => {
+            this.tbBacklogSearchQuery = e.target.value;
+            updateBacklogCards();
+        });
+
+        clearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.tbBacklogSearchQuery = '';
+            searchInput.value = '';
+            searchInput.focus();
+            updateBacklogCards();
+        });
+
+        // Initial render
+        updateBacklogCards();
     }
 
     renderDayGrid(parent) {
@@ -20706,6 +23241,7 @@ kanban-plugin: basic
         });
 
         // Setup dos slots de fundo (Drop targets e clique)
+        // Setup dos slots de fundo
         for (let h = dayStart; h <= dayEnd; h++) {
             [0, 30].forEach(m => {
                 const slotLine = gridSlots.createDiv(m === 0 ? 'kt-tb-slot-line' : 'kt-tb-slot-line kt-tb-half-line');
@@ -20717,63 +23253,6 @@ kanban-plugin: basic
                     slotLine.addClass('kt-current-hour-slot');
                 }
 
-                // Drop target para cards vindos do Sidebar
-                slotLine.addEventListener('dragover', (e) => {
-                    if (!this.draggedCard) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
-                    slotLine.classList.add('kt-slot-drop-hover');
-                });
-
-                slotLine.addEventListener('dragleave', () => {
-                    slotLine.classList.remove('kt-slot-drop-hover');
-                });
-
-                slotLine.addEventListener('drop', async (e) => {
-                    if (!this.draggedCard) return;
-                    e.preventDefault();
-                    slotLine.classList.remove('kt-slot-drop-hover');
-
-                    const card = this.draggedCard;
-                    this.draggedCard = null;
-
-                    const startMinutes = slotMinutes;
-                    let duration = 60;
-                    const existingDayTime = getTimeForDay(card, day);
-                    if (existingDayTime) {
-                        const dur = timeToMinutes(existingDayTime.timeEnd) - timeToMinutes(existingDayTime.timeStart);
-                        if (dur > 0) duration = dur;
-                    }
-                    const endMinutes = Math.min((dayEnd + 1) * 60, startMinutes + duration);
-
-                    const ts = minutesToTime(startMinutes);
-                    const te = minutesToTime(endMinutes);
-
-                    // 1. Preservar intervalos de múltiplos dias do Cronograma
-                    if (!card.startDate) {
-                        // Card do Backlog Geral (sem data) -> define este dia como início e fim
-                        await this.persistDateRange(card, day, day);
-                    } else {
-                        // Card já tem data/intervalo no Cronograma
-                        const cardStart = startOfDay(card.startDate);
-                        const cardEnd   = endOfDay(card.endDate || card.startDate);
-                        const targetDay = startOfDay(day);
-
-                        if (targetDay < cardStart) {
-                            // Dia é anterior ao início -> expande o início
-                            await this.persistDateRange(card, day, card.endDate || card.startDate);
-                        } else if (targetDay > cardEnd) {
-                            // Dia é posterior ao término -> expande o término
-                            await this.persistDateRange(card, card.startDate, day);
-                        }
-                        // Se targetDay estiver entre cardStart e cardEnd, MANTÉM intacto o intervalo multi-dias!
-                    }
-
-                    // 2. Salva o horário apenas deste dia específico (mantendo todos os outros dias)
-                    await this.persistTimeBlock(card, day, ts, te);
-                    await this.refresh();
-                });
-
                 // Clique esquerdo para agendar task existente
                 slotLine.onclick = () => this.onSlotClick(h, m, dayCards, day);
 
@@ -20782,14 +23261,131 @@ kanban-plugin: basic
             });
         }
 
-        // 3. Renderização dos Cards na Camada de Eventos Absolutos (com layout anti-sobreposição)
-        const timedCards = dayCards.filter(c => !!getTimeForDay(c, day));
+        // Drag & Drop na Grade do Dia (gridArea) com Indicador Visual Minimalista
+        let dropPreviewEl = null;
+
+        const removeDropPreview = () => {
+            if (dropPreviewEl && dropPreviewEl.parentNode) {
+                dropPreviewEl.remove();
+            }
+            dropPreviewEl = null;
+            gridArea.classList.remove('kt-tb-col-drop-hover');
+        };
+
+        gridArea.addEventListener('dragover', (e) => {
+            if (!this.draggedCard) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            gridArea.classList.add('kt-tb-col-drop-hover');
+
+            const rect = gridArea.getBoundingClientRect();
+            const relY = e.clientY - rect.top;
+            const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
+            const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
+            const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
+            const startTotalMins = startHours * 60 + startMins;
+
+            const card = this.draggedCard;
+            const existingSlots = getTimesForDay(card, day);
+            let duration = 60;
+            if (existingSlots.length > 0) {
+                const dur = timeToMinutes(existingSlots[0].timeEnd) - timeToMinutes(existingSlots[0].timeStart);
+                if (dur > 0) duration = dur;
+            } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                duration = card.estimateMinutes;
+            }
+            const endTotalMins = Math.min((dayEnd + 1) * 60, startTotalMins + duration);
+
+            const pad = n => String(n).padStart(2, '0');
+            const ts = `${pad(startHours)}:${pad(startMins)}`;
+            const te = `${pad(Math.floor(endTotalMins / 60))}:${pad(endTotalMins % 60)}`;
+
+            const topPx = (startTotalMins - dayStart * 60) * PX_PER_MIN;
+            const heightPx = Math.max(26, (endTotalMins - startTotalMins) * PX_PER_MIN);
+
+            if (!dropPreviewEl) {
+                dropPreviewEl = eventsLayer.createDiv('kt-tb-drop-preview');
+            }
+
+            dropPreviewEl.style.top = `${topPx}px`;
+            dropPreviewEl.style.height = `${heightPx}px`;
+            const projColor = card.tagColor || card.projectColor || card.priorityColor || 'var(--interactive-accent)';
+            dropPreviewEl.style.setProperty('--proj-color', projColor);
+        });
+
+        gridArea.addEventListener('dragleave', (e) => {
+            if (!gridArea.contains(e.relatedTarget)) {
+                removeDropPreview();
+            }
+        });
+
+        gridArea.addEventListener('drop', async (e) => {
+            removeDropPreview();
+            if (!this.draggedCard) return;
+            e.preventDefault();
+
+            const rect = gridArea.getBoundingClientRect();
+            const relY = e.clientY - rect.top;
+            const totalMinutes = dayStart * 60 + Math.round((relY / PX_PER_MIN) / 15) * 15;
+            const startHours = Math.min(dayEnd, Math.max(dayStart, Math.floor(totalMinutes / 60)));
+            const startMins = Math.max(0, Math.min(45, totalMinutes % 60));
+
+            const card = this.draggedCard;
+            this.draggedCard = null;
+
+            const existingSlots = getTimesForDay(card, day);
+            let duration = 60;
+            if (existingSlots.length > 0) {
+                const dur = timeToMinutes(existingSlots[0].timeEnd) - timeToMinutes(existingSlots[0].timeStart);
+                if (dur > 0) duration = dur;
+            } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+                duration = card.estimateMinutes;
+            }
+            const endMinutes = Math.min((dayEnd + 1) * 60, startHours * 60 + startMins + duration);
+
+            const pad = n => String(n).padStart(2, '0');
+            const ts = `${pad(startHours)}:${pad(startMins)}`;
+            const te = `${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`;
+
+            const isAddingExtraSlot = existingSlots.length > 0;
+            await this.persistTimeBlockAndDateRange(card, day, ts, te, isAddingExtraSlot ? 'add' : 'set');
+            await this.refresh();
+        });
+
+        // 3. Renderização dos Cards na Camada de Eventos Absolutos (com suporte a múltiplas instâncias)
+        const allDayItems = [];
+        dayCards.forEach(card => {
+            const slots = getTimesForDay(card, day);
+            if (slots.length > 0) {
+                slots.forEach((slot, instanceIndex) => {
+                    allDayItems.push({
+                        ...card,
+                        instanceIndex,
+                        instanceTimeStart: slot.timeStart,
+                        instanceTimeEnd: slot.timeEnd,
+                        instanceKey: `${card.id || card.lineIndex}_inst_${instanceIndex}`,
+                        _origCard: card
+                    });
+                });
+            }
+        });
         const remoteEvents = this.getRemoteEventsForDay(day);
-        const allDayItems = [...timedCards, ...remoteEvents];
+        remoteEvents.forEach(evt => {
+            allDayItems.push({
+                ...evt,
+                instanceIndex: 0,
+                instanceTimeStart: evt.timeStart,
+                instanceTimeEnd: evt.timeEnd,
+                instanceKey: evt.id || evt.uid || `remote_${Math.random()}`,
+                _origCard: evt
+            });
+        });
+
         const layoutMap = this.computeTimeblockLayout(allDayItems, day);
-        allDayItems.forEach(card => {
-            const layoutInfo = layoutMap.get(card.id || card.uid || card.lineIndex);
-            this.renderTbCard(eventsLayer, card, day, dayStart, dayEnd, PX_PER_MIN, layoutInfo);
+        allDayItems.forEach(item => {
+            const key = item.instanceKey || item.id || item.uid || item.lineIndex;
+            const layoutInfo = layoutMap.get(key);
+            this.renderTbCard(eventsLayer, item, day, dayStart, dayEnd, PX_PER_MIN, layoutInfo);
         });
 
         // 4. Linha de Guia do Horário Atual (Now Indicator - Guiando o olhar no ponto exato do dia)
@@ -20870,6 +23466,25 @@ kanban-plugin: basic
                 });
         });
 
+        // Habits Context Menu Integration
+        const habits = this.plugin.settings.habits || [];
+        if (habits.length > 0) {
+            menu.addSeparator();
+            habits.forEach(habit => {
+                const targetText = habit.type === 'time' ? ` (${habit.target || 30} min)` : (habit.type === 'count' ? ` (${habit.target || 1}x)` : ' (30 min)');
+                const icon = habit.icon ? habit.icon + ' ' : '✨ ';
+                menu.addItem(item => {
+                    item.setTitle(`${icon}${habit.name}${targetText}`)
+                        .setIcon('sparkles')
+                        .onClick(() => {
+                            new HabitEventModal(this.app, this.plugin, habit, day, h, m, async (hObj, date, startVal, endVal, repRule, cDays, repWeeks) => {
+                                await this.createHabitTimeEvent(hObj, date, startVal, endVal, repRule, cDays, repWeeks);
+                            }).open();
+                        });
+                });
+            });
+        }
+
         menu.addSeparator();
 
         menu.addItem(item => {
@@ -20940,16 +23555,19 @@ kanban-plugin: basic
         this.render();
     }
 
-    computeTimeblockLayout(timedCards, day) {
-        if (!timedCards || timedCards.length === 0) return new Map();
+    computeTimeblockLayout(allDayItems, day) {
+        if (!allDayItems || allDayItems.length === 0) return new Map();
 
-        const items = timedCards.map(card => {
-            const dt = getTimeForDay(card, day);
-            const startMin = timeToMinutes(dt.timeStart);
-            const endMin = timeToMinutes(dt.timeEnd || dt.timeStart);
+        const items = allDayItems.map(item => {
+            const startStr = item.instanceTimeStart || item.timeStart || (getTimeForDay(item, day)?.timeStart) || '09:00';
+            const endStr = item.instanceTimeEnd || item.timeEnd || (getTimeForDay(item, day)?.timeEnd) || startStr;
+            const startMin = timeToMinutes(startStr);
+            const endMin = timeToMinutes(endStr);
             const dur = Math.max(15, endMin - startMin);
+            const key = item.instanceKey || item.id || item.uid || item.lineIndex;
             return {
-                card,
+                item,
+                key,
                 startMin,
                 endMin: startMin + dur,
                 colIndex: 0,
@@ -21002,7 +23620,7 @@ kanban-plugin: basic
             const totalCols = columns.length;
             for (const item of cluster) {
                 item.totalCols = totalCols;
-                layoutMap.set(item.card.id || item.card.uid || item.card.lineIndex, { colIndex: item.colIndex, totalCols });
+                layoutMap.set(item.key, { colIndex: item.colIndex, totalCols });
             }
         }
 
@@ -21010,7 +23628,6 @@ kanban-plugin: basic
     }
 
     onSlotClick(h, m, dayCards, day) {
-        const untimed = dayCards.filter(c => !getTimeForDay(c, day));
         new QuickCreateTaskModal(
             this.app,
             this.plugin,
@@ -21018,12 +23635,13 @@ kanban-plugin: basic
             h,
             m,
             this.columns,
-            untimed,
+            dayCards,
             async (title, column, startVal, endVal) => {
                 await this.createNewTaskInTimeblock(title, column, day, startVal, endVal);
             },
             async (existingCard, startVal, endVal) => {
-                await this.persistTimeBlock(existingCard, day, startVal, endVal);
+                const hasTimes = getTimesForDay(existingCard, day).length > 0;
+                await this.persistTimeBlock(existingCard, day, startVal, endVal, null, hasTimes ? 'add' : 'set');
                 await this.refresh();
             }
         ).open();
@@ -21044,7 +23662,12 @@ kanban-plugin: basic
         await this.refresh();
     }
 
-    renderTbCard(parent, card, day, dayStart, dayEnd, pxPerMin, layoutInfo) {
+    renderTbCard(parent, item, day, dayStart, dayEnd, pxPerMin, layoutInfo) {
+        const card = item._origCard || item;
+        const instanceIndex = (typeof item.instanceIndex === 'number') ? item.instanceIndex : 0;
+        const startStr = item.instanceTimeStart || item.timeStart || (getTimeForDay(card, day)?.timeStart) || '09:00';
+        const endStr = item.instanceTimeEnd || item.timeEnd || (getTimeForDay(card, day)?.timeEnd) || startStr;
+
         const el = parent.createDiv('kt-tb-card');
         
         if (card.isRemoteCalendarEvent) {
@@ -21055,14 +23678,19 @@ kanban-plugin: basic
         } else if (card.isEvent) {
             el.addClass('kt-tb-card-event');
             el.addClass(`kt-tb-card-${card.eventType || 'break'}`);
+            if (card.eventType === 'habit' || card.isHabit) {
+                el.addClass('kt-tb-card-habit');
+                const hColor = card.habitColor || card.projectColor || '#10b981';
+                el.style.setProperty('--proj-color', hColor);
+                el.style.borderLeftColor = hColor;
+            }
         } else {
             el.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
             if (card.priorityColor) el.style.setProperty('--prio-color', card.priorityColor);
         }
 
-        const dayTime  = getTimeForDay(card, day);
-        const startMin = timeToMinutes(dayTime.timeStart);
-        const endMin   = timeToMinutes(dayTime.timeEnd || dayTime.timeStart);
+        const startMin = timeToMinutes(startStr);
+        const endMin   = timeToMinutes(endStr);
         const duration = Math.max(15, endMin - startMin);
 
         // Posicionamento Vertical
@@ -21070,6 +23698,10 @@ kanban-plugin: basic
         const heightPx = Math.max(26, duration * pxPerMin - 2);
         el.style.top    = `${topPx}px`;
         el.style.height = `${heightPx}px`;
+
+        if (heightPx < 52) {
+            el.addClass('kt-tb-card-short');
+        }
 
         // Posicionamento Horizontal Anti-Sobreposição (Lado a Lado)
         const colIndex  = layoutInfo ? layoutInfo.colIndex : 0;
@@ -21098,11 +23730,11 @@ kanban-plugin: basic
         if (!card.isRemoteCalendarEvent) {
             const topHandle = el.createDiv('kt-tb-resize-edge kt-tb-resize-top');
             topHandle.title = 'Arraste para ajustar horário inicial';
-            this.attachTimeblockTopResize(topHandle, card, day, el, dayStart, dayEnd, pxPerMin);
+            this.attachTimeblockTopResize(topHandle, card, day, el, dayStart, dayEnd, pxPerMin, instanceIndex, startStr, endStr);
         }
 
         // Conteúdo do Card
-        const isRoutineOrEvent = card.isEvent || card.column === 'Rotina' || !!card.seriesId;
+        const isRoutineOrEvent = card.isEvent || card.isHabit || card.column === 'Rotina' || !!card.seriesId || !!card.habitId;
 
         const openEditModal = () => {
             if (card.isRemoteCalendarEvent) {
@@ -21114,24 +23746,44 @@ kanban-plugin: basic
                     this.app,
                     card,
                     day,
-                    parseInt(dayTime?.timeStart || '9'),
+                    parseInt(startStr || '9'),
                     async (newTitle, ts, te, applyToAll) => {
                         await this.updateTimeEventSeries(card, day, newTitle, ts, te, applyToAll);
                     },
                     async (deleteAll) => {
                         await this.deleteTimeEventSeries(card, day, deleteAll);
-                    }
+                    },
+                    instanceIndex,
+                    startStr,
+                    endStr
                 ).open();
             } else {
-                this.openCardOptionsModal(card, day);
+                new TimeBlockModal(
+                    this.app,
+                    card,
+                    day,
+                    parseInt(startStr || '9'),
+                    async (newTitle, ts, te) => {
+                        await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
+                        await this.refresh();
+                    },
+                    async (deleteAll, inst) => {
+                        await this.persistTimeBlock(card, day, null, null, inst !== null && inst !== undefined ? inst : instanceIndex, 'delete');
+                        await this.refresh();
+                    },
+                    instanceIndex,
+                    startStr,
+                    endStr
+                ).open();
             }
         };
 
         const timeLabel = el.createDiv('kt-tb-card-time');
-        timeLabel.setText(`⏰ ${dayTime.timeStart} – ${dayTime.timeEnd}`);
-        timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para abrir e editar a tarefa');
+        timeLabel.setText(`⏰ ${startStr} – ${endStr}`);
+        timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para editar este horário');
         timeLabel.style.cursor = 'pointer';
         timeLabel.onclick = (e) => {
+            if (el._ktJustMoved && Date.now() - el._ktJustMoved < 300) return;
             e.stopPropagation();
             openEditModal();
         };
@@ -21141,8 +23793,24 @@ kanban-plugin: basic
         titleEl.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para abrir e editar a tarefa');
         titleEl.style.cursor = 'pointer';
         titleEl.onclick = (e) => {
+            if (el._ktJustMoved && Date.now() - el._ktJustMoved < 300) return;
             e.stopPropagation();
-            openEditModal();
+            if (!card.isRemoteCalendarEvent && !isRoutineOrEvent) {
+                this.openCardOptionsModal(card, day);
+            } else {
+                openEditModal();
+            }
+        };
+
+        el.onclick = (e) => {
+            if (el._ktJustMoved && Date.now() - el._ktJustMoved < 300) return;
+            if (e.target.closest('.kt-tb-card-time') || e.target.closest('.kt-tb-subtask-chk') || e.target.closest('a') || e.target.classList.contains('kt-tb-resize-edge')) return;
+            e.stopPropagation();
+            if (!card.isRemoteCalendarEvent && !isRoutineOrEvent) {
+                this.openCardOptionsModal(card, day);
+            } else {
+                openEditModal();
+            }
         };
 
         if (card.isRemoteCalendarEvent && card.calendarName) {
@@ -21173,7 +23841,7 @@ kanban-plugin: basic
                 const earningsPill = tagsRow.createSpan('kt-tb-earnings-pill');
                 const earningsAmount = (duration / 60) * hourlyRate;
                 earningsPill.setText(`💵 ${formatCurrency(earningsAmount, currency)}`);
-                earningsPill.title = `Ganho previsto: ${formatCurrency(earningsAmount, currency)} (${currency} ${hourlyRate}/h • ${duration}m)`;
+                earningsPill.title = `Ganho previsto neste bloco: ${formatCurrency(earningsAmount, currency)} (${currency} ${hourlyRate}/h • ${duration}m)`;
                 el.dataset.hourlyRate = String(hourlyRate);
                 el.dataset.currency = currency;
             }
@@ -21209,9 +23877,9 @@ kanban-plugin: basic
         if (!card.isRemoteCalendarEvent) {
             const bottomHandle = el.createDiv('kt-tb-resize-edge kt-tb-resize-bottom');
             bottomHandle.title = 'Arraste para ajustar horário final';
-            this.attachTimeblockBottomResize(bottomHandle, card, day, el, dayStart, dayEnd, pxPerMin);
+            this.attachTimeblockBottomResize(bottomHandle, card, day, el, dayStart, dayEnd, pxPerMin, instanceIndex, startStr, endStr);
 
-            this.attachTimeblockCardMove(el, card, day, dayStart, dayEnd, pxPerMin);
+            this.attachTimeblockCardMove(el, card, day, dayStart, dayEnd, pxPerMin, instanceIndex, startStr, endStr);
         }
 
         // 4. Menu de Contexto (Botão Direito no Card)
@@ -21282,18 +23950,48 @@ kanban-plugin: basic
                 });
             } else {
                 menu.addItem(item => {
-                    item.setTitle('Editar horário')
+                    item.setTitle('✏️ Editar este horário')
                         .setIcon('pencil')
                         .onClick(() => {
-                            new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (newTitle, ts, te) => {
-                                await this.persistTimeBlock(card, day, ts, te);
-                                await this.refresh();
-                            }).open();
+                            openEditModal();
                         });
                 });
 
                 menu.addItem(item => {
-                    item.setTitle('Excluir card')
+                    item.setTitle('➕ Adicionar outro bloco hoje')
+                        .setIcon('plus')
+                        .onClick(async () => {
+                            const newStartMin = Math.min((dayEnd) * 60, endMin + 30);
+                            const newEndMin = Math.min((dayEnd + 1) * 60, newStartMin + 60);
+                            const ts = minutesToTime(newStartMin);
+                            const te = minutesToTime(newEndMin);
+                            await this.persistTimeBlock(card, day, ts, te, null, 'add');
+                            await this.refresh();
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('⚙️ Abrir opções do card...')
+                        .setIcon('sliders')
+                        .onClick(() => {
+                            this.openCardOptionsModal(card, day);
+                        });
+                });
+
+                menu.addSeparator();
+
+                menu.addItem(item => {
+                    item.setTitle('🗑️ Excluir apenas este bloco de horário')
+                        .setIcon('clock')
+                        .setWarning()
+                        .onClick(async () => {
+                            await this.persistTimeBlock(card, day, null, null, instanceIndex, 'delete');
+                            await this.refresh();
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('🗑️ Excluir card do Kanban')
                         .setIcon('trash')
                         .setWarning()
                         .onClick(async () => {
@@ -21309,14 +24007,14 @@ kanban-plugin: basic
         });
     }
 
-    attachTimeblockTopResize(handleEl, card, day, cardEl, dayStart, dayEnd, pxPerMin) {
+    attachTimeblockTopResize(handleEl, card, day, cardEl, dayStart, dayEnd, pxPerMin, instanceIndex = 0, currentStart = null, currentEnd = null) {
         handleEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
 
-            const dayTime      = getTimeForDay(card, day);
-            const origStartMin = timeToMinutes(dayTime?.timeStart || '09:00');
-            const origEndMin   = timeToMinutes(dayTime?.timeEnd || '10:00');
+            const origStartMin = timeToMinutes(currentStart || getTimeForDay(card, day)?.timeStart || '09:00');
+            const origEndMin   = timeToMinutes(currentEnd   || getTimeForDay(card, day)?.timeEnd   || '10:00');
             const startY       = e.clientY;
             let previewStartMin = origStartMin;
             let hasMoved        = false;
@@ -21337,6 +24035,12 @@ kanban-plugin: basic
                 cardEl.style.top    = `${newTop}px`;
                 cardEl.style.height = `${newHeight}px`;
 
+                if (newHeight < 52) {
+                    cardEl.classList.add('kt-tb-card-short');
+                } else {
+                    cardEl.classList.remove('kt-tb-card-short');
+                }
+
                 if (timeLabel) {
                     timeLabel.setText(`⏰ ${minutesToTime(previewStartMin)} – ${minutesToTime(origEndMin)}`);
                 }
@@ -21349,7 +24053,7 @@ kanban-plugin: basic
                         const previewDur = Math.max(0, origEndMin - previewStartMin);
                         const amount = (previewDur / 60) * rate;
                         earningsPill.setText(`💵 ${formatCurrency(amount, curr)}`);
-                        earningsPill.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${rate}/h • ${previewDur}m)`;
+                        earningsPill.title = `Ganho previsto neste bloco: ${formatCurrency(amount, curr)} (${curr} ${rate}/h • ${previewDur}m)`;
                     }
                 }
             };
@@ -21359,10 +24063,19 @@ kanban-plugin: basic
                 document.removeEventListener('pointerup', onPointerUp);
                 document.body.classList.remove('kt-is-tb-resizing');
 
+                if (hasMoved) {
+                    cardEl._ktJustMoved = Date.now();
+                    const blockClick = (clickEvt) => {
+                        clickEvt.stopPropagation();
+                        clickEvt.preventDefault();
+                    };
+                    window.addEventListener('click', blockClick, { capture: true, once: true });
+                }
+
                 if (hasMoved && previewStartMin !== origStartMin) {
                     const ts = minutesToTime(previewStartMin);
                     const te = minutesToTime(origEndMin);
-                    await this.persistTimeBlock(card, day, ts, te);
+                    await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
                     await this.refresh();
                 }
             };
@@ -21372,14 +24085,14 @@ kanban-plugin: basic
         });
     }
 
-    attachTimeblockBottomResize(handleEl, card, day, cardEl, dayStart, dayEnd, pxPerMin) {
+    attachTimeblockBottomResize(handleEl, card, day, cardEl, dayStart, dayEnd, pxPerMin, instanceIndex = 0, currentStart = null, currentEnd = null) {
         handleEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
 
-            const dayTime      = getTimeForDay(card, day);
-            const origStartMin = timeToMinutes(dayTime?.timeStart || '09:00');
-            const origEndMin   = timeToMinutes(dayTime?.timeEnd || '10:00');
+            const origStartMin = timeToMinutes(currentStart || getTimeForDay(card, day)?.timeStart || '09:00');
+            const origEndMin   = timeToMinutes(currentEnd   || getTimeForDay(card, day)?.timeEnd   || '10:00');
             const startY       = e.clientY;
             let previewEndMin   = origEndMin;
             let hasMoved        = false;
@@ -21397,6 +24110,12 @@ kanban-plugin: basic
                 const newHeight = Math.max(26, (previewEndMin - origStartMin) * pxPerMin - 2);
                 cardEl.style.height = `${newHeight}px`;
 
+                if (newHeight < 52) {
+                    cardEl.classList.add('kt-tb-card-short');
+                } else {
+                    cardEl.classList.remove('kt-tb-card-short');
+                }
+
                 if (timeLabel) {
                     timeLabel.setText(`⏰ ${minutesToTime(origStartMin)} – ${minutesToTime(previewEndMin)}`);
                 }
@@ -21409,7 +24128,7 @@ kanban-plugin: basic
                         const previewDur = Math.max(0, previewEndMin - origStartMin);
                         const amount = (previewDur / 60) * rate;
                         earningsPill.setText(`💵 ${formatCurrency(amount, curr)}`);
-                        earningsPill.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${rate}/h • ${previewDur}m)`;
+                        earningsPill.title = `Ganho previsto neste bloco: ${formatCurrency(amount, curr)} (${curr} ${rate}/h • ${previewDur}m)`;
                     }
                 }
             };
@@ -21419,10 +24138,19 @@ kanban-plugin: basic
                 document.removeEventListener('pointerup', onPointerUp);
                 document.body.classList.remove('kt-is-tb-resizing');
 
+                if (hasMoved) {
+                    cardEl._ktJustMoved = Date.now();
+                    const blockClick = (clickEvt) => {
+                        clickEvt.stopPropagation();
+                        clickEvt.preventDefault();
+                    };
+                    window.addEventListener('click', blockClick, { capture: true, once: true });
+                }
+
                 if (hasMoved && previewEndMin !== origEndMin) {
                     const ts = minutesToTime(origStartMin);
                     const te = minutesToTime(previewEndMin);
-                    await this.persistTimeBlock(card, day, ts, te);
+                    await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
                     await this.refresh();
                 }
             };
@@ -21432,14 +24160,14 @@ kanban-plugin: basic
         });
     }
 
-    attachTimeblockCardMove(cardEl, card, day, dayStart, dayEnd, pxPerMin) {
+    attachTimeblockCardMove(cardEl, card, day, dayStart, dayEnd, pxPerMin, instanceIndex = 0, currentStart = null, currentEnd = null) {
         cardEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
             if (e.target.classList.contains('kt-tb-resize-edge')) return;
             if (e.target.closest('.kt-tb-card-time') || e.target.closest('.kt-tb-subtask-chk') || e.target.closest('.kt-tag-pill') || e.target.closest('a')) return;
 
-            const dayTime      = getTimeForDay(card, day);
-            const origStartMin = timeToMinutes(dayTime?.timeStart || '09:00');
-            const origEndMin   = timeToMinutes(dayTime?.timeEnd || '10:00');
+            const origStartMin = timeToMinutes(currentStart || getTimeForDay(card, day)?.timeStart || '09:00');
+            const origEndMin   = timeToMinutes(currentEnd   || getTimeForDay(card, day)?.timeEnd   || '10:00');
             const duration     = origEndMin - origStartMin;
             const startY       = e.clientY;
             let previewStartMin = origStartMin;
@@ -21474,16 +24202,20 @@ kanban-plugin: basic
                 document.body.classList.remove('kt-is-tb-resizing');
                 cardEl.classList.remove('kt-dragging');
 
+                if (hasMoved) {
+                    cardEl._ktJustMoved = Date.now();
+                    const blockClick = (clickEvt) => {
+                        clickEvt.stopPropagation();
+                        clickEvt.preventDefault();
+                    };
+                    window.addEventListener('click', blockClick, { capture: true, once: true });
+                }
+
                 if (hasMoved && previewStartMin !== origStartMin) {
                     const ts = minutesToTime(previewStartMin);
                     const te = minutesToTime(previewEndMin);
-                    await this.persistTimeBlock(card, day, ts, te);
+                    await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
                     await this.refresh();
-                } else if (!hasMoved) {
-                    new TimeBlockModal(this.app, card, day, parseInt(dayTime?.timeStart || '9'), async (ts, te) => {
-                        await this.persistTimeBlock(card, day, ts, te);
-                        await this.refresh();
-                    }).open();
                 }
             };
 

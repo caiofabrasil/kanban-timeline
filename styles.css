@@ -91,6 +91,12 @@
     transition: background 0.12s;
 }
 .kt-nav-btn:hover { background: var(--background-modifier-hover); }
+.kt-nav-btn.kt-nav-btn-active {
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.18);
+    color: var(--interactive-accent);
+    border-color: var(--interactive-accent);
+    font-weight: 600;
+}
 .kt-today-btn { color: var(--interactive-accent); border-color: var(--interactive-accent); font-size: 12px; }
 
 .kt-date-label {
@@ -1596,6 +1602,74 @@ body.kt-is-card-dragging .kt-gantt-section {
     font-weight: 600;
 }
 
+/* Timeblocking Sidebar Backlog Search */
+.kt-tb-search-box {
+    display: flex;
+    align-items: center;
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    margin-bottom: 8px;
+    margin-top: 4px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.kt-tb-search-box:focus-within {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.kt-tb-search-icon {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-right: 6px;
+    user-select: none;
+    display: flex;
+    align-items: center;
+}
+
+.kt-tb-search-input {
+    flex: 1;
+    border: none !important;
+    background: transparent !important;
+    font-size: 12px !important;
+    color: var(--text-normal) !important;
+    padding: 2px 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+    min-width: 0;
+}
+
+.kt-tb-search-clear {
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+
+.kt-tb-search-clear:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-tb-backlog-items {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
 .kt-sb-card {
     padding: 7px 9px;
     margin-bottom: 6px;
@@ -1725,8 +1799,9 @@ body.kt-is-card-dragging .kt-gantt-section {
 }
 
 .kt-tb-slot-line.kt-slot-drop-hover {
-    background: rgba(var(--color-accent-1, 99, 102, 241), 0.22) !important;
-    outline: 2px dashed var(--interactive-accent) !important;
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.12) !important;
+    border-top: 1px dashed var(--interactive-accent) !important;
+    border-bottom: 1px dashed var(--interactive-accent) !important;
 }
 
 /* 3. Camada de Eventos / Cards Absolutos */
@@ -1737,6 +1812,29 @@ body.kt-is-card-dragging .kt-gantt-section {
     right: 0;
     bottom: 0;
     pointer-events: none;
+}
+
+/* ================================================================
+   TIMEBLOCKING DROP PREVIEW GHOST (MINIMAL & CLEAN DASHED BLOCK)
+   ================================================================ */
+.kt-tb-drop-preview {
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    border-radius: 6px;
+    border: 1.5px dashed var(--proj-color, var(--interactive-accent, #6366f1));
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.06);
+    background: color-mix(in srgb, var(--proj-color, var(--interactive-accent, #6366f1)) 10%, transparent);
+    pointer-events: none;
+    z-index: 99;
+    box-sizing: border-box;
+    transition: top 0.04s ease-out, height 0.04s ease-out;
+}
+
+.kt-tb-week-day-col .kt-tb-drop-preview {
+    left: 2px;
+    right: 2px;
+    border-radius: 4px;
 }
 
 /* ================================================================
@@ -1846,6 +1944,41 @@ body.kt-is-card-dragging .kt-gantt-section {
     font-size: 10px;
     margin-bottom: 2px;
 }
+
+/* Short / Compact Height Timeblock Cards (< 52px, e.g. 15min, 30min, 45min) -> Single Row Inline */
+.kt-tb-card.kt-tb-card-short {
+    padding: 2px 8px;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-start;
+}
+
+.kt-tb-card.kt-tb-card-short .kt-tb-card-time {
+    margin-bottom: 0;
+    flex-shrink: 0;
+    font-size: 10.5px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.kt-tb-card.kt-tb-card-short .kt-c-title {
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-tb-card.kt-tb-card-short .kt-tags-row,
+.kt-tb-card.kt-tb-card-short .kt-tb-subtasks-wrap,
+.kt-tb-card.kt-tb-card-short .kt-tb-card-cal-name {
+    display: none !important;
+}
+
 .kt-tb-card.kt-dragging {
     opacity: 0.65 !important;
     box-shadow: 0 8px 24px rgba(0,0,0,0.65) !important;
@@ -2020,6 +2153,21 @@ body.kt-is-card-dragging .kt-gantt-section {
     border: 1px dashed rgba(255, 255, 255, 0.15) !important;
     border-left: 3px solid #94a3b8 !important;
     border-right: none !important;
+}
+
+/* ✨ Hábito / Rotina */
+.kt-tb-card.kt-tb-card-habit {
+    background: color-mix(in srgb, var(--proj-color, #10b981) 12%, var(--background-secondary)) !important;
+    border: 1px solid color-mix(in srgb, var(--proj-color, #10b981) 30%, transparent) !important;
+    border-left: 3.5px solid var(--proj-color, #10b981) !important;
+    border-right: none !important;
+}
+.kt-tb-card.kt-tb-card-habit:hover {
+    background: color-mix(in srgb, var(--proj-color, #10b981) 18%, var(--background-secondary)) !important;
+}
+.kt-tb-card.kt-tb-card-habit .kt-c-title {
+    color: var(--text-normal) !important;
+    font-weight: 600;
 }
 
 /* Handles de Redimensionamento Superior e Inferior */
@@ -5057,24 +5205,48 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     background: var(--background-primary);
     overflow: hidden;
     cursor: pointer;
+    transition: background-color 0.1s ease;
 }
 
 .kt-cal-day-cell:hover {
-    background: var(--background-primary-alt, var(--background-modifier-hover));
+    background: var(--background-modifier-hover);
+}
+
+.kt-cal-day-cell.kt-is-weekend {
+    background: var(--background-primary);
+}
+
+.theme-dark .kt-cal-day-cell.kt-is-weekend {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .kt-cal-day-cell.kt-is-weekend {
+    background: var(--background-primary);
 }
 
 .kt-cal-day-cell.kt-is-other-month {
-    background: rgba(0, 0, 0, 0.12);
-    opacity: 0.7;
+    background: var(--background-secondary);
+    opacity: 0.55;
+}
+
+.theme-dark .kt-cal-day-cell.kt-is-other-month {
+    background: rgba(0, 0, 0, 0.16);
+    opacity: 0.55;
+}
+
+.theme-light .kt-cal-day-cell.kt-is-other-month {
+    background: var(--background-secondary);
+    opacity: 0.55;
+}
+
+.kt-cal-day-cell.kt-is-other-month.kt-is-weekend {
+    background: var(--background-secondary);
+    opacity: 0.55;
 }
 
 .kt-cal-day-cell.kt-is-other-month .kt-cal-day-num {
     color: var(--text-faint);
     font-weight: 500;
-}
-
-.kt-cal-day-cell.kt-is-weekend {
-    background: rgba(0, 0, 0, 0.025);
 }
 
 .kt-cal-day-cell.kt-is-today {
@@ -6435,7 +6607,7 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 }
 
 .kt-tb-week-day-col.kt-tb-col-drop-hover {
-    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.16) !important;
+    background: rgba(255, 255, 255, 0.02) !important;
 }
 
 /* Recurrence Custom Weekdays Selector in Modal */
@@ -9350,3 +9522,1014 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 .kt-health-bio-metric-item b {
     color: var(--text-normal);
 }
+
+/* ================================================================
+   MENTAL HEALTH, EMOTIONAL JOURNAL & MEDICATION TRACKER STYLES
+   ================================================================ */
+
+.kt-health-mental-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+}
+
+.kt-health-section-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-health-section-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-normal);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-health-section-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* 1. Quick Journal & Check-in Box */
+.kt-health-journal-box {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.kt-health-date-selector {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--background-secondary);
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    width: fit-content;
+}
+
+.kt-health-date-selector input[type="date"] {
+    background: transparent;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+    cursor: pointer;
+    outline: none;
+}
+
+/* Mood Button Group */
+.kt-health-mood-group {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    width: 100%;
+}
+
+.kt-health-mood-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px 8px;
+    border-radius: 8px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.kt-health-mood-btn:hover {
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+    transform: translateY(-1px);
+    background: var(--background-modifier-hover);
+}
+
+.kt-health-mood-btn.is-selected {
+    border-color: var(--interactive-accent);
+    background: rgba(56, 189, 248, 0.12);
+    color: var(--text-normal);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.kt-health-mood-emoji {
+    font-size: 24px;
+    line-height: 1;
+}
+
+.kt-health-mood-text {
+    font-size: 11px;
+}
+
+/* Stress & Energy Score Sliders / Buttons */
+.kt-health-scales-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+}
+
+.kt-health-scale-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-scale-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.kt-health-scale-val-badge {
+    color: var(--text-normal);
+    font-weight: 700;
+}
+
+.kt-health-scale-btns {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+}
+
+.kt-health-scale-btn {
+    padding: 6px 0;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 4px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: all 0.12s ease;
+}
+
+.kt-health-scale-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-normal);
+}
+
+.kt-health-scale-btn.is-selected {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent, #ffffff);
+    border-color: var(--interactive-accent);
+}
+
+/* Emotion Tags */
+.kt-health-tags-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-tags-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.kt-health-emotion-chip {
+    padding: 4px 10px;
+    font-size: 11.5px;
+    border-radius: 12px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: all 0.12s ease;
+    user-select: none;
+}
+
+.kt-health-emotion-chip:hover {
+    border-color: var(--text-muted);
+    color: var(--text-normal);
+}
+
+.kt-health-emotion-chip.is-active {
+    background: rgba(168, 85, 247, 0.15);
+    border-color: #a855f7;
+    color: #a855f7;
+    font-weight: 600;
+}
+
+/* Journal Textarea */
+.kt-health-journal-input-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-journal-textarea {
+    width: 100%;
+    min-height: 100px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-normal);
+    font-family: inherit;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s ease;
+}
+
+.kt-health-journal-textarea:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+/* Daily Medication Checklist in Journal */
+.kt-health-med-checklist-wrap {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kt-health-med-check-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 8px;
+}
+
+.kt-health-med-check-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    transition: all 0.15s ease;
+}
+
+.kt-health-med-check-card.is-taken {
+    border-color: rgba(34, 197, 94, 0.4);
+    background: rgba(34, 197, 94, 0.05);
+}
+
+.kt-health-med-check-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-health-med-check-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-health-med-check-meta {
+    font-size: 10.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-med-toggle-btn {
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.kt-health-med-toggle-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-normal);
+}
+
+.kt-health-med-toggle-btn.is-taken {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: #22c55e;
+    color: #22c55e;
+}
+
+/* 2. Medication Tracker Cards & Estoque */
+.kt-health-med-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+    width: 100%;
+}
+
+.kt-health-med-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+    transition: all 0.15s ease;
+    position: relative;
+}
+
+.kt-health-med-card:hover {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.kt-health-med-card-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.kt-health-med-name-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.kt-health-med-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-health-med-dose-pill {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--interactive-accent);
+}
+
+.kt-health-med-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-med-stock-box {
+    background: var(--background-secondary);
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-med-stock-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.kt-health-med-stock-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-health-med-stock-badge {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-health-med-stock-badge.is-ok {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.kt-health-med-stock-badge.is-low {
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.kt-health-med-stock-badge.is-out {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    animation: kt-pulse-danger 2s infinite ease-in-out;
+}
+
+@keyframes kt-pulse-danger {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(0.98); }
+}
+
+.kt-health-med-stock-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--background-modifier-border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.kt-health-med-stock-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.kt-health-med-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/* 3. Journal Timeline / Feed Cards */
+.kt-health-journal-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+}
+
+.kt-health-journal-entry-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: all 0.15s ease;
+}
+
+.kt-health-journal-entry-card:hover {
+    border-color: var(--text-muted);
+}
+
+.kt-health-journal-entry-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.kt-health-journal-date-badge {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-normal);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-health-journal-pills {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.kt-health-journal-pill {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+}
+
+.kt-health-journal-pill.is-mood-5 { background: rgba(34, 197, 94, 0.15); color: #22c55e; border-color: rgba(34, 197, 94, 0.3); }
+.kt-health-journal-pill.is-mood-4 { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3); }
+.kt-health-journal-pill.is-mood-3 { background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3); }
+.kt-health-journal-pill.is-mood-2 { background: rgba(249, 115, 22, 0.15); color: #f97316; border-color: rgba(249, 115, 22, 0.3); }
+.kt-health-journal-pill.is-mood-1 { background: rgba(239, 68, 68, 0.15); color: #ef4444; border-color: rgba(239, 68, 68, 0.3); }
+
+.kt-health-journal-quote {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-normal);
+    background: var(--background-secondary);
+    border-left: 3px solid var(--interactive-accent);
+    padding: 8px 12px;
+    border-radius: 0 6px 6px 0;
+    white-space: pre-wrap;
+}
+
+.kt-health-journal-meds-taken {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-health-journal-med-chip {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+    color: #22c55e;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+
+/* ================================================================
+   HASHTAG / PROJECT QUICK SUGGESTIONS BAR FOR TASK CREATION
+   ================================================================ */
+
+.kt-hashtag-suggestions-wrap {
+    margin-top: 8px;
+    margin-bottom: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.kt-hashtag-suggestions-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kt-hashtag-suggestions-title {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.kt-hashtag-chips-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 96px;
+    overflow-y: auto;
+    padding: 2px 1px 4px 1px;
+    box-sizing: border-box;
+}
+
+.kt-hashtag-chips-list::-webkit-scrollbar {
+    height: 4px;
+    width: 4px;
+}
+.kt-hashtag-chips-list::-webkit-scrollbar-thumb {
+    background: var(--background-modifier-border);
+    border-radius: 4px;
+}
+
+.kt-hashtag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    font-size: 11.5px;
+    font-weight: 500;
+    border-radius: 12px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    line-height: 1.3;
+}
+
+.kt-hashtag-chip:hover {
+    border-color: var(--text-muted);
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+    transform: translateY(-1px);
+}
+
+.kt-hashtag-chip.is-active {
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.15);
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.kt-hashtag-chip.has-custom-color:hover {
+    border-color: var(--chip-color);
+}
+
+.kt-hashtag-chip.has-custom-color.is-active {
+    background: color-mix(in srgb, var(--chip-color) 20%, transparent);
+    border-color: var(--chip-color);
+    color: var(--chip-color);
+    box-shadow: 0 0 0 1px var(--chip-color);
+}
+
+.kt-hashtag-color-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.kt-hashtag-check-icon {
+    font-weight: 700;
+    font-size: 11px;
+}
+
+.kt-hashtag-proj-icon {
+    font-size: 12px;
+    line-height: 1;
+}
+
+/* ================================================================
+   WEEKLY TIME BALANCE & DISTRIBUTION MODAL (DONUT CHART & KPIS)
+   ================================================================ */
+
+.kt-balance-modal-wrapper {
+    background: var(--background-primary);
+    border-radius: 12px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    padding: 0;
+}
+
+.kt-balance-modal-content {
+    display: flex;
+    flex-direction: column;
+    padding: 24px 28px;
+    gap: 18px;
+    max-height: 88vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+.kt-balance-modal-hdr {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 14px;
+}
+
+.kt-balance-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.kt-balance-title-row h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-balance-modal-subtitle {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+
+/* Empty State */
+.kt-balance-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    text-align: center;
+    gap: 8px;
+}
+
+.kt-balance-empty-icon {
+    font-size: 42px;
+    margin-bottom: 8px;
+}
+
+.kt-balance-empty h3 {
+    margin: 0;
+    font-size: 16px;
+    color: var(--text-normal);
+}
+
+.kt-balance-empty p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-muted);
+    max-width: 420px;
+}
+
+/* Macro Ratio Section */
+.kt-balance-ratio-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--background-secondary);
+    padding: 14px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-balance-section-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-faint);
+}
+
+.kt-balance-ratio-bar {
+    display: flex;
+    height: 12px;
+    width: 100%;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--background-modifier-border);
+    gap: 2px;
+}
+
+.kt-ratio-seg {
+    height: 100%;
+    transition: width 0.3s ease-out;
+}
+
+.kt-ratio-work { background: #6366f1; }
+.kt-ratio-meetings { background: #a855f7; }
+.kt-ratio-personal { background: #10b981; }
+.kt-ratio-other { background: #64748b; }
+
+.kt-balance-ratio-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.kt-ratio-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.kt-ratio-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.kt-ratio-work-dot { background: #6366f1; }
+.kt-ratio-meetings-dot { background: #a855f7; }
+.kt-ratio-personal-dot { background: #10b981; }
+.kt-ratio-other-dot { background: #64748b; }
+
+/* Split Body */
+.kt-balance-body-split {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 24px;
+    align-items: flex-start;
+}
+
+.kt-balance-left-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    align-items: center;
+    background: var(--background-secondary);
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-balance-chart-box {
+    position: relative;
+    width: 180px;
+    height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.kt-donut-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.kt-donut-slice {
+    transition: filter 0.15s ease, opacity 0.15s ease;
+    cursor: pointer;
+}
+
+.kt-donut-center-val {
+    font-size: 17px;
+    font-weight: 700;
+    fill: var(--text-normal);
+    font-family: var(--font-default);
+    transition: all 0.15s ease;
+}
+
+.kt-donut-center-lbl {
+    font-size: 10.5px;
+    font-weight: 600;
+    fill: var(--text-muted);
+    letter-spacing: 0.3px;
+    font-family: var(--font-default);
+    transition: all 0.15s ease;
+}
+
+/* KPIs */
+.kt-balance-kpis-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    width: 100%;
+}
+
+.kt-balance-kpi-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 2px;
+}
+
+.kt-balance-kpi-card .kt-kpi-val {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-normal);
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-balance-kpi-card .kt-kpi-earnings {
+    color: #10b981;
+}
+
+.kt-balance-kpi-card .kt-kpi-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+/* Right Panel: Project Items */
+.kt-balance-right-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-sizing: border-box;
+}
+
+.kt-balance-items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 8px;
+}
+
+.kt-balance-item {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-left: 3.5px solid var(--item-color, var(--interactive-accent));
+    border-radius: 6px;
+    padding: 9px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.kt-balance-item:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--background-modifier-border-hover);
+}
+
+.kt-balance-item-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.kt-balance-item-title-col {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.kt-balance-item-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.kt-balance-item-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-balance-item-stats-col {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.kt-balance-dur-badge {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-normal);
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-balance-pct-badge {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--background-primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-balance-earnings-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.12);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-balance-bar-track {
+    height: 5px;
+    width: 100%;
+    background: var(--background-modifier-border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.kt-balance-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease-out;
+}
+
+
