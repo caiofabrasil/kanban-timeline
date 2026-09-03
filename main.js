@@ -648,6 +648,18 @@ class KanbanParser {
                 addDailyTime(sStr, legacyStart, legacyEnd);
             }
 
+            // If card has explicit startDate, prune any dailyTimes slots outside [startDate, endDate]
+            if (startDate) {
+                const sLimit = startOfDay(startDate);
+                const eLimit = endOfDay(endDate || startDate);
+                Object.keys(dailyTimes).forEach(k => {
+                    const parsedK = parseDate(k);
+                    if (parsedK && (parsedK < sLimit || parsedK > eLimit)) {
+                        delete dailyTimes[k];
+                    }
+                });
+            }
+
             // Sort slots within each day chronologically
             Object.keys(dailyTimes).forEach(k => {
                 dailyTimes[k].sort((a, b) => timeToMinutes(a.timeStart) - timeToMinutes(b.timeStart));
@@ -1215,8 +1227,53 @@ class KanbanParser {
         const checkPrefix = isCompleted ? '- [x] ' : '- [ ] ';
 
         // Extract existing time block comments or metadata if present
-        const commentMatch = origFirstLine.match(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/);
-        const commentTag = commentMatch ? ` ${commentMatch[0]}` : '';
+        let commentTag = '';
+        const commentMatch = origFirstLine.match(/<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/);
+        if (commentMatch) {
+            const rawBody = commentMatch[1];
+            if (startDate) {
+                const sLimit = startOfDay(startDate);
+                const eLimit = endOfDay(endDate || startDate);
+
+                // Parse dated blocks: DD-MM-YYYY HH:mm-HH:mm
+                const datedRegex = /(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                let dm;
+                const validSlots = [];
+                let hasDated = false;
+                while ((dm = datedRegex.exec(rawBody)) !== null) {
+                    hasDated = true;
+                    const dObj = parseDate(dm[1]);
+                    if (dObj && dObj >= sLimit && dObj <= eLimit) {
+                        validSlots.push(`${dm[1]} ${dm[2]}-${dm[3]}`);
+                    }
+                }
+
+                // Extract metadata (type, habitId, habitColor, series)
+                const metaTags = [];
+                const typeMatch = rawBody.match(/type:([^\s]+)/i);
+                if (typeMatch) metaTags.push(`type:${typeMatch[1]}`);
+                const hIdMatch = rawBody.match(/habitId:([^\s]+)/i);
+                if (hIdMatch) metaTags.push(`habitId:${hIdMatch[1]}`);
+                const hColMatch = rawBody.match(/habitColor:([^\s]+)/i);
+                if (hColMatch) metaTags.push(`habitColor:${hColMatch[1]}`);
+                const sIdMatch = rawBody.match(/series:([^\s]+)/i);
+                if (sIdMatch) metaTags.push(`series:${sIdMatch[1]}`);
+                const metaStr = metaTags.length > 0 ? ` ${metaTags.join(' ')}` : '';
+
+                if (hasDated) {
+                    if (validSlots.length > 0 || metaTags.length > 0) {
+                        commentTag = ` <!-- tb: ${validSlots.join(' ')}${metaStr} -->`;
+                    }
+                } else {
+                    commentTag = ` ${commentMatch[0]}`;
+                }
+            } else {
+                const isRoutine = /type:(?:break|meeting|focus|habit|custom)/i.test(rawBody);
+                if (isRoutine) {
+                    commentTag = ` ${commentMatch[0]}`;
+                }
+            }
+        }
 
         // Format dates
         let dateTag = '';
@@ -1582,6 +1639,18 @@ class KanbanParser {
             } else {
                 delete dailyMap[targetDateStr];
             }
+        }
+
+        // Prune any slots outside card's explicit date range
+        if (card && card.startDate) {
+            const sLimit = startOfDay(card.startDate);
+            const eLimit = endOfDay(card.endDate || card.startDate);
+            Object.keys(dailyMap).forEach(d => {
+                const parsedD = parseDate(d);
+                if (parsedD && (parsedD < sLimit || parsedD > eLimit)) {
+                    delete dailyMap[d];
+                }
+            });
         }
 
         // Sort slots within each day chronologically
@@ -14548,15 +14617,8 @@ kanban-plugin: basic
         }
     }
 
-    processActivityWatchEvents(windowEvents, projects = [], awClasses = []) {
-        let totalActiveSeconds = 0;
-        const windowMap = new Map();
-        const categoryMap = new Map();
-        const appMap = new Map();
-        const projectTrackedSeconds = {}; // projectId -> seconds
-
-        // 1. Compile valid ActivityWatch class rules from /api/0/settings
-        const compiledAWClasses = (awClasses || [])
+    compileActivityWatchClasses(awClasses = []) {
+        return (awClasses || [])
             .filter(c => c.rule && c.rule.type === 'regex' && c.rule.regex && c.rule.regex !== 'FILL ME')
             .map(c => {
                 let reg = null;
@@ -14565,6 +14627,8 @@ kanban-plugin: basic
                 } catch (e) {
                     console.warn('[Kanban Timeline] Invalid regex in AW class:', c.rule.regex, e);
                 }
+                const score = (typeof c.data?.score === 'number') ? c.data.score : (typeof c.score === 'number' ? c.score : 0);
+                const isGenericMedia = (c.name || []).some(n => /^(?:media|video|social media|uncategorized)$/i.test(n));
                 return {
                     id: c.id,
                     nameArr: c.name || ['Uncategorized'],
@@ -14572,13 +14636,37 @@ kanban-plugin: basic
                     shortName: (c.name || [])[(c.name || []).length - 1] || 'Uncategorized',
                     parent: (c.name || [])[0] || 'Uncategorized',
                     depth: (c.name || []).length,
+                    score,
+                    isGenericMedia,
                     regex: reg,
                     rawRegex: c.rule.regex,
                     color: c.data?.color || '#3b82f6'
                 };
             })
             .filter(c => c.regex !== null)
-            .sort((a, b) => b.depth - a.depth); // Deeper / more specific child rules matched first
+            .sort((a, b) => {
+                // 1. Specific productive / study / work categories (non-generic, positive score) before generic media/video/social
+                if (a.isGenericMedia !== b.isGenericMedia) {
+                    return a.isGenericMedia ? 1 : -1;
+                }
+                // 2. Higher score comes first (e.g. +4, +3, +2 before -2)
+                if (b.score !== a.score) {
+                    return b.score - a.score;
+                }
+                // 3. Deeper / more specific child rules matched first
+                return b.depth - a.depth;
+            });
+    }
+
+    processActivityWatchEvents(windowEvents, projects = [], awClasses = []) {
+        let totalActiveSeconds = 0;
+        const windowMap = new Map();
+        const categoryMap = new Map();
+        const appMap = new Map();
+        const projectTrackedSeconds = {}; // projectId -> seconds
+
+        // 1. Compile valid ActivityWatch class rules from /api/0/settings with specificity and score priority
+        const compiledAWClasses = this.compileActivityWatchClasses(awClasses);
 
         // 2. Project rules from Kanban Timeline
         const projectRules = (projects || []).map(p => {
@@ -15689,21 +15777,8 @@ kanban-plugin: basic
             const eventsRes = await obsidian.requestUrl({ url: eventsUrl });
             const windowEvents = eventsRes.json || [];
 
-            // 3. Compile regex rules from AW classes & plugin projects
-            const compiledAWClasses = (awClasses || [])
-                .filter(c => c.rule && c.rule.type === 'regex' && c.rule.regex && c.rule.regex !== 'FILL ME')
-                .map(c => {
-                    let reg = null;
-                    try { reg = new RegExp(c.rule.regex, c.rule.ignore_case !== false ? 'i' : ''); } catch (e) {}
-                    return {
-                        id: c.id,
-                        fullName: (c.name || []).join(' > '),
-                        shortName: (c.name || [])[(c.name || []).length - 1] || 'Uncategorized',
-                        parent: (c.name || [])[0] || 'Uncategorized',
-                        regex: reg
-                    };
-                })
-                .filter(c => c.regex !== null);
+            // 3. Compile regex rules from AW classes & plugin projects with priority
+            const compiledAWClasses = this.compileActivityWatchClasses(awClasses);
 
             const projectRules = (this.plugin.settings.projects || []).map(p => ({
                 id: p.id,
