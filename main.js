@@ -21784,6 +21784,60 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
                 return formatted ? ` ${formatted}` : '';
             };
 
+            // Helper to clean task titles from Canvas LMS before importing to Kanban
+            const cleanCanvasTaskName = (rawTitle) => {
+                if (!rawTitle || typeof rawTitle !== 'string') return '';
+
+                let text = rawTitle;
+
+                // 1. Decode common HTML entities
+                text = text
+                    .replace(/&amp;/g, '&')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;|&apos;/g, "'")
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&nbsp;/g, ' ')
+                    .replace(/&#(\d+);/g, (m, dec) => String.fromCharCode(dec))
+                    .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+                // 2. Strip HTML comments & tags
+                text = text.replace(/<!--[\s\S]*?-->/g, '');
+                text = text.replace(/<[^>]+>/g, ' ');
+
+                // 3. Extract text from markdown links & wikilinks
+                // Wikilinks: [[target|alias]] -> alias, [[target]] -> target
+                text = text.replace(/\[\[(?:[^|\]]*\|)?([^\]]+)\]\]/g, '$1');
+                // Markdown links: [text](url) -> text
+                text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+                // 4. Remove image/embed syntax: ![alt](url) or ![[file]]
+                text = text.replace(/!\[.*?\](?:\(.*?\)|\[\[.*?\]\])/g, '');
+
+                // 5. Remove plugin metadata / timeline date / time markers if present in raw name
+                text = text.replace(/@\{[^}]*\}/g, '');
+                text = text.replace(/⏰/g, '');
+
+                // 6. Remove Markdown formatting characters:
+                // *, _, ~, `, =, ^, #, >, |, \, [, ], {, }, @
+                text = text.replace(/[*_~`=^#>|\\\[\]{}@]/g, ' ');
+
+                // 7. Remove leading list/checkbox markers: e.g. - [ ], - [x], - , + , 1. 
+                text = text.replace(/^[\s\-*+>]+(?:\s*\[[ xX]\])?\s*/, '');
+                text = text.replace(/^\d+\.\s+/, '');
+
+                // 8. Fix spacing before punctuation
+                text = text.replace(/\s+([,:;.!?])/g, '$1');
+
+                // 9. Normalize whitespace (remove newlines, collapse spaces)
+                text = text.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+                // 10. Clean dangling punctuation at start/end
+                text = text.replace(/^[-:;,.\s]+|[-:;,.\s]+$/g, '').trim();
+
+                return text;
+            };
+
             // 1. Primary: Canvas Planner API (fetches assignments, quizzes, discussions scheduled within the period)
             try {
                 let nextUrl = `${cleanUrl}/api/v1/planner/items?start_date=${startDateStr}&end_date=${endDateStr}&per_page=100`;
@@ -21872,7 +21926,8 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
                 for (const task of assignments) {
                     const taskObj = task.plannable || task.assignment || task.quiz || task;
                     
-                    const name = (taskObj.title || taskObj.name || task.plannable_title || task.title || '').trim();
+                    const rawName = (taskObj.title || taskObj.name || task.plannable_title || task.title || '').trim();
+                    const name = cleanCanvasTaskName(rawName);
                     if (!name) continue;
 
                     let courseId = task.course_id || taskObj.course_id;
