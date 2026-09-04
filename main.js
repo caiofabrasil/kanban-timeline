@@ -300,7 +300,10 @@ function formatMinutesToHours(min) {
     return `${m}m`;
 }
 
-function formatCurrency(amount, currency = 'R$') {
+function formatCurrency(amount, currency = 'R$', hide = false) {
+    if (hide) {
+        return `${currency} ••••••`;
+    }
     const formattedNum = Number(amount || 0).toLocaleString('pt-BR', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
@@ -16511,6 +16514,13 @@ kanban-plugin: basic
         });
     }
 
+    formatFinCurrency(amount, curr = null) {
+        const fin = this.plugin?.settings?.finances;
+        const isHidden = !!fin?.hideValues;
+        const currency = curr || fin?.currency || 'R$';
+        return formatCurrency(amount, currency, isHidden);
+    }
+
     renderFinancesView(container) {
         const fin = this.plugin.settings.finances;
         if (!fin) return;
@@ -16524,7 +16534,7 @@ kanban-plugin: basic
         const monthKey = `${selYear}-${String(selMonth).padStart(2, '0')}`;
         const monthData = this.getFinancesMonthData(selYear, selMonth);
 
-        const finContainer = container.createDiv('kt-finances-container');
+        const finContainer = container.createDiv(`kt-finances-container ${fin.hideValues ? 'kt-fin-hide-values' : ''}`);
 
         // 1. Top Header Bar (Year, Months Navigation, Actions)
         this.renderFinancesHeader(finContainer, selYear, selMonth, monthData, curr);
@@ -16582,8 +16592,8 @@ kanban-plugin: basic
 
         const tabs = [
             { id: 'all',      label: 'Visão Completa' },
-            { id: 'income',   label: `Renda (${formatCurrency(totalIncReal, curr)})`, count: (monthData.income || []).length },
-            { id: 'expenses', label: `Despesas (${formatCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length },
+            { id: 'income',   label: `Renda (${this.formatFinCurrency(totalIncReal, curr)})`, count: (monthData.income || []).length },
+            { id: 'expenses', label: `Despesas (${this.formatFinCurrency(totalExpReal, curr)})`, count: (monthData.expenses || []).length },
             { id: 'planned',  label: `💡 Planejado (${plannedItems.length})`, count: plannedItems.length }
         ];
 
@@ -16798,6 +16808,23 @@ kanban-plugin: basic
         // Actions Group
         const actionsGroup = header.createDiv('kt-fin-actions-group');
         actionsGroup.style.position = 'relative';
+
+        // Privacy / Bank Mode Toggle Button (Olhinho de banco)
+        const isHidden = !!fin.hideValues;
+        const privacyBtn = actionsGroup.createEl('button', {
+            cls: `kt-fin-act-btn kt-fin-privacy-btn ${isHidden ? 'is-privacy-active' : ''}`
+        });
+        privacyBtn.title = isHidden ? 'Mostrar valores (Modo Privacidade ativo)' : 'Ocultar valores (Modo Privacidade)';
+        privacyBtn.innerHTML = isHidden
+            ? `<span class="kt-fin-privacy-icon">🙈</span> <span class="kt-fin-privacy-text">Oculto</span>`
+            : `<span class="kt-fin-privacy-icon">👁️</span> <span class="kt-fin-privacy-text">Visível</span>`;
+
+        privacyBtn.onclick = async () => {
+            fin.hideValues = !fin.hideValues;
+            await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice(fin.hideValues ? '🙈 Valores financeiros ocultados (Modo Privacidade)' : '👁️ Valores financeiros visíveis');
+        };
 
         // Import Button
         const importBtn = actionsGroup.createEl('button', {
@@ -17220,7 +17247,7 @@ kanban-plugin: basic
 
             // 2. Valor
             const tdVal = tr.createEl('td', { cls: `kt-td-val ${hasPendingSplit ? 'kt-val-split' : ''}` });
-            tdVal.setText(formatCurrency(exp.value, curr));
+            tdVal.setText(this.formatFinCurrency(exp.value, curr));
 
             // 3. Descrição (Desacoplada com badge de Cobrança)
             const tdDesc = tr.createEl('td', { cls: `kt-td-desc ${hasPendingSplit ? 'kt-desc-split' : ''}` });
@@ -17232,8 +17259,8 @@ kanban-plugin: basic
                 const badge = tdDesc.createSpan({ cls: `kt-fin-split-badge ${isPending ? 'is-pending' : 'is-settled'}` });
                 
                 if (isPending) {
-                    const partsSummary = exp.splitData.participants.map(p => `${p.name || 'Pessoa'}: ${formatCurrency(p.amount, curr)}${p.settled ? ' (✓)' : ''}`).join(' • ');
-                    badge.setText(` • 👥 Cobrar: ${formatCurrency(pending, curr)} (${partsSummary})`);
+                    const partsSummary = exp.splitData.participants.map(p => `${p.name || 'Pessoa'}: ${this.formatFinCurrency(p.amount, curr)}${p.settled ? ' (✓)' : ''}`).join(' • ');
+                    badge.setText(` • 👥 Cobrar: ${this.formatFinCurrency(pending, curr)} (${partsSummary})`);
                 } else {
                     badge.setText(' • ✓ Cobrança quitada');
                 }
@@ -17476,7 +17503,7 @@ kanban-plugin: basic
 
             // 2. Valor
             const tdVal = tr.createEl('td', { cls: 'kt-td-val kt-val-green' });
-            tdVal.setText(formatCurrency(inc.value, curr));
+            tdVal.setText(this.formatFinCurrency(inc.value, curr));
 
             // 3. Descrição
             const tdDesc = tr.createEl('td', { cls: 'kt-td-desc' });
@@ -17619,7 +17646,7 @@ kanban-plugin: basic
 
         if (plannedItems.length > 0) {
             const badge = titleWrap.createSpan({ cls: 'kt-fin-planned-summary-badge' });
-            badge.setText(`Gastos Previstos: ${formatCurrency(plannedExpTotal, curr)} • Entradas Previstas: ${formatCurrency(plannedIncTotal, curr)}`);
+            badge.setText(`Gastos Previstos: ${this.formatFinCurrency(plannedExpTotal, curr)} • Entradas Previstas: ${this.formatFinCurrency(plannedIncTotal, curr)}`);
         }
 
         const addPlanBtn = secHdr.createEl('button', { cls: 'kt-fin-add-btn mod-cta', text: '＋ Nova Previsão / Gasto Planejado' });
@@ -17722,7 +17749,7 @@ kanban-plugin: basic
 
             // 3. Valor
             const valTd = tr.createEl('td', { cls: `kt-td-val ${isIncome ? 'kt-val-green' : 'kt-val-red'}` });
-            valTd.setText(`${isIncome ? '+' : '-'}${formatCurrency(item.value, curr)}`);
+            valTd.setText(`${isIncome ? '+' : '-'}${this.formatFinCurrency(item.value, curr)}`);
 
             // 4. Descrição
             const descTd = tr.createEl('td', { cls: 'kt-td-desc' });
@@ -18020,7 +18047,7 @@ kanban-plugin: basic
         const stats = bar.createDiv('kt-fin-bar-stats');
         const countBadge = stats.createSpan({ cls: 'kt-fin-bar-count', text: `${selectedCount} ${selectedCount === 1 ? 'despesa/renda' : 'despesas/rendas'}` });
         stats.createSpan({ text: '•' });
-        stats.createSpan({ cls: 'kt-fin-bar-sum', text: `Soma: ${formatCurrency(totalSum, curr)}` });
+        stats.createSpan({ cls: 'kt-fin-bar-sum', text: `Soma: ${this.formatFinCurrency(totalSum, curr)}` });
 
         // Actions section
         const actions = bar.createDiv('kt-fin-bar-actions');
@@ -18304,13 +18331,13 @@ kanban-plugin: basic
         titleGroup.createSpan({ cls: 'kt-fin-card-title', text: 'Evolução Temporal & Tendências' });
 
         const kpiRow = titleGroup.createDiv('kt-fin-kpi-big');
-        kpiRow.createSpan({ text: formatCurrency(currentPoint.value, curr) });
+        kpiRow.createSpan({ text: this.formatFinCurrency(currentPoint.value, curr) });
 
         if (deltaVal !== 0 && prevPoint && currentPoint.hasData) {
             const isPos = deltaVal >= 0;
             const deltaEl = kpiRow.createSpan({
                 cls: `kt-fin-kpi-delta ${isPos ? 'is-positive' : 'is-negative'}`,
-                text: `${isPos ? '+' : ''}${formatCurrency(deltaVal, curr)}${deltaPct ? ` (${isPos ? '+' : ''}${deltaPct}%)` : ''}`
+                text: `${isPos ? '+' : ''}${this.formatFinCurrency(deltaVal, curr)}${deltaPct ? ` (${isPos ? '+' : ''}${deltaPct}%)` : ''}`
             });
             deltaEl.title = `Comparado a ${prevPoint.name}/${selYear}`;
         }
@@ -18497,7 +18524,7 @@ kanban-plugin: basic
                 circle.setAttribute('r', '7.5');
                 if (!tooltipEl) tooltipEl = chartWrap.createDiv('kt-fin-chart-tooltip');
                 if (hasData) {
-                    tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span class="kt-fin-tip-val">${formatCurrency(pt.data.value, curr)}</span>`;
+                    tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span class="kt-fin-tip-val">${this.formatFinCurrency(pt.data.value, curr)}</span>`;
                 } else {
                     tooltipEl.innerHTML = `<span>${pt.data.fullName}/${selYear}:</span> <span style="color:var(--text-muted);font-size:11px;">(Sem lançamentos)</span>`;
                 }
@@ -18593,7 +18620,7 @@ kanban-plugin: basic
         centerVal.setAttribute('x', '0');
         centerVal.setAttribute('y', '14');
         centerVal.classList.add('kt-pie-center-val');
-        centerVal.textContent = formatCurrency(totalExp, curr);
+        centerVal.textContent = this.formatFinCurrency(totalExp, curr);
         svg.appendChild(centerVal);
 
         const centerSub = document.createElementNS(svgNS, 'text');
@@ -18624,14 +18651,14 @@ kanban-plugin: basic
 
             const activate = () => {
                 centerLbl.textContent = item.category;
-                centerVal.textContent = formatCurrency(item.value, curr);
+                centerVal.textContent = this.formatFinCurrency(item.value, curr);
                 centerSub.textContent = `${item.pct.toFixed(1)}% do total`;
                 path.style.transform = 'scale(1.045)';
             };
 
             const deactivate = () => {
                 centerLbl.textContent = 'TOTAL GASTOS';
-                centerVal.textContent = formatCurrency(totalExp, curr);
+                centerVal.textContent = this.formatFinCurrency(totalExp, curr);
                 centerSub.textContent = '';
                 path.style.transform = '';
             };
@@ -18662,7 +18689,7 @@ kanban-plugin: basic
             left.createSpan({ text: item.category });
 
             const right = top.createDiv('kt-fin-bd-right');
-            right.createSpan({ cls: 'kt-fin-bd-val', text: formatCurrency(item.value, curr) });
+            right.createSpan({ cls: 'kt-fin-bd-val', text: this.formatFinCurrency(item.value, curr) });
             right.createSpan({ cls: 'kt-fin-bd-pct', text: `${item.pct.toFixed(1)}%` });
 
             const track = row.createDiv('kt-fin-bd-bar-track');
@@ -18849,14 +18876,14 @@ kanban-plugin: basic
             left.createSpan({ cls: 'kt-fin-rec-freq-badge', text: `${m.count}x no ano • ${m.monthsCount}/${m.activeMonthsCount} meses` });
 
             const right = top.createDiv('kt-fin-rec-right');
-            right.createSpan({ cls: 'kt-fin-rec-total', text: formatCurrency(m.total, curr) });
+            right.createSpan({ cls: 'kt-fin-rec-total', text: this.formatFinCurrency(m.total, curr) });
 
             // Plan button per item
             const planBtn = right.createEl('button', {
                 cls: 'kt-fin-rec-plan-btn',
-                text: `＋ Planejar (${formatCurrency(m.monthlyAvgCost, curr)}/mês)`
+                text: `＋ Planejar (${this.formatFinCurrency(m.monthlyAvgCost, curr)}/mês)`
             });
-            planBtn.title = `Adicionar previsão de ${m.name} (${formatCurrency(m.monthlyAvgCost, curr)}) aos gastos planejados de ${selMonth}/${selYear}`;
+            planBtn.title = `Adicionar previsão de ${m.name} (${this.formatFinCurrency(m.monthlyAvgCost, curr)}) aos gastos planejados de ${selMonth}/${selYear}`;
             planBtn.onclick = async (e) => {
                 e.stopPropagation();
                 if (!currentMonthData.plannedItems) currentMonthData.plannedItems = [];
@@ -18877,16 +18904,16 @@ kanban-plugin: basic
                 }
                 await this.plugin.saveSettings();
                 this.render();
-                new obsidian.Notice(`✓ Previsão "${m.name}" (${formatCurrency(m.monthlyAvgCost, curr)}/mês) salva no Planejamento!`);
+                new obsidian.Notice(`✓ Previsão "${m.name}" (${this.formatFinCurrency(m.monthlyAvgCost, curr)}/mês) salva no Planejamento!`);
             };
 
             const bottom = row.createDiv('kt-fin-rec-bottom');
             bottom.createSpan({
-                text: `${m.count} compras em ${m.monthsCount} dos ${m.activeMonthsCount} meses • Média/compra: ${formatCurrency(m.avgTicket, curr)} • Previsão: `,
+                text: `${m.count} compras em ${m.monthsCount} dos ${m.activeMonthsCount} meses • Média/compra: ${this.formatFinCurrency(m.avgTicket, curr)} • Previsão: `,
                 cls: 'kt-fin-rec-sub'
             });
-            const monthlyPill = bottom.createSpan({ cls: 'kt-fin-rec-monthly-badge', text: `${formatCurrency(m.monthlyAvgCost, curr)} / mês` });
-            monthlyPill.title = `Gasto total acumulado de ${formatCurrency(m.total, curr)} em ${m.count} compras distribuídas em ${m.monthsCount} dos ${m.activeMonthsCount} meses registrados. Previsão mensal amortizada: ${formatCurrency(m.monthlyAvgCost, curr)}/mês.`;
+            const monthlyPill = bottom.createSpan({ cls: 'kt-fin-rec-monthly-badge', text: `${this.formatFinCurrency(m.monthlyAvgCost, curr)} / mês` });
+            monthlyPill.title = `Gasto total acumulado de ${this.formatFinCurrency(m.total, curr)} em ${m.count} compras distribuídas em ${m.monthsCount} dos ${m.activeMonthsCount} meses registrados. Previsão mensal amortizada: ${this.formatFinCurrency(m.monthlyAvgCost, curr)}/mês.`;
             bottom.createSpan({ text: m.category, attr: { style: `color:${catColor}; font-weight:600; margin-left:auto;` } });
 
             row.addEventListener('click', () => {
@@ -19066,10 +19093,10 @@ kanban-plugin: basic
 
             const right = row.createDiv('kt-fin-smart-avg-right');
             right.createSpan({
-                text: currentPlan > 0 ? `Meta: ${formatCurrency(currentPlan, curr)}` : 'Sem meta',
+                text: currentPlan > 0 ? `Meta: ${this.formatFinCurrency(currentPlan, curr)}` : 'Sem meta',
                 attr: { style: 'color:var(--text-muted); font-size:11px;' }
             });
-            right.createSpan({ cls: 'kt-fin-smart-avg-val', text: `Média: ${formatCurrency(avgVal, curr)}` });
+            right.createSpan({ cls: 'kt-fin-smart-avg-val', text: `Média: ${this.formatFinCurrency(avgVal, curr)}` });
         });
 
         const actions = card.createDiv('kt-fin-smart-actions');
@@ -19153,14 +19180,14 @@ kanban-plugin: basic
                     
                     const mHdr = monthCard.createDiv('kt-fin-future-month-hdr');
                     mHdr.createSpan({ cls: 'kt-fin-future-month-name', text: `${monthNames[nextM - 1]}/${nextY}` });
-                    mHdr.createSpan({ cls: 'kt-fin-future-month-total', text: `${formatCurrency(sumInst, curr)} (${instExpenses.length} itens)` });
+                    mHdr.createSpan({ cls: 'kt-fin-future-month-total', text: `${this.formatFinCurrency(sumInst, curr)} (${instExpenses.length} itens)` });
 
                     const itemsList = monthCard.createDiv('kt-fin-future-items-list');
                     instExpenses.forEach(it => {
                         const itemRow = itemsList.createDiv('kt-fin-future-item');
                         const label = it.installment ? `${it.description} (${it.installment})` : (it.isFixed ? `${it.description} [Fixo]` : it.description);
                         itemRow.createSpan({ text: label });
-                        itemRow.createSpan({ cls: 'kt-fin-future-item-val', text: formatCurrency(it.value || 0, curr) });
+                        itemRow.createSpan({ cls: 'kt-fin-future-item-val', text: this.formatFinCurrency(it.value || 0, curr) });
                     });
                 }
             }
@@ -19246,7 +19273,7 @@ kanban-plugin: basic
         // Saldo Inicial
         const balInitEl = balanceRow.createDiv('kt-fin-kpi-box');
         const initValRow = balInitEl.createDiv('kt-fin-kpi-val-row');
-        initValRow.createSpan({ cls: 'kt-fin-kpi-val', text: formatCurrency(initialBal, curr) });
+        initValRow.createSpan({ cls: 'kt-fin-kpi-val', text: this.formatFinCurrency(initialBal, curr) });
         const editInitBtn = initValRow.createSpan({ cls: 'kt-fin-edit-init-btn', text: '✎' });
         editInitBtn.title = 'Definir saldo inicial personalizado para este mês';
         editInitBtn.onclick = () => {
@@ -19260,19 +19287,19 @@ kanban-plugin: basic
 
         // Saldo Final
         const balFinalEl = balanceRow.createDiv('kt-fin-kpi-box kt-box-orange');
-        balFinalEl.createDiv('kt-fin-kpi-val').setText(formatCurrency(finalBal, curr));
+        balFinalEl.createDiv('kt-fin-kpi-val').setText(this.formatFinCurrency(finalBal, curr));
         balFinalEl.createDiv('kt-fin-kpi-lbl').setText('SALDO FINAL');
 
         // Economia do Mês
         const savingsEl = balanceRow.createDiv('kt-fin-kpi-box kt-box-green');
-        savingsEl.createDiv('kt-fin-kpi-val').setText(formatCurrency(monthSavings, curr));
+        savingsEl.createDiv('kt-fin-kpi-val').setText(this.formatFinCurrency(monthSavings, curr));
         const savingsLbl = monthSavings >= 0 ? `+${savingsPct}% economia` : `${savingsPct}% déficit`;
         savingsEl.createDiv('kt-fin-kpi-lbl').setText(savingsLbl);
 
         // A Cobrar de Terceiros (se houver pendência no mês)
         if (totalPendingToCollect > 0) {
             const collectEl = balanceRow.createDiv('kt-fin-kpi-box kt-box-red');
-            collectEl.createDiv('kt-fin-kpi-val').setText(formatCurrency(totalPendingToCollect, curr));
+            collectEl.createDiv('kt-fin-kpi-val').setText(this.formatFinCurrency(totalPendingToCollect, curr));
             collectEl.createDiv('kt-fin-kpi-lbl').setText('A COBRAR');
         }
 
@@ -19293,17 +19320,17 @@ kanban-plugin: basic
 
             // Gastos Previstos
             const expProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-red');
-            expProjEl.createDiv('kt-fin-proj-val').setText(`-${formatCurrency(totalPlannedExp, curr)}`);
+            expProjEl.createDiv('kt-fin-proj-val').setText(`-${this.formatFinCurrency(totalPlannedExp, curr)}`);
             expProjEl.createDiv('kt-fin-proj-lbl').setText(`GASTOS PREVISTOS (${plannedExpItems.length})`);
 
             // Entradas Previstas
             const incProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-green');
-            incProjEl.createDiv('kt-fin-proj-val').setText(`+${formatCurrency(totalPlannedInc, curr)}`);
+            incProjEl.createDiv('kt-fin-proj-val').setText(`+${this.formatFinCurrency(totalPlannedInc, curr)}`);
             incProjEl.createDiv('kt-fin-proj-lbl').setText(`ENTRADAS PREVISTAS (${plannedIncItems.length})`);
 
             // Saldo Final Projetado (Orange matching Saldo Final)
             const balProjEl = projRow.createDiv('kt-fin-proj-cell kt-cell-orange');
-            balProjEl.createDiv('kt-fin-proj-val').setText(formatCurrency(projectedFinalBal, curr));
+            balProjEl.createDiv('kt-fin-proj-val').setText(this.formatFinCurrency(projectedFinalBal, curr));
             balProjEl.createDiv('kt-fin-proj-lbl').setText('SALDO FINAL PROJETADO');
         }
 
@@ -19317,7 +19344,7 @@ kanban-plugin: basic
         const expProgRow = progressSection.createDiv('kt-fin-prog-row');
         const expProgLeft = expProgRow.createDiv('kt-fin-prog-left');
         expProgLeft.createSpan({ cls: 'kt-fin-prog-title', text: 'Despesas' });
-        expProgLeft.createSpan({ cls: 'kt-fin-prog-meta', text: `Planejado: ${formatCurrency(plannedExpTotal, curr)} • Real: ${formatCurrency(totalExpReal, curr)}` });
+        expProgLeft.createSpan({ cls: 'kt-fin-prog-meta', text: `Planejado: ${this.formatFinCurrency(plannedExpTotal, curr)} • Real: ${this.formatFinCurrency(totalExpReal, curr)}` });
         
         const expBarTrack = expProgRow.createDiv('kt-fin-prog-track');
         const expPct = plannedExpTotal > 0 ? Math.min(100, Math.round((totalExpReal / plannedExpTotal) * 100)) : 0;
@@ -19328,7 +19355,7 @@ kanban-plugin: basic
         const incProgRow = progressSection.createDiv('kt-fin-prog-row');
         const incProgLeft = incProgRow.createDiv('kt-fin-prog-left');
         incProgLeft.createSpan({ cls: 'kt-fin-prog-title', text: 'Renda' });
-        incProgLeft.createSpan({ cls: 'kt-fin-prog-meta', text: `Planejado: ${formatCurrency(plannedIncTotal, curr)} • Real: ${formatCurrency(totalIncReal, curr)}` });
+        incProgLeft.createSpan({ cls: 'kt-fin-prog-meta', text: `Planejado: ${this.formatFinCurrency(plannedIncTotal, curr)} • Real: ${this.formatFinCurrency(totalIncReal, curr)}` });
 
         const incBarTrack = incProgRow.createDiv('kt-fin-prog-track');
         const incPct = plannedIncTotal > 0 ? Math.min(100, Math.round((totalIncReal / plannedIncTotal) * 100)) : (totalIncReal > 0 ? 100 : 0);
@@ -19350,11 +19377,11 @@ kanban-plugin: basic
 
         const expTotalRow = expTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
         expTotalRow.createEl('td', { text: 'Totais' });
-        expTotalRow.createEl('td', { text: formatCurrency(plannedExpTotal, curr) });
-        expTotalRow.createEl('td', { text: formatCurrency(totalExpReal, curr) });
+        expTotalRow.createEl('td', { text: this.formatFinCurrency(plannedExpTotal, curr) });
+        expTotalRow.createEl('td', { text: this.formatFinCurrency(totalExpReal, curr) });
         const expTotalDiff = plannedExpTotal - totalExpReal;
         const expTotDiffTd = expTotalRow.createEl('td', { cls: expTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
-        expTotDiffTd.setText(formatCurrency(expTotalDiff, curr));
+        expTotDiffTd.setText(this.formatFinCurrency(expTotalDiff, curr));
 
         const expByCat = {};
         (monthData.expenses || []).forEach(e => {
@@ -19372,10 +19399,10 @@ kanban-plugin: basic
             const diff = planned - real;
             const tr = expTbody.createEl('tr');
             tr.createEl('td', { text: cat, cls: 'kt-td-cat-name' });
-            tr.createEl('td', { text: formatCurrency(planned, curr) });
-            tr.createEl('td', { text: formatCurrency(real, curr) });
+            tr.createEl('td', { text: this.formatFinCurrency(planned, curr) });
+            tr.createEl('td', { text: this.formatFinCurrency(real, curr) });
             const diffTd = tr.createEl('td', { cls: diff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
-            diffTd.setText(formatCurrency(diff, curr));
+            diffTd.setText(this.formatFinCurrency(diff, curr));
         });
 
         // Category Comparison Table: Renda
@@ -19393,11 +19420,11 @@ kanban-plugin: basic
 
         const incTotalRow = incTbody.createEl('tr', { cls: 'kt-fin-tot-row' });
         incTotalRow.createEl('td', { text: 'Totais' });
-        incTotalRow.createEl('td', { text: formatCurrency(plannedIncTotal, curr) });
-        incTotalRow.createEl('td', { text: formatCurrency(totalIncReal, curr) });
+        incTotalRow.createEl('td', { text: this.formatFinCurrency(plannedIncTotal, curr) });
+        incTotalRow.createEl('td', { text: this.formatFinCurrency(totalIncReal, curr) });
         const incTotalDiff = totalIncReal - plannedIncTotal;
         const incTotDiffTd = incTotalRow.createEl('td', { cls: incTotalDiff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
-        incTotDiffTd.setText(formatCurrency(incTotalDiff, curr));
+        incTotDiffTd.setText(this.formatFinCurrency(incTotalDiff, curr));
 
         const incByCat = {};
         (monthData.income || []).forEach(i => {
@@ -19415,10 +19442,10 @@ kanban-plugin: basic
             const diff = real - planned;
             const tr = incTbody.createEl('tr');
             tr.createEl('td', { text: cat, cls: 'kt-td-cat-name' });
-            tr.createEl('td', { text: formatCurrency(planned, curr) });
-            tr.createEl('td', { text: formatCurrency(real, curr) });
+            tr.createEl('td', { text: this.formatFinCurrency(planned, curr) });
+            tr.createEl('td', { text: this.formatFinCurrency(real, curr) });
             const diffTd = tr.createEl('td', { cls: diff >= 0 ? 'kt-diff-pos' : 'kt-diff-neg' });
-            diffTd.setText(formatCurrency(diff, curr));
+            diffTd.setText(this.formatFinCurrency(diff, curr));
         });
 
         // 5. Médias Históricas (Sugestões e auto-preenchimento)
@@ -19480,7 +19507,7 @@ kanban-plugin: basic
                 const isPending = person.pending > 0;
                 const statusBadge = nameWrap.createSpan({
                     cls: `kt-fin-person-badge ${isPending ? 'is-pending' : 'is-settled'}`,
-                    text: isPending ? `A Cobrar: ${formatCurrency(person.pending, curr)}` : '✓ 100% Pago'
+                    text: isPending ? `A Cobrar: ${this.formatFinCurrency(person.pending, curr)}` : '✓ 100% Pago'
                 });
 
                 // Items list breakdown
@@ -19503,7 +19530,7 @@ kanban-plugin: basic
                     dateSpan.style.fontSize = '11px';
 
                     const descSpan = itemRow.createSpan({ text: `${item.desc} / `, cls: 'kt-fin-pitem-desc' });
-                    itemRow.createSpan({ text: formatCurrency(item.amount, curr), cls: 'kt-fin-pitem-val' });
+                    itemRow.createSpan({ text: this.formatFinCurrency(item.amount, curr), cls: 'kt-fin-pitem-val' });
                     if (item.settled) {
                         itemRow.createSpan({ text: ' (✓ Pago)', cls: 'kt-diff-pos' });
                     }
@@ -24396,6 +24423,7 @@ const DEFAULT_SETTINGS = {
     dockLayout: null,
     finances: {
         currency: 'R$',
+        hideValues: false,
         selectedYear: new Date().getFullYear(),
         selectedMonth: new Date().getMonth() + 1,
         categories: [

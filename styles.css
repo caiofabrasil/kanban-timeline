@@ -6263,6 +6263,64 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     font-variant-numeric: tabular-nums;
 }
 
+/* Privacy / Bank View Mode (Olhinho de banco) */
+.kt-fin-privacy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+    background: var(--background-secondary-alt);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 5px 11px;
+    color: var(--text-normal);
+}
+
+.kt-fin-privacy-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+}
+
+.kt-fin-privacy-btn.is-privacy-active {
+    background: rgba(244, 63, 94, 0.12);
+    border-color: rgba(244, 63, 94, 0.4);
+    color: #f43f5e;
+}
+
+.kt-fin-privacy-btn.is-privacy-active:hover {
+    background: rgba(244, 63, 94, 0.2);
+    border-color: #f43f5e;
+}
+
+.kt-fin-privacy-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.kt-fin-privacy-text {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.kt-fin-hide-values .kt-td-val,
+.kt-fin-hide-values .kt-fin-kpi-val,
+.kt-fin-hide-values .kt-pie-center-val,
+.kt-fin-hide-values .kt-fin-bd-val,
+.kt-fin-hide-values .kt-fin-kpi-big,
+.kt-fin-hide-values .kt-fin-rec-total,
+.kt-fin-hide-values .kt-fin-future-month-total,
+.kt-fin-hide-values .kt-fin-future-item-val,
+.kt-fin-hide-values .kt-fin-proj-val,
+.kt-fin-hide-values .kt-fin-pitem-val,
+.kt-fin-hide-values .kt-fin-smart-avg-val {
+    letter-spacing: 1.5px;
+    font-family: var(--font-monospace, monospace);
+}
+
 .kt-cal-card-inner {
     display: flex;
     align-items: center;
