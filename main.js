@@ -105,6 +105,21 @@ function getHabitDateKey(date) {
     return `${y}-${m}-${day}`;
 }
 
+function parseHabitDate(str) {
+    if (!str || typeof str !== 'string') return null;
+    const parts = str.trim().split('-');
+    if (parts.length !== 3) return null;
+    let y, m, d;
+    if (parts[0].length === 4) {
+        [y, m, d] = parts.map(Number);
+    } else {
+        [d, m, y] = parts.map(Number);
+    }
+    if (!y || !m || !d) return null;
+    const dt = new Date(y, m - 1, d);
+    return isNaN(dt.getTime()) ? null : dt;
+}
+
 function getCardTagColor(tags, customProjects = []) {
     if (!tags || tags.length === 0) return null;
     for (const tag of tags) {
@@ -2629,7 +2644,7 @@ class ProjectReportModal extends obsidian.Modal {
         this.project = project;
         this.cards = cards || [];
         this.view = view;
-        this.periodFilter = 'all'; // 'all', 'month', 'week', 'today'
+        this.periodFilter = 'month'; // 'all', 'month', 'week', 'today' (Default: Este Mês)
         this.statusFilter = 'all'; // 'all', 'done', 'pending'
         this.groupMode = 'date';   // 'date', 'task'
     }
@@ -4002,6 +4017,574 @@ class HabitQuickValueModal extends obsidian.Modal {
             this.close();
             if (this.onSave) await this.onSave(val);
         };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
+// MOVE CARD TO DATE MODAL (Passar Tarefa para Outro Dia)
+// ================================================================
+
+class MoveCardToDateModal extends obsidian.Modal {
+    constructor(app, plugin, card, fromDay, startStr, endStr, instanceIndex, onMove) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.card = card;
+        this.fromDay = fromDay;
+        this.startStr = startStr;
+        this.endStr = endStr;
+        this.instanceIndex = instanceIndex;
+        this.onMove = onMove;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-move-card-modal-wrapper');
+        this.modalEl.style.maxWidth = '460px';
+        contentEl.addClass('kt-move-card-modal');
+
+        const titleH = contentEl.createEl('h3', { text: 'Passar Tarefa para Outro Dia' });
+        titleH.style.marginTop = '0';
+        titleH.style.marginBottom = '8px';
+
+        const cardPreview = contentEl.createDiv('kt-move-card-preview');
+        cardPreview.style.display = 'flex';
+        cardPreview.style.alignItems = 'center';
+        cardPreview.style.gap = '8px';
+        cardPreview.style.padding = '8px 12px';
+        cardPreview.style.borderRadius = '6px';
+        cardPreview.style.background = 'var(--background-secondary)';
+        cardPreview.style.marginBottom = '14px';
+
+        const pCol = this.card.tagColor || this.card.projectColor || this.card.priorityColor || 'var(--interactive-accent)';
+        cardPreview.style.borderLeft = `3px solid ${pCol}`;
+
+        const titleSpan = cardPreview.createSpan({ text: this.card.title });
+        titleSpan.style.fontWeight = '500';
+        titleSpan.style.fontSize = '13px';
+
+        const currInfo = contentEl.createDiv('kt-move-card-current-info');
+        currInfo.style.fontSize = '12px';
+        currInfo.style.color = 'var(--text-muted)';
+        currInfo.style.marginBottom = '14px';
+        const dayNamesFull = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        const fromDayName = dayNamesFull[this.fromDay.getDay()];
+        currInfo.setText(`📅 Dia atual: ${fromDayName} (${formatDate(this.fromDay)}) • ⏰ ${this.startStr} – ${this.endStr}`);
+
+        // Quick Navigation Buttons (-1 dia / +1 dia)
+        const quickNavWrap = contentEl.createDiv('kt-move-quick-nav');
+        quickNavWrap.style.display = 'grid';
+        quickNavWrap.style.gridTemplateColumns = '1fr 1fr';
+        quickNavWrap.style.gap = '8px';
+        quickNavWrap.style.marginBottom = '16px';
+
+        const prevBtn = quickNavWrap.createEl('button', { cls: 'kt-move-nav-btn', text: '⬅️ Ontem (-1 dia)' });
+        prevBtn.onclick = async () => {
+            const prevDay = new Date(this.fromDay);
+            prevDay.setDate(prevDay.getDate() - 1);
+            this.close();
+            await this.onMove(prevDay, this.startStr, this.endStr);
+        };
+
+        const nextBtn = quickNavWrap.createEl('button', { cls: 'kt-move-nav-btn kt-move-nav-next mod-cta', text: '➡️ Amanhã (+1 dia)' });
+        nextBtn.onclick = async () => {
+            const nextDay = new Date(this.fromDay);
+            nextDay.setDate(nextDay.getDate() + 1);
+            this.close();
+            await this.onMove(nextDay, this.startStr, this.endStr);
+        };
+
+        // Days of current week
+        const weekSection = contentEl.createDiv('kt-move-week-section');
+        weekSection.style.marginBottom = '16px';
+        const weekLabel = weekSection.createEl('label', { text: 'Ou selecione um dia desta semana:', cls: 'kt-edit-label' });
+        weekLabel.style.display = 'block';
+        weekLabel.style.fontSize = '12px';
+        weekLabel.style.fontWeight = '500';
+        weekLabel.style.marginBottom = '6px';
+
+        const daysGrid = weekSection.createDiv('kt-move-days-grid');
+        daysGrid.style.display = 'grid';
+        daysGrid.style.gridTemplateColumns = 'repeat(7, 1fr)';
+        daysGrid.style.gap = '4px';
+
+        const now = new Date(this.fromDay);
+        const dow = now.getDay();
+        const diff = dow === 0 ? -6 : 1 - dow;
+        const monday = new Date(now);
+        monday.setDate(monday.getDate() + diff);
+
+        const dayAbbrs = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(monday);
+            d.setDate(d.getDate() + i);
+            const isCurrent = sameDay(d, this.fromDay);
+            const btn = daysGrid.createEl('button', {
+                cls: `kt-move-day-btn${isCurrent ? ' kt-is-current' : ''}`
+            });
+            btn.style.padding = '6px 2px';
+            btn.style.fontSize = '11px';
+            btn.style.display = 'flex';
+            btn.style.flexDirection = 'column';
+            btn.style.alignItems = 'center';
+            btn.style.gap = '2px';
+            btn.innerHTML = `<span style="font-weight:600">${dayAbbrs[i]}</span><span style="font-size:10px;opacity:0.8">${String(d.getDate()).padStart(2, '0')}</span>`;
+
+            if (isCurrent) {
+                btn.disabled = true;
+                btn.style.opacity = '0.4';
+                btn.style.cursor = 'default';
+                btn.title = 'Dia atual da tarefa';
+            } else {
+                btn.onclick = async () => {
+                    this.close();
+                    await this.onMove(d, this.startStr, this.endStr);
+                };
+            }
+        }
+
+        // Custom Date Input
+        const customSection = contentEl.createDiv('kt-move-custom-section');
+        const customLabel = customSection.createEl('label', { text: 'Ou digite uma data específica (DD-MM-YYYY):', cls: 'kt-edit-label' });
+        customLabel.style.display = 'block';
+        customLabel.style.fontSize = '12px';
+        customLabel.style.fontWeight = '500';
+        customLabel.style.marginBottom = '6px';
+
+        const inputWrap = customSection.createDiv('kt-move-input-wrap');
+        inputWrap.style.display = 'flex';
+        inputWrap.style.gap = '8px';
+
+        const input = inputWrap.createEl('input', {
+            type: 'text',
+            cls: 'kt-move-date-input',
+            value: formatDate(new Date(this.fromDay.getTime() + 86400000))
+        });
+        input.style.flex = '1';
+        input.placeholder = 'DD-MM-YYYY';
+
+        const confirmBtn = inputWrap.createEl('button', {
+            cls: 'mod-cta kt-move-confirm-btn',
+            text: 'Mover'
+        });
+
+        confirmBtn.onclick = async () => {
+            const parsed = parseDate(input.value.trim());
+            if (!parsed) {
+                new obsidian.Notice('Data inválida. Use o formato DD-MM-YYYY.');
+                return;
+            }
+            this.close();
+            await this.onMove(parsed, this.startStr, this.endStr);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
+// HABIT REPORT MODAL (Discriminado e Estatísticas Detalhadas do Hábito)
+// ================================================================
+
+class HabitReportModal extends obsidian.Modal {
+    constructor(app, plugin, habit, view) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.habit = habit;
+        this.view = view;
+        this.periodFilter = 'month'; // 'month' (default), 'week', 'today', 'all'
+    }
+
+    onOpen() {
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-report-modal-wrapper');
+        this.modalEl.style.width = '820px';
+        this.modalEl.style.maxWidth = '94vw';
+        this.modalEl.style.maxHeight = '90vh';
+        this.renderModal();
+    }
+
+    getReportEntries() {
+        const habit = this.habit;
+        const habitLogs = this.plugin.settings.habitLogs?.[habit.id] || {};
+        const entries = [];
+
+        const now = new Date();
+        const startOfThisWeek = this.view?.getWeekStart ? this.view.getWeekStart() : startOfWeek(now);
+        const endOfThisWeek = new Date(startOfThisWeek);
+        endOfThisWeek.setDate(endOfThisWeek.getDate() + 7);
+
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        // Union of all recorded dates in habitLogs and awHabitCache
+        const allKeys = new Set(Object.keys(habitLogs));
+        if (habit.type === 'time' && habit.awFilter && this.plugin.settings.awConnected && this.view?.awHabitCache) {
+            Object.keys(this.view.awHabitCache).forEach(k => {
+                if (k.startsWith(`${habit.id}::`)) {
+                    allKeys.add(k.split('::')[1]);
+                }
+            });
+        }
+
+        allKeys.forEach(dKey => {
+            const rawVal = habitLogs[dKey];
+            const dateObj = parseHabitDate(dKey);
+            if (!dateObj) return;
+
+            // Check AW cache
+            let awMins = null;
+            if (habit.type === 'time' && habit.awFilter && this.plugin.settings.awConnected && this.view?.awHabitCache) {
+                const cKey = `${habit.id}::${dKey}`;
+                if (this.view.awHabitCache[cKey] !== undefined) {
+                    awMins = this.view.awHabitCache[cKey];
+                }
+            }
+
+            let numericVal = Number(rawVal) || 0;
+            if (awMins !== null && awMins > numericVal) {
+                numericVal = awMins;
+            }
+
+            if (habit.type === 'boolean') {
+                if (!rawVal) return;
+            } else {
+                if (numericVal <= 0) return;
+            }
+
+            // Period filter
+            if (this.periodFilter === 'today' && !sameDay(dateObj, now)) return;
+            if (this.periodFilter === 'week' && (dateObj < startOfThisWeek || dateObj >= endOfThisWeek)) return;
+            if (this.periodFilter === 'month' && (dateObj < startOfMonth || dateObj > endOfMonth)) return;
+
+            let displayVal = '';
+            let isDone = false;
+
+            if (habit.type === 'boolean') {
+                isDone = Boolean(rawVal);
+                displayVal = '✓ Concluído';
+                numericVal = 1;
+            } else if (habit.type === 'time') {
+                displayVal = formatMinutesToHours(numericVal) || `${numericVal}m`;
+                isDone = numericVal >= (habit.target || 1);
+            } else if (habit.type === 'count') {
+                displayVal = `${numericVal} ${habit.unit || 'vezes'}`;
+                isDone = numericVal >= (habit.target || 1);
+            }
+
+            entries.push({
+                dateStr: dKey,
+                dateObj,
+                rawVal,
+                numericVal,
+                displayVal,
+                isDone,
+                awMins
+            });
+        });
+
+        entries.sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime());
+        return entries;
+    }
+
+    calculateGrandTotal() {
+        const habit = this.habit;
+        const habitLogs = this.plugin.settings.habitLogs?.[habit.id] || {};
+        let total = 0;
+        Object.entries(habitLogs).forEach(([dKey, val]) => {
+            if (habit.type === 'boolean') {
+                if (val) total += 1;
+            } else if (habit.type === 'time') {
+                let m = Number(val) || 0;
+                if (habit.awFilter && this.plugin.settings.awConnected && this.view?.awHabitCache) {
+                    const cKey = `${habit.id}::${dKey}`;
+                    const aw = this.view.awHabitCache[cKey];
+                    if (aw && aw > m) m = aw;
+                }
+                total += m;
+            } else if (habit.type === 'count') {
+                total += Number(val) || 0;
+            }
+        });
+        return total;
+    }
+
+    renderModal() {
+        const { contentEl, habit } = this;
+        contentEl.empty();
+        contentEl.addClass('kt-report-modal');
+
+        const entries = this.getReportEntries();
+        const grandTotal = this.calculateGrandTotal();
+        const streak = this.view?.calculateHabitStreak ? this.view.calculateHabitStreak(habit, this.plugin.settings.habitLogs) : 0;
+
+        let periodSum = 0;
+        let periodDoneDays = 0;
+        entries.forEach(e => {
+            periodSum += e.numericVal;
+            if (e.isDone) periodDoneDays++;
+        });
+
+        // 1. Top Header Banner
+        const topHdr = contentEl.createDiv('kt-report-header');
+        const titleRow = topHdr.createDiv('kt-report-title-row');
+        const habitBadge = titleRow.createDiv('kt-report-proj-badge');
+        const dot = habitBadge.createSpan('kt-report-color-dot');
+        dot.style.backgroundColor = habit.color || '#6366f1';
+        habitBadge.createEl('h2', { cls: 'kt-report-proj-title', text: `Relatório do Hábito: ${habit.icon || '✨'} ${habit.name}` });
+
+        const typeLabel = habit.type === 'time' ? `Tempo (Meta: ${formatMinutesToHours(habit.target)})` : habit.type === 'count' ? `Contagem (Meta: ${habit.target} ${habit.unit || ''})` : 'Booleano (Check)';
+        habitBadge.createSpan({ cls: 'kt-report-tag-pill', text: typeLabel });
+
+        const closeBtn = titleRow.createEl('button', { cls: 'kt-report-close-btn', text: '✕' });
+        closeBtn.title = 'Fechar Relatório (Esc)';
+        closeBtn.onclick = () => this.close();
+
+        // 2. Filter Bar
+        const filterBar = contentEl.createDiv('kt-report-filter-bar');
+        const periodGrp = filterBar.createDiv('kt-report-btn-group');
+        const periods = [
+            { id: 'all', label: 'Tudo' },
+            { id: 'month', label: 'Este Mês' },
+            { id: 'week', label: 'Esta Semana' },
+            { id: 'today', label: 'Hoje' }
+        ];
+        periods.forEach(p => {
+            const btn = periodGrp.createEl('button', {
+                cls: `kt-report-filter-btn ${this.periodFilter === p.id ? 'is-active' : ''}`,
+                text: p.label
+            });
+            btn.onclick = () => {
+                this.periodFilter = p.id;
+                this.renderModal();
+            };
+        });
+
+        // 3. KPI Summary Row
+        const kpiRow = contentEl.createDiv('kt-report-kpi-row');
+
+        // Box 1: Total Histórico Acumulado (Destaque Principal)
+        const kpiGrand = kpiRow.createDiv('kt-report-kpi-card kt-kpi-green');
+        if (habit.type === 'time') {
+            kpiGrand.createDiv('kt-report-kpi-val').setText(formatMinutesToHours(grandTotal) || '0m');
+            kpiGrand.createDiv('kt-report-kpi-lbl').setText(`⏱ Total Histórico Acumulado (${(grandTotal / 60).toFixed(1)}h)`);
+        } else if (habit.type === 'boolean') {
+            kpiGrand.createDiv('kt-report-kpi-val').setText(`${grandTotal} dias`);
+            kpiGrand.createDiv('kt-report-kpi-lbl').setText('✅ Total Histórico Concluído');
+        } else {
+            kpiGrand.createDiv('kt-report-kpi-val').setText(`${grandTotal} ${habit.unit || 'vezes'}`);
+            kpiGrand.createDiv('kt-report-kpi-lbl').setText('📈 Total Histórico Acumulado');
+        }
+
+        // Box 2: Total no Período Selecionado
+        const kpiPeriod = kpiRow.createDiv('kt-report-kpi-card');
+        const filterLabel = this.periodFilter === 'all' ? 'no Histórico' : this.periodFilter === 'month' ? 'Neste Mês' : this.periodFilter === 'week' ? 'Nesta Semana' : 'Hoje';
+        if (habit.type === 'time') {
+            kpiPeriod.createDiv('kt-report-kpi-val').setText(formatMinutesToHours(periodSum) || '0m');
+            kpiPeriod.createDiv('kt-report-kpi-lbl').setText(`Total ${filterLabel} (${(periodSum / 60).toFixed(1)}h)`);
+        } else if (habit.type === 'boolean') {
+            kpiPeriod.createDiv('kt-report-kpi-val').setText(`${periodDoneDays} dias`);
+            kpiPeriod.createDiv('kt-report-kpi-lbl').setText(`Dias Concluídos ${filterLabel}`);
+        } else {
+            kpiPeriod.createDiv('kt-report-kpi-val').setText(`${periodSum} ${habit.unit || 'vezes'}`);
+            kpiPeriod.createDiv('kt-report-kpi-lbl').setText(`Total ${filterLabel}`);
+        }
+
+        // Box 3: Sequência / Streak
+        const kpiStreak = kpiRow.createDiv('kt-report-kpi-card');
+        kpiStreak.createDiv('kt-report-kpi-val').setText(`🔥 ${streak} dias`);
+        kpiStreak.createDiv('kt-report-kpi-lbl').setText('Sequência Atual (Streak)');
+
+        // Box 4: Média Diária / Frequência
+        const kpiAvg = kpiRow.createDiv('kt-report-kpi-card');
+        if (habit.type === 'time') {
+            const avgMins = entries.length > 0 ? Math.round(periodSum / entries.length) : 0;
+            kpiAvg.createDiv('kt-report-kpi-val').setText(formatMinutesToHours(avgMins) || '0m');
+            kpiAvg.createDiv('kt-report-kpi-lbl').setText(`Média por Dia Ativo (${entries.length} dias)`);
+        } else if (habit.type === 'boolean') {
+            kpiAvg.createDiv('kt-report-kpi-val').setText(`${entries.length} registros`);
+            kpiAvg.createDiv('kt-report-kpi-lbl').setText(`Total de Dias no Filtro`);
+        } else {
+            const avgCount = entries.length > 0 ? (periodSum / entries.length).toFixed(1) : '0';
+            kpiAvg.createDiv('kt-report-kpi-val').setText(`${avgCount} /dia`);
+            kpiAvg.createDiv('kt-report-kpi-lbl').setText(`Média por Dia Ativo`);
+        }
+
+        // 4. Action Export Buttons
+        const actionsBar = contentEl.createDiv('kt-report-actions-bar');
+
+        const copyMsgBtn = actionsBar.createEl('button', {
+            cls: 'kt-report-act-btn kt-btn-copy-msg mod-cta',
+            text: 'Copiar Resumo'
+        });
+        copyMsgBtn.onclick = async () => {
+            const txt = this.generateSummaryText(entries, grandTotal, periodSum);
+            await navigator.clipboard.writeText(txt);
+            new obsidian.Notice('✓ Resumo copiado!');
+        };
+
+        const copyMdBtn = actionsBar.createEl('button', {
+            cls: 'kt-report-act-btn',
+            text: 'Copiar Tabela Markdown'
+        });
+        copyMdBtn.onclick = async () => {
+            const md = this.generateMarkdownTable(entries, grandTotal, periodSum);
+            await navigator.clipboard.writeText(md);
+            new obsidian.Notice('✓ Tabela Markdown copiada!');
+        };
+
+        const exportCsvBtn = actionsBar.createEl('button', {
+            cls: 'kt-report-act-btn',
+            text: 'Exportar CSV'
+        });
+        exportCsvBtn.onclick = () => this.exportCSV(entries);
+
+        // 5. Discriminado de Registros por Data
+        const breakdownSection = contentEl.createDiv('kt-report-breakdown-section');
+        const breakdownHdr = breakdownSection.createDiv('kt-report-breakdown-hdr');
+        breakdownHdr.createEl('h3', { text: `Discriminado de Registros (${entries.length} dias registrados)` });
+
+        const breakdownList = breakdownSection.createDiv('kt-report-breakdown-list');
+
+        if (entries.length === 0) {
+            breakdownList.createDiv('kt-report-empty').setText('Nenhum registro encontrado para este período.');
+            return;
+        }
+
+        const daysNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+
+        entries.forEach(e => {
+            const itemRow = breakdownList.createDiv('kt-report-day-item');
+            itemRow.style.display = 'flex';
+            itemRow.style.alignItems = 'center';
+            itemRow.style.justifyContent = 'space-between';
+            itemRow.style.padding = '8px 12px';
+            itemRow.style.borderBottom = '1px solid var(--background-modifier-border)';
+
+            const left = itemRow.createDiv();
+            left.style.display = 'flex';
+            left.style.alignItems = 'center';
+            left.style.gap = '10px';
+
+            const statusDot = left.createSpan();
+            statusDot.style.width = '8px';
+            statusDot.style.height = '8px';
+            statusDot.style.borderRadius = '50%';
+            statusDot.style.backgroundColor = e.isDone ? (habit.color || '#10b981') : '#f59e0b';
+
+            const dateLbl = left.createSpan();
+            const dFormatted = `${String(e.dateObj.getDate()).padStart(2,'0')}/${String(e.dateObj.getMonth()+1).padStart(2,'0')}/${e.dateObj.getFullYear()}`;
+            const dow = daysNames[e.dateObj.getDay()];
+            dateLbl.setText(`${dFormatted} (${dow})`);
+            dateLbl.style.fontWeight = '600';
+
+            if (e.awMins !== null && e.awMins > 0) {
+                const awBadge = left.createSpan({ cls: 'kt-report-tag-pill', text: `⌚ ActivityWatch (${formatMinutesToHours(e.awMins)})` });
+                awBadge.style.fontSize = '10px';
+            }
+
+            const right = itemRow.createDiv();
+            right.style.display = 'flex';
+            right.style.alignItems = 'center';
+            right.style.gap = '12px';
+
+            const valBadge = right.createSpan();
+            valBadge.style.fontSize = '13px';
+            valBadge.style.fontWeight = '700';
+            valBadge.style.color = e.isDone ? 'var(--text-normal)' : 'var(--text-muted)';
+            valBadge.setText(e.displayVal);
+
+            const statusBadge = right.createSpan({
+                cls: `kt-report-status-badge ${e.isDone ? 'kt-status-done' : 'kt-status-pending'}`,
+                text: e.isDone ? '✓ Meta Concluída' : '⏳ Parcial'
+            });
+            statusBadge.style.fontSize = '11px';
+            statusBadge.style.padding = '2px 8px';
+            statusBadge.style.borderRadius = '4px';
+            statusBadge.style.background = e.isDone ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+            statusBadge.style.color = e.isDone ? '#10b981' : '#f59e0b';
+        });
+    }
+
+    generateSummaryText(entries, grandTotal, periodSum) {
+        const habit = this.habit;
+        const lines = [];
+        lines.push(`✨ Relatório do Hábito: ${habit.icon || '✨'} ${habit.name}`);
+        lines.push(`Período: ${this.periodFilter === 'all' ? 'Tudo' : this.periodFilter === 'month' ? 'Este Mês' : this.periodFilter === 'week' ? 'Esta Semana' : 'Hoje'}`);
+        if (habit.type === 'time') {
+            lines.push(`⏱ Total Histórico Acumulado: ${formatMinutesToHours(grandTotal)} (${(grandTotal / 60).toFixed(1)}h)`);
+            lines.push(`📅 Total no Período: ${formatMinutesToHours(periodSum)}`);
+        } else if (habit.type === 'boolean') {
+            lines.push(`✅ Total Histórico Concluído: ${grandTotal} dias`);
+            lines.push(`📅 Dias Concluídos no Período: ${periodSum} dias`);
+        } else {
+            lines.push(`📈 Total Histórico Acumulado: ${grandTotal} ${habit.unit || 'vezes'}`);
+            lines.push(`📅 Total no Período: ${periodSum}`);
+        }
+        lines.push(`🔥 Sequência Atual: ${this.view?.calculateHabitStreak ? this.view.calculateHabitStreak(habit, this.plugin.settings.habitLogs) : 0} dias`);
+        lines.push(`\nRegistros (${entries.length} dias):`);
+        const daysShort = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        entries.forEach(e => {
+            const dow = daysShort[e.dateObj.getDay()];
+            lines.push(`- ${e.dateStr} (${dow}): ${e.displayVal} ${e.isDone ? '✓' : '·'}`);
+        });
+        return lines.join('\n');
+    }
+
+    generateMarkdownTable(entries, grandTotal, periodSum) {
+        const habit = this.habit;
+        const lines = [];
+        lines.push(`### ✨ Relatório do Hábito: ${habit.icon || '✨'} ${habit.name}`);
+        if (habit.type === 'time') {
+            lines.push(`**Total Histórico Acumulado:** ${formatMinutesToHours(grandTotal)} | **No Período:** ${formatMinutesToHours(periodSum)}`);
+        } else {
+            lines.push(`**Total Histórico:** ${grandTotal} | **No Período:** ${periodSum}`);
+        }
+        lines.push('');
+        lines.push('| Data | Dia da Semana | Registrado | Status |');
+        lines.push('|---|---|---|---|');
+        const daysNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        entries.forEach(e => {
+            const dow = daysNames[e.dateObj.getDay()];
+            const status = e.isDone ? '✅ Concluído' : '⏳ Parcial';
+            lines.push(`| ${e.dateStr} | ${dow} | ${e.displayVal} | ${status} |`);
+        });
+        return lines.join('\n');
+    }
+
+    exportCSV(entries) {
+        const habit = this.habit;
+        const rows = [
+            ['Data', 'Dia da Semana', 'Registrado', 'Valor Numerico', 'Status']
+        ];
+        const daysNames = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        entries.forEach(e => {
+            const dow = daysNames[e.dateObj.getDay()];
+            const status = e.isDone ? 'Concluido' : 'Parcial';
+            rows.push([
+                e.dateStr,
+                dow,
+                `"${e.displayVal}"`,
+                String(e.numericVal),
+                status
+            ]);
+        });
+        const csvContent = rows.map(r => r.join(',')).join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `Habito_${habit.name.replace(/[^a-zA-Z0-9]/g, '_')}_${getHabitDateKey(new Date())}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        new obsidian.Notice('✓ CSV exportado com sucesso!');
     }
 
     onClose() {
@@ -11112,17 +11695,28 @@ kanban-plugin: basic
             newEnd   = targetDay;
             content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
         } else {
-            if (targetDay < newStart) {
+            const isSingleDay = !card.endDate || sameDay(card.startDate, card.endDate);
+            const existingAnySlots = (card.timeBlocks && card.timeBlocks.length > 0) ||
+                                     (card.dailyTimes && Object.keys(card.dailyTimes).length > 0);
+
+            if (isSingleDay && !existingAnySlots) {
+                // Single day card with no time slots anywhere: moving to targetDay
                 newStart = targetDay;
+                newEnd   = targetDay;
                 content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
-            } else if (targetDay > newEnd) {
-                newEnd = targetDay;
-                content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+            } else {
+                if (targetDay < newStart) {
+                    newStart = targetDay;
+                    content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+                } else if (targetDay > newEnd) {
+                    newEnd = targetDay;
+                    content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+                }
             }
         }
 
         // 2. Update time block
-        content = this.parser.updateTimeBlock(content, card.lineIndex, targetDay, ts, te, instanceIndex, mode, card);
+        content = this.parser.updateTimeBlock(content, card.lineIndex, targetDay, ts, te, instanceIndex, mode, { ...card, startDate: newStart, endDate: newEnd });
 
         // 3. Atomically write to disk
         await this.app.vault.modify(file, content);
@@ -11132,6 +11726,51 @@ kanban-plugin: basic
         if (ts && te) {
             new obsidian.Notice(`✓ ${card.title} (${formatDate(targetDay).slice(0,5)}) → ${ts} – ${te}`);
         }
+    }
+
+    async moveTimeblockCardToDate(card, fromDay, toDay, newTs, newTe, instanceIndex = null) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+
+        // 1. Calculate new date range
+        let newStart = card.startDate ? new Date(card.startDate) : new Date(toDay);
+        let newEnd   = card.endDate   ? new Date(card.endDate)   : new Date(newStart);
+
+        const isSingleDayCard = !card.startDate || !card.endDate || sameDay(card.startDate, card.endDate) || (sameDay(card.startDate, fromDay) && sameDay(card.endDate, fromDay));
+
+        if (isSingleDayCard) {
+            // Whole card moves from fromDay to toDay
+            newStart = startOfDay(toDay);
+            newEnd   = endOfDay(toDay);
+        } else {
+            // Multi-day card: expand range if needed
+            if (startOfDay(toDay) < startOfDay(newStart)) {
+                newStart = startOfDay(toDay);
+            }
+            if (endOfDay(toDay) > endOfDay(newEnd)) {
+                newEnd = endOfDay(toDay);
+            }
+        }
+
+        // 2. Update date range in line first (so sLimit/eLimit in updateTimeBlock are up-to-date)
+        content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+
+        // 3. Remove timeblock from fromDay
+        content = this.parser.updateTimeBlock(content, card.lineIndex, fromDay, null, null, instanceIndex, 'delete', { ...card, startDate: newStart, endDate: newEnd });
+
+        // 4. Set timeblock on toDay
+        content = this.parser.updateTimeBlock(content, card.lineIndex, toDay, newTs, newTe, null, 'set', { ...card, startDate: newStart, endDate: newEnd });
+
+        // 5. Save changes atomically
+        await this.app.vault.modify(file, content);
+
+        if (card.habitId || card.isHabit) {
+            await this.syncAllHabitLogs(card.habitId);
+        }
+
+        new obsidian.Notice(`✓ ${card.title} → ${this.dayLabel(toDay, true)} (${newTs} – ${newTe})`);
+        await this.refresh();
     }
 
     async createTimeEvent(title, date, h, m, durationMins, eventType) {
@@ -11326,8 +11965,12 @@ kanban-plugin: basic
             } catch(e) {}
         }
 
+        let hasChanges = false;
         targetHabits.forEach(h => {
-            if (!this.plugin.settings.habitLogs[h.id]) this.plugin.settings.habitLogs[h.id] = {};
+            if (!this.plugin.settings.habitLogs[h.id]) {
+                this.plugin.settings.habitLogs[h.id] = {};
+                hasChanges = true;
+            }
 
             // Find all cards matching this habit
             const habitCards = allCards.filter(c => {
@@ -11403,35 +12046,36 @@ kanban-plugin: basic
                 });
             });
 
-            // Clean keys that no longer have completed habit timeblocks
-            const existingKeys = Object.keys(this.plugin.settings.habitLogs[h.id] || {});
-            existingKeys.forEach(k => {
-                if (!daysMap.has(k)) {
-                    delete this.plugin.settings.habitLogs[h.id][k];
-                }
-            });
-
-            // Set new values
+            // Set new values from completed habit timeblocks (ADD/UPDATE ONLY, NEVER DELETE MANUAL/HISTORICAL LOGS)
             daysMap.forEach((data, dKey) => {
                 if (h.type === 'boolean') {
-                    this.plugin.settings.habitLogs[h.id][dKey] = data.count > 0;
+                    if (data.count > 0 && !this.plugin.settings.habitLogs[h.id][dKey]) {
+                        this.plugin.settings.habitLogs[h.id][dKey] = true;
+                        hasChanges = true;
+                    }
                 } else if (h.type === 'time') {
                     if (data.totalMinutes > 0) {
-                        this.plugin.settings.habitLogs[h.id][dKey] = data.totalMinutes;
-                    } else {
-                        delete this.plugin.settings.habitLogs[h.id][dKey];
+                        const cur = Number(this.plugin.settings.habitLogs[h.id][dKey]) || 0;
+                        if (data.totalMinutes > cur) {
+                            this.plugin.settings.habitLogs[h.id][dKey] = data.totalMinutes;
+                            hasChanges = true;
+                        }
                     }
                 } else if (h.type === 'count') {
                     if (data.count > 0) {
-                        this.plugin.settings.habitLogs[h.id][dKey] = data.count;
-                    } else {
-                        delete this.plugin.settings.habitLogs[h.id][dKey];
+                        const cur = Number(this.plugin.settings.habitLogs[h.id][dKey]) || 0;
+                        if (data.count > cur) {
+                            this.plugin.settings.habitLogs[h.id][dKey] = data.count;
+                            hasChanges = true;
+                        }
                     }
                 }
             });
         });
 
-        await this.plugin.saveSettings();
+        if (hasChanges) {
+            await this.plugin.saveSettings();
+        }
     }
 
     async deleteCardLine(lineIndex) {
@@ -14036,7 +14680,7 @@ kanban-plugin: basic
         let hasAnyHourlyRate = false;
 
         const projStatsList = projects.map(p => {
-            const stats = this.calculateProjectStats(p, this.cards, this.projectsPeriodFilter || 'all');
+            const stats = this.calculateProjectStats(p, this.cards, this.projectsPeriodFilter || 'month');
             globalPastMinutes += stats.pastMinutes;
             globalFutureMinutes += stats.futureMinutes;
             globalTasksCount += stats.totalTasks;
@@ -14069,7 +14713,7 @@ kanban-plugin: basic
             { id: 'month', label: 'Este Mês' },
             { id: 'today', label: 'Hoje' },
         ];
-        const activeFilter = this.projectsPeriodFilter || 'all';
+        const activeFilter = this.projectsPeriodFilter || 'month';
 
         filters.forEach(f => {
             const fBtn = filterGroup.createEl('button', {
@@ -15542,6 +16186,9 @@ kanban-plugin: basic
 
             // Col 1: Habit Info
             const tdInfo = tr.createEl('td', { cls: 'kt-td-habit-info' });
+            tdInfo.style.cursor = 'pointer';
+            tdInfo.title = `Clique para abrir o relatório discriminado de "${h.name}"`;
+            tdInfo.onclick = () => new HabitReportModal(this.app, this.plugin, h, this).open();
             const dot = tdInfo.createSpan('kt-habit-color-dot');
             dot.style.backgroundColor = h.color || '#6366f1';
 
@@ -15688,8 +16335,15 @@ kanban-plugin: basic
             streakBadge.setText(`🔥 ${streak}d`);
             tdTotal.createSpan({ cls: 'kt-habit-total-lbl', text: totalSummary });
 
-            // Col 11: Edit Button
+            // Col 11: Action Buttons
             const tdAct = tr.createEl('td', { cls: 'kt-td-act' });
+            const reportBtn = tdAct.createEl('button', { cls: 'kt-habit-report-btn', text: '📋' });
+            reportBtn.title = 'Abrir relatório discriminado e histórico';
+            reportBtn.onclick = (e) => {
+                e.stopPropagation();
+                new HabitReportModal(this.app, this.plugin, h, this).open();
+            };
+
             const editBtn = tdAct.createEl('button', { cls: 'kt-habit-edit-btn', text: '✎' });
             editBtn.title = 'Editar Hábito';
             editBtn.onclick = () => {
@@ -15718,6 +16372,255 @@ kanban-plugin: basic
                     }
                 ).open();
             };
+        });
+
+        // 4. Seção de Detalhes dos Hábitos (Cards de Métricas e Totais)
+        this.renderHabitCardsSection(wrap);
+    }
+
+    renderHabitCardsSection(wrap) {
+        const habits = this.plugin.settings.habits || [];
+        if (habits.length === 0) return;
+
+        const logs = this.plugin.settings.habitLogs || {};
+        const now = new Date();
+        const startOfThisWeek = this.getWeekStart ? this.getWeekStart() : startOfWeek(now);
+        const endOfThisWeek = new Date(startOfThisWeek);
+        endOfThisWeek.setDate(endOfThisWeek.getDate() + 7);
+
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        const section = wrap.createDiv('kt-habits-cards-section');
+        section.style.marginTop = '28px';
+
+        const sHdr = section.createDiv('kt-habits-cards-section-hdr');
+        sHdr.style.display = 'flex';
+        sHdr.style.justifyContent = 'space-between';
+        sHdr.style.alignItems = 'baseline';
+        sHdr.style.marginBottom = '14px';
+
+        const titleGroup = sHdr.createDiv();
+        const h3 = titleGroup.createEl('h3', { cls: 'kt-habits-cards-title', text: '📊 Métricas & Resumo por Hábito' });
+        h3.style.margin = '0 0 4px 0';
+        h3.style.fontSize = '1.15rem';
+        h3.style.fontWeight = '700';
+
+        const sub = titleGroup.createEl('p', { cls: 'kt-habits-cards-sub', text: 'Clique em qualquer cartão para ver o histórico discriminado, relatórios e médias.' });
+        sub.style.margin = '0';
+        sub.style.fontSize = '12px';
+        sub.style.color = 'var(--text-muted)';
+
+        const grid = section.createDiv('kt-proj-grid kt-habit-cards-grid');
+
+        habits.forEach(h => {
+            const card = grid.createDiv('kt-proj-card kt-habit-card');
+            card.style.setProperty('--proj-card-color', h.color || '#6366f1');
+            card.style.cursor = 'pointer';
+            card.title = `Clique para abrir o relatório discriminado de "${h.name}"`;
+            card.onclick = (e) => {
+                if (e.target.closest('button')) return;
+                new HabitReportModal(this.app, this.plugin, h, this).open();
+            };
+
+            // Header
+            const hdr = card.createDiv('kt-proj-card-header');
+            const titleGrp = hdr.createDiv('kt-proj-card-title-group');
+            const dot = titleGrp.createSpan('kt-proj-color-dot');
+            dot.style.backgroundColor = h.color || '#6366f1';
+            
+            titleGrp.createEl('h3', { cls: 'kt-proj-card-name', text: `${h.icon || '✨'} ${h.name}` });
+
+            // Target / Frequency Pill
+            const activeCount = (h.activeDays && Array.isArray(h.activeDays)) ? h.activeDays.length : 7;
+            let freqLabel = 'Diário';
+            if (activeCount === 5 && !h.activeDays?.includes(0) && !h.activeDays?.includes(6)) freqLabel = 'Seg a Sex';
+            else if (activeCount === 2 && h.activeDays?.includes(0) && h.activeDays?.includes(6)) freqLabel = 'Fim de Sem';
+            else if (activeCount < 7) freqLabel = `${activeCount}x/sem`;
+
+            let targetPillText = freqLabel;
+            if (h.type === 'time') targetPillText = `Meta: ${formatMinutesToHours(h.target)} • ${freqLabel}`;
+            else if (h.type === 'count') targetPillText = `Meta: ${h.target} ${h.unit || ''} • ${freqLabel}`;
+
+            const pill = titleGrp.createSpan('kt-proj-tag-pill');
+            pill.setText(targetPillText);
+
+            const actions = hdr.createDiv('kt-proj-card-actions');
+            const reportBtn = actions.createEl('button', { cls: 'kt-proj-action-btn', text: '📋' });
+            reportBtn.title = 'Abrir relatório detalhado e histórico';
+            reportBtn.onclick = (e) => {
+                e.stopPropagation();
+                new HabitReportModal(this.app, this.plugin, h, this).open();
+            };
+
+            const editBtn = actions.createEl('button', { cls: 'kt-proj-action-btn', text: '✎' });
+            editBtn.title = 'Editar Hábito';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                new HabitModal(
+                    this.app,
+                    this.plugin,
+                    h,
+                    async (updatedH) => {
+                        const idx = this.plugin.settings.habits.findIndex(item => item.id === h.id);
+                        if (idx !== -1) {
+                            this.plugin.settings.habits[idx] = updatedH;
+                            await this.plugin.saveSettings();
+                            if (updatedH.type === 'time' && updatedH.awFilter) {
+                                await this.syncActivityWatchHabits();
+                            }
+                            this.render();
+                            new obsidian.Notice(`Hábito "${updatedH.name}" atualizado!`);
+                        }
+                    },
+                    async () => {
+                        this.plugin.settings.habits = this.plugin.settings.habits.filter(item => item.id !== h.id);
+                        if (this.plugin.settings.habitLogs) delete this.plugin.settings.habitLogs[h.id];
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`Hábito "${h.name}" removido.`);
+                    }
+                ).open();
+            };
+
+            // Calculations for card
+            const hLogs = logs[h.id] || {};
+            const streak = this.calculateHabitStreak(h, logs);
+
+            // Compute Grand Total, Month Total, Week Total
+            let grandTotalMins = 0;
+            let monthMins = 0;
+            let weekMins = 0;
+            let totalCount = 0;
+            let monthCount = 0;
+            let weekCount = 0;
+            let totalDays = 0;
+            let monthDays = 0;
+            let weekDays = 0;
+
+            const entriesList = [];
+
+            // Union of dates from hLogs and AW cache
+            const allDateKeys = new Set(Object.keys(hLogs));
+            if (h.type === 'time' && h.awFilter && this.plugin.settings.awConnected && this.awHabitCache) {
+                Object.keys(this.awHabitCache).forEach(k => {
+                    if (k.startsWith(`${h.id}::`)) {
+                        allDateKeys.add(k.split('::')[1]);
+                    }
+                });
+            }
+
+            allDateKeys.forEach(dStr => {
+                const rawVal = hLogs[dStr];
+                const dObj = parseHabitDate(dStr);
+                if (!dObj) return;
+
+                let awM = null;
+                if (h.type === 'time' && h.awFilter && this.plugin.settings.awConnected && this.awHabitCache) {
+                    const ck = `${h.id}::${dStr}`;
+                    if (this.awHabitCache[ck] !== undefined) awM = this.awHabitCache[ck];
+                }
+
+                let numVal = Number(rawVal) || 0;
+                if (awM !== null && awM > numVal) numVal = awM;
+
+                if (h.type === 'boolean') {
+                    if (!rawVal) return;
+                } else {
+                    if (numVal <= 0) return;
+                }
+
+                const inMonth = (dObj >= startOfMonth && dObj <= endOfMonth);
+                const inWeek  = (dObj >= startOfThisWeek && dObj < endOfThisWeek);
+
+                if (h.type === 'time') {
+                    grandTotalMins += numVal;
+                    if (inMonth) monthMins += numVal;
+                    if (inWeek) weekMins += numVal;
+                    entriesList.push({ dStr, dObj, val: numVal, display: formatMinutesToHours(numVal) || `${numVal}m` });
+                } else if (h.type === 'count') {
+                    totalCount += numVal;
+                    if (inMonth) monthCount += numVal;
+                    if (inWeek) weekCount += numVal;
+                    entriesList.push({ dStr, dObj, val: numVal, display: `${numVal} ${h.unit || ''}` });
+                } else {
+                    totalDays++;
+                    if (inMonth) monthDays++;
+                    if (inWeek) weekDays++;
+                    entriesList.push({ dStr, dObj, val: true, display: '✓ Concluído' });
+                }
+            });
+
+            // Big Main Display
+            const mainMetric = card.createDiv('kt-proj-main-hours');
+            if (h.type === 'time') {
+                const formattedGrand = formatMinutesToHours(grandTotalMins) || '0m';
+                mainMetric.createSpan({ cls: 'kt-proj-hours-val', text: formattedGrand });
+                mainMetric.createSpan({ cls: 'kt-proj-hours-lbl', text: 'tempo total dedicado acumulado' });
+            } else if (h.type === 'boolean') {
+                mainMetric.createSpan({ cls: 'kt-proj-hours-val', text: `${totalDays} dias` });
+                mainMetric.createSpan({ cls: 'kt-proj-hours-lbl', text: 'dias concluídos no total' });
+            } else if (h.type === 'count') {
+                mainMetric.createSpan({ cls: 'kt-proj-hours-val', text: `${totalCount} ${h.unit || 'vezes'}` });
+                mainMetric.createSpan({ cls: 'kt-proj-hours-lbl', text: 'total acumulado' });
+            }
+
+            // Meta Badges Container
+            const metaBadges = card.createDiv('kt-proj-meta-badges');
+            if (h.type === 'time') {
+                const badgeMonth = metaBadges.createDiv('kt-proj-future-badge');
+                badgeMonth.setText(`📅 Este Mês: ${formatMinutesToHours(monthMins) || '0m'} • 📆 Esta Semana: ${formatMinutesToHours(weekMins) || '0m'}`);
+            } else if (h.type === 'boolean') {
+                const badgeMonth = metaBadges.createDiv('kt-proj-future-badge');
+                badgeMonth.setText(`📅 Este Mês: ${monthDays} dias • 📆 Esta Semana: ${weekDays} dias`);
+            } else if (h.type === 'count') {
+                const badgeMonth = metaBadges.createDiv('kt-proj-future-badge');
+                badgeMonth.setText(`📅 Este Mês: ${monthCount} • 📆 Esta Semana: ${weekCount}`);
+            }
+
+            const streakRow = metaBadges.createDiv('kt-proj-target-row');
+            streakRow.setText(`🔥 Sequência Atual: ${streak} dias consecutivos`);
+
+            if (h.type === 'time' && h.awFilter && this.plugin.settings.awConnected) {
+                const awRow = metaBadges.createDiv('kt-proj-target-row');
+                awRow.style.color = 'var(--text-accent)';
+                awRow.setText(`⌚ ActivityWatch: "${h.awFilter}"`);
+            }
+
+            // Mini Recent History
+            entriesList.sort((a, b) => b.dObj.getTime() - a.dObj.getTime());
+            const recentEntries = entriesList.slice(0, 4);
+
+            if (recentEntries.length > 0) {
+                const recSection = card.createDiv('kt-habit-card-recent');
+                recSection.style.marginTop = '8px';
+                recSection.style.paddingTop = '8px';
+                recSection.style.borderTop = '1px solid var(--background-modifier-border)';
+                recSection.style.display = 'flex';
+                recSection.style.flexDirection = 'column';
+                recSection.style.gap = '4px';
+
+                const daysShort = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+                recentEntries.forEach(re => {
+                    const item = recSection.createDiv();
+                    item.style.display = 'flex';
+                    item.style.justifyContent = 'space-between';
+                    item.style.fontSize = '11.5px';
+                    item.style.color = 'var(--text-normal)';
+
+                    const dow = daysShort[re.dObj.getDay()];
+                    const dFormatted = `${String(re.dObj.getDate()).padStart(2,'0')}/${String(re.dObj.getMonth()+1).padStart(2,'0')}`;
+                    item.createSpan({ text: `${dFormatted} (${dow}):` }).style.color = 'var(--text-muted)';
+                    item.createSpan({ text: re.display }).style.fontWeight = '600';
+                });
+
+                const link = recSection.createDiv();
+                link.style.fontSize = '11px';
+                link.style.fontWeight = '600';
+                link.style.color = 'var(--text-accent)';
+                link.style.marginTop = '4px';
+                link.setText(`Ver histórico completo (${entriesList.length} registros) →`);
+            }
         });
     }
 
@@ -19916,7 +20819,7 @@ kanban-plugin: basic
         // 2. Subtabs Navigation Bar
         const navStrip = viewWrap.createDiv('kt-health-nav-strip');
         const subTabs = [
-            { id: 'overview', label: 'Geral & Diário' },
+            { id: 'overview', label: 'Hub & Diário' },
             { id: 'biomarkers', label: 'Biomarcadores & Exames' },
             { id: 'consultations', label: isPet ? 'Consultas Veterinárias' : 'Histórico Médico & Consultas' },
             { id: 'mental', label: 'Saúde Mental, Diário & Remédios' }
@@ -19968,95 +20871,260 @@ kanban-plugin: basic
                 mood: 3,
                 stress: 2,
                 energy: 3,
-                notes: ''
+                notes: '',
+                journal: '',
+                emotions: [],
+                medicationsTaken: []
             };
         }
         const todayLog = profileData.dailyLogs[todayStr];
+        if (!Array.isArray(todayLog.emotions)) todayLog.emotions = [];
+        if (!Array.isArray(todayLog.medicationsTaken)) todayLog.medicationsTaken = [];
 
-        // 1. Quick Check-in Bar for Today
-        const quickWrap = container.createDiv('kt-health-quicklog-wrap');
+        // 1. Cockpit: Quick Metrics (Left) + Diário & Reflexão do Dia (Right)
+        const cockpit = container.createDiv('kt-health-hub-cockpit');
 
-        // Water
-        const waterItem = quickWrap.createDiv('kt-health-quicklog-item');
-        waterItem.createSpan({ cls: 'kt-health-quicklog-label', text: `Água Hoje (${todayLog.water || 0} ml)` });
-        const waterControls = waterItem.createDiv('kt-health-quicklog-controls');
+        // --- LEFT COLUMN: Quick Metrics ---
+        const metricsCol = cockpit.createDiv('kt-health-quick-metrics');
         
-        const w250 = waterControls.createEl('button', { cls: 'kt-health-water-btn', text: '+250 ml' });
+        // Header
+        const mHdr = metricsCol.createDiv('kt-health-cockpit-hdr');
+        const mTitle = mHdr.createDiv('kt-health-cockpit-title');
+        mTitle.createSpan({ text: '⚡ Check-in Rápido de Hoje' });
+        
+        const dateParts = todayStr.split('-');
+        const dateObj = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
+        const weekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        const weekdayStr = weekdays[dateObj.getDay()] || '';
+        mHdr.createSpan({ cls: 'kt-health-cockpit-date-pill', text: `📅 ${todayStr} (${weekdayStr})` });
+
+        // Water Metric
+        const waterRow = metricsCol.createDiv('kt-health-metric-row');
+        const waterLblRow = waterRow.createDiv('kt-health-metric-label-row');
+        waterLblRow.createSpan({ text: '💧 Água Ingerida' });
+        waterLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${todayLog.water || 0} / 3.000 ml` });
+        
+        const waterBar = waterRow.createDiv('kt-health-water-meter-bar');
+        const waterFill = waterBar.createDiv('kt-health-water-meter-fill');
+        const waterPct = Math.min(100, Math.round(((todayLog.water || 0) / 3000) * 100));
+        waterFill.style.width = `${waterPct}%`;
+
+        const waterBtns = waterRow.createDiv('kt-health-btn-group-row');
+        const w250 = waterBtns.createEl('button', { cls: 'kt-health-chip-btn', text: '+250 ml' });
         w250.onclick = async () => {
             todayLog.water = (todayLog.water || 0) + 250;
             await this.plugin.saveSettings();
             this.render();
         };
-
-        const w500 = waterControls.createEl('button', { cls: 'kt-health-water-btn', text: '+500 ml' });
+        const w500 = waterBtns.createEl('button', { cls: 'kt-health-chip-btn', text: '+500 ml' });
         w500.onclick = async () => {
             todayLog.water = (todayLog.water || 0) + 500;
             await this.plugin.saveSettings();
             this.render();
         };
-
-        const wReset = waterControls.createEl('button', { cls: 'kt-health-water-btn', text: 'Zerar' });
+        const wReset = waterBtns.createEl('button', { cls: 'kt-health-chip-btn', text: 'Zerar' });
         wReset.onclick = async () => {
             todayLog.water = 0;
             await this.plugin.saveSettings();
             this.render();
         };
 
-        // Sleep
-        const sleepItem = quickWrap.createDiv('kt-health-quicklog-item');
-        sleepItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Sono da Noite' });
-        const sleepControls = sleepItem.createDiv('kt-health-quicklog-controls');
-        const sleepInput = sleepControls.createEl('input', { type: 'number', step: '0.5', value: todayLog.sleepHours || '' });
-        sleepInput.placeholder = 'Horas (ex: 7.5)';
-        sleepInput.style.width = '110px';
+        // Sleep Metric
+        const sleepRow = metricsCol.createDiv('kt-health-metric-row');
+        const sleepLblRow = sleepRow.createDiv('kt-health-metric-label-row');
+        sleepLblRow.createSpan({ text: '😴 Sono da Noite' });
+        sleepLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: todayLog.sleepHours ? `${todayLog.sleepHours}h` : 'Não registrado' });
+        
+        const sleepBtns = sleepRow.createDiv('kt-health-btn-group-row');
+        [6, 7, 7.5, 8, 8.5].forEach(h => {
+            const isSel = todayLog.sleepHours === h;
+            const btn = sleepBtns.createEl('button', {
+                cls: `kt-health-chip-btn ${isSel ? 'is-active' : ''}`,
+                text: `${h}h`
+            });
+            btn.onclick = async () => {
+                todayLog.sleepHours = h;
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+        const sleepInput = sleepBtns.createEl('input', { type: 'number', step: '0.5', value: todayLog.sleepHours || '' });
+        sleepInput.placeholder = 'Outro (h)';
+        sleepInput.style.width = '76px';
+        sleepInput.style.fontSize = '11.5px';
+        sleepInput.style.padding = '2px 6px';
         sleepInput.onchange = async () => {
             todayLog.sleepHours = sleepInput.value ? parseFloat(sleepInput.value) : undefined;
             await this.plugin.saveSettings();
+            this.render();
         };
 
-        // Weight
-        const weightItem = quickWrap.createDiv('kt-health-quicklog-item');
-        weightItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Peso Atual' });
-        const weightControls = weightItem.createDiv('kt-health-quicklog-controls');
-        const weightInput = weightControls.createEl('input', { type: 'number', step: '0.1', value: todayLog.weight || '' });
-        weightInput.placeholder = 'kg (ex: 82.4)';
-        weightInput.style.width = '110px';
-        weightInput.onchange = async () => {
+        // Weight Metric
+        const weightRow = metricsCol.createDiv('kt-health-metric-row');
+        const weightLblRow = weightRow.createDiv('kt-health-metric-label-row');
+        weightLblRow.createSpan({ text: '⚖️ Peso Corporal' });
+        weightLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: todayLog.weight ? `${todayLog.weight} kg` : 'Não registrado' });
+        
+        const weightInputWrap = weightRow.createDiv('kt-health-btn-group-row');
+        const weightInput = weightInputWrap.createEl('input', { type: 'number', step: '0.1', value: todayLog.weight || '' });
+        weightInput.placeholder = 'kg (ex: 82.5)';
+        weightInput.style.width = '120px';
+        weightInput.style.fontSize = '12px';
+        weightInput.style.padding = '3px 8px';
+        const saveWeightBtn = weightInputWrap.createEl('button', { cls: 'kt-health-chip-btn', text: 'Salvar Peso' });
+        saveWeightBtn.onclick = async () => {
             todayLog.weight = weightInput.value ? parseFloat(weightInput.value) : undefined;
             await this.plugin.saveSettings();
+            this.render();
+            new obsidian.Notice('✓ Peso atualizado!');
         };
 
-        // Mood (1-5)
-        const moodItem = quickWrap.createDiv('kt-health-quicklog-item');
-        moodItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Humor (1 a 5)' });
-        const moodGroup = moodItem.createDiv('kt-health-score-group');
-        [1, 2, 3, 4, 5].forEach(score => {
-            const btn = moodGroup.createEl('button', {
-                cls: `kt-health-score-btn ${(todayLog.mood || 3) === score ? 'is-selected' : ''}`,
-                text: String(score)
+        // Mood (1-5 with Emojis)
+        const moodRow = metricsCol.createDiv('kt-health-metric-row');
+        const moodLblRow = moodRow.createDiv('kt-health-metric-label-row');
+        moodLblRow.createSpan({ text: '😊 Humor do Dia' });
+        const moodEmojis = [
+            { score: 1, emoji: '😫', text: 'Mal' },
+            { score: 2, emoji: '😟', text: 'Baixo' },
+            { score: 3, emoji: '😐', text: 'Neutro' },
+            { score: 4, emoji: '😊', text: 'Bom' },
+            { score: 5, emoji: '😄', text: 'Radiante' }
+        ];
+        const curMood = moodEmojis.find(m => m.score === (todayLog.mood || 3));
+        moodLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: curMood ? `${curMood.emoji} ${curMood.text}` : '' });
+        
+        const moodBtns = moodRow.createDiv('kt-health-btn-group-row');
+        moodEmojis.forEach(m => {
+            const isSel = (todayLog.mood || 3) === m.score;
+            const btn = moodBtns.createEl('button', {
+                cls: `kt-health-chip-btn ${isSel ? 'is-active' : ''}`,
+                text: `${m.emoji} ${m.score}`
             });
             btn.onclick = async () => {
-                todayLog.mood = score;
+                todayLog.mood = m.score;
                 await this.plugin.saveSettings();
                 this.render();
             };
         });
 
         // Stress (1-5)
-        const stressItem = quickWrap.createDiv('kt-health-quicklog-item');
-        stressItem.createSpan({ cls: 'kt-health-quicklog-label', text: 'Estresse (1 a 5)' });
-        const stressGroup = stressItem.createDiv('kt-health-score-group');
-        [1, 2, 3, 4, 5].forEach(score => {
-            const btn = stressGroup.createEl('button', {
-                cls: `kt-health-score-btn ${(todayLog.stress || 2) === score ? 'is-selected' : ''}`,
-                text: String(score)
+        const stressRow = metricsCol.createDiv('kt-health-metric-row');
+        const stressLblRow = stressRow.createDiv('kt-health-metric-label-row');
+        stressLblRow.createSpan({ text: '⚡ Nível de Estresse' });
+        const stressNames = ['', 'Relaxado', 'Sob Controle', 'Moderado', 'Alto', 'Crítico'];
+        stressLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${todayLog.stress || 2}/5 (${stressNames[todayLog.stress || 2]})` });
+        
+        const stressBtns = stressRow.createDiv('kt-health-btn-group-row');
+        [1, 2, 3, 4, 5].forEach(s => {
+            const isSel = (todayLog.stress || 2) === s;
+            const btn = stressBtns.createEl('button', {
+                cls: `kt-health-chip-btn ${isSel ? 'is-active' : ''}`,
+                text: `${s}`
             });
             btn.onclick = async () => {
-                todayLog.stress = score;
+                todayLog.stress = s;
                 await this.plugin.saveSettings();
                 this.render();
             };
         });
+
+        // Active Medications Check-in for Today
+        const activeMeds = (profileData.medications || []).filter(m => m.active !== false);
+        if (activeMeds.length > 0) {
+            const medRow = metricsCol.createDiv('kt-health-metric-row');
+            const medLblRow = medRow.createDiv('kt-health-metric-label-row');
+            medLblRow.createSpan({ text: '💊 Remédios de Hoje' });
+            const takenSet = new Set(todayLog.medicationsTaken || []);
+            medLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${takenSet.size} / ${activeMeds.length} tomados` });
+
+            const medBtnsWrap = medRow.createDiv('kt-health-btn-group-row');
+            activeMeds.forEach(m => {
+                const isTaken = takenSet.has(m.id);
+                const chip = medBtnsWrap.createEl('button', {
+                    cls: `kt-health-chip-btn ${isTaken ? 'is-active' : ''}`,
+                    text: isTaken ? `✓ ${m.name}` : `○ ${m.name}`
+                });
+                chip.onclick = async () => {
+                    if (isTaken) {
+                        takenSet.delete(m.id);
+                        m.stock = (m.stock || 0) + 1;
+                        new obsidian.Notice(`↩ ${m.name} desmarcado (+1 estoque).`);
+                    } else {
+                        takenSet.add(m.id);
+                        if (m.stock > 0) m.stock = m.stock - 1;
+                        new obsidian.Notice(`✓ ${m.name} tomado (-1 estoque).`);
+                    }
+                    todayLog.medicationsTaken = Array.from(takenSet);
+                    await this.plugin.saveSettings();
+                    this.render();
+                };
+            });
+        }
+
+        // --- RIGHT COLUMN: Diário & Reflexão do Dia ---
+        const journalCol = cockpit.createDiv('kt-health-quick-journal');
+        
+        const jHdr = journalCol.createDiv('kt-health-cockpit-hdr');
+        const jTitle = jHdr.createDiv('kt-health-cockpit-title');
+        jTitle.createSpan({ text: '✍️ Diário & Reflexão do Dia' });
+        
+        const saveJBtn = jHdr.createEl('button', { cls: 'mod-cta', text: '💾 Salvar Diário', style: 'padding:3px 10px; font-size:11.5px;' });
+
+        // Emotions / Tags
+        const tagsWrap = journalCol.createDiv('kt-health-metric-row');
+        const tagsLblRow = tagsWrap.createDiv('kt-health-metric-label-row');
+        tagsLblRow.createSpan({ text: 'Sentimentos / Tags' });
+        
+        const tagsList = tagsWrap.createDiv('kt-health-tags-list');
+        const defaultTags = ['#Grato', '#Produtivo', '#Ansioso', '#Focado', '#Cansado', '#Trabalho', '#Estudos', '#SonoRuim', '#Exercício', '#Família', '#Paz', '#Sobrecarga'];
+        const activeEmotions = new Set(todayLog.emotions || []);
+        defaultTags.forEach(t => {
+            const isAct = activeEmotions.has(t);
+            const chip = tagsList.createDiv(`kt-health-emotion-chip ${isAct ? 'is-active' : ''}`);
+            chip.setText(t);
+            chip.onclick = async () => {
+                if (activeEmotions.has(t)) activeEmotions.delete(t);
+                else activeEmotions.add(t);
+                todayLog.emotions = Array.from(activeEmotions);
+                await this.plugin.saveSettings();
+                this.render();
+            };
+        });
+
+        // Quick Journal Textarea
+        const jTextarea = journalCol.createEl('textarea', { cls: 'kt-health-quick-journal-textarea' });
+        jTextarea.value = todayLog.journal || todayLog.notes || '';
+        jTextarea.placeholder = 'Como está sendo seu dia? Escreva rapidamente pensamentos, aprendizados, vitórias, preocupações ou gratidões... (Ctrl+Enter para salvar)';
+
+        const performSaveJournal = async () => {
+            const val = jTextarea.value.trim();
+            todayLog.journal = val;
+            todayLog.notes = val;
+            await this.plugin.saveSettings();
+            new obsidian.Notice('✓ Diário salvo com sucesso!');
+        };
+
+        saveJBtn.onclick = async () => {
+            await performSaveJournal();
+            this.render();
+        };
+
+        jTextarea.onkeydown = async (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                await performSaveJournal();
+                this.render();
+            }
+        };
+
+        const hintRow = journalCol.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--text-muted);' });
+        hintRow.createSpan({ text: 'Dica: Pressione Ctrl+Enter para salvar rapidamente.' });
+        if (todayLog.journal || todayLog.notes) {
+            hintRow.createSpan({ text: `✓ Registro salvo hoje (${(todayLog.journal || todayLog.notes).length} caracteres)` });
+        }
+
+        // 2. Interactive SVG Health Trends Chart Card
+        this.renderHealthOverviewCharts(container, profile, profileData);
 
         // 2. KPI Summary Grid
         const kpiGrid = container.createDiv('kt-health-kpi-grid');
@@ -20108,7 +21176,6 @@ kanban-plugin: basic
         const card4 = kpiGrid.createDiv('kt-health-kpi-card');
         card4.createSpan({ cls: 'kt-health-kpi-label', text: 'Hidratação de Hoje' });
         card4.createSpan({ cls: 'kt-health-kpi-val', text: `${todayLog.water || 0} ml` });
-        const waterPct = Math.min(100, Math.round(((todayLog.water || 0) / 3000) * 100));
         card4.createSpan({ cls: 'kt-health-kpi-meta', text: `${waterPct}% da meta diária de 3.000 ml` });
 
         // 3. Two-Column Mid Grid (Upcoming Consultations/Returns + Recent Biomarkers)
@@ -20363,6 +21430,464 @@ kanban-plugin: basic
                 };
             });
         }
+    }
+
+    renderHealthOverviewCharts(container, profile, profileData) {
+        if (!this.healthOverviewChartRange) this.healthOverviewChartRange = 14;
+        if (!this.healthOverviewMetric) this.healthOverviewMetric = 'sleep_energy';
+
+        const chartCard = container.createDiv('kt-health-card kt-health-hub-charts-card');
+        
+        // Header
+        const cardHdr = chartCard.createDiv('kt-health-card-header');
+        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+        titleGroup.createSpan({ cls: 'kt-health-card-title', text: '📈 Tendências & Histórico de Saúde' });
+        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Visualização interativa de evolução dos seus principais indicadores:' });
+
+        // Range Toggles (7D, 14D, 30D)
+        const rangeGroup = cardHdr.createDiv('kt-health-btn-group-row');
+        [7, 14, 30].forEach(r => {
+            const isAct = this.healthOverviewChartRange === r;
+            const btn = rangeGroup.createEl('button', {
+                cls: `kt-health-chip-btn ${isAct ? 'is-active' : ''}`,
+                text: `${r} Dias`
+            });
+            btn.onclick = () => {
+                this.healthOverviewChartRange = r;
+                this.render();
+            };
+        });
+
+        // Metric Selector Bar
+        const selectorWrap = chartCard.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;' });
+        const metricSelector = selectorWrap.createDiv('kt-health-chart-metric-selector');
+        
+        const metrics = [
+            { id: 'sleep_energy', label: '😴 Sono & Energia' },
+            { id: 'mood_stress', label: '😊 Humor vs. Estresse' },
+            { id: 'water', label: '💧 Hidratação (ml)' },
+            { id: 'weight', label: '⚖️ Peso Corporal (kg)' }
+        ];
+
+        metrics.forEach(m => {
+            const isAct = this.healthOverviewMetric === m.id;
+            const mBtn = metricSelector.createEl('button', {
+                cls: `kt-health-metric-tab-btn ${isAct ? 'is-active' : ''}`,
+                text: m.label
+            });
+            mBtn.onclick = () => {
+                this.healthOverviewMetric = m.id;
+                this.render();
+            };
+        });
+
+        // Prepare Days Data
+        const range = this.healthOverviewChartRange;
+        const days = [];
+        for (let i = range - 1; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const dStr = d.toISOString().split('T')[0];
+            const log = (profileData.dailyLogs && profileData.dailyLogs[dStr]) || {};
+            days.push({
+                date: dStr,
+                label: `${d.getDate()}/${d.getMonth() + 1}`,
+                dayOfWeek: ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][d.getDay()],
+                sleep: typeof log.sleepHours === 'number' ? log.sleepHours : 0,
+                energy: typeof log.energy === 'number' ? log.energy : 0,
+                mood: typeof log.mood === 'number' ? log.mood : 0,
+                stress: typeof log.stress === 'number' ? log.stress : 0,
+                water: typeof log.water === 'number' ? log.water : 0,
+                weight: typeof log.weight === 'number' ? log.weight : 0
+            });
+        }
+
+        // Stats Strip based on active metric
+        const statsStrip = chartCard.createDiv('kt-health-chart-stats-strip');
+        if (this.healthOverviewMetric === 'sleep_energy') {
+            const validSleep = days.filter(d => d.sleep > 0);
+            const avgSleep = validSleep.length > 0 ? (validSleep.reduce((a, b) => a + b.sleep, 0) / validSleep.length).toFixed(1) : '-';
+            const validEnergy = days.filter(d => d.energy > 0);
+            const avgEnergy = validEnergy.length > 0 ? (validEnergy.reduce((a, b) => a + b.energy, 0) / validEnergy.length).toFixed(1) : '-';
+            
+            const s1 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s1.createSpan({ text: 'Média de Sono:' });
+            s1.createSpan({ cls: 'kt-health-chart-stat-val', text: avgSleep !== '-' ? `${avgSleep}h / noite` : '-' });
+
+            const s2 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s2.createSpan({ text: 'Energia Média:' });
+            s2.createSpan({ cls: 'kt-health-chart-stat-val', text: avgEnergy !== '-' ? `${avgEnergy} / 5` : '-' });
+
+            const s3 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s3.createSpan({ text: 'Dias Monitorados:' });
+            s3.createSpan({ cls: 'kt-health-chart-stat-val', text: `${validSleep.length} de ${range}` });
+        } else if (this.healthOverviewMetric === 'mood_stress') {
+            const validMood = days.filter(d => d.mood > 0);
+            const avgMood = validMood.length > 0 ? (validMood.reduce((a, b) => a + b.mood, 0) / validMood.length).toFixed(1) : '-';
+            const validStress = days.filter(d => d.stress > 0);
+            const avgStress = validStress.length > 0 ? (validStress.reduce((a, b) => a + b.stress, 0) / validStress.length).toFixed(1) : '-';
+
+            const s1 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s1.createSpan({ text: 'Humor Médio:' });
+            s1.createSpan({ cls: 'kt-health-chart-stat-val', text: avgMood !== '-' ? `${avgMood} / 5` : '-' });
+
+            const s2 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s2.createSpan({ text: 'Estresse Médio:' });
+            s2.createSpan({ cls: 'kt-health-chart-stat-val', text: avgStress !== '-' ? `${avgStress} / 5` : '-' });
+
+            const s3 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s3.createSpan({ text: 'Equilíbrio:' });
+            const balanceText = (avgMood !== '-' && avgStress !== '-') ? (parseFloat(avgMood) >= parseFloat(avgStress) ? 'Positivo / Estável' : 'Atenção ao Estresse') : '-';
+            s3.createSpan({ cls: 'kt-health-chart-stat-val', text: balanceText });
+        } else if (this.healthOverviewMetric === 'water') {
+            const validWater = days.filter(d => d.water > 0);
+            const avgWater = validWater.length > 0 ? Math.round(validWater.reduce((a, b) => a + b.water, 0) / validWater.length) : 0;
+            const goalMetDays = days.filter(d => d.water >= 3000).length;
+
+            const s1 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s1.createSpan({ text: 'Média Ingerida:' });
+            s1.createSpan({ cls: 'kt-health-chart-stat-val', text: `${avgWater.toLocaleString('pt-BR')} ml / dia` });
+
+            const s2 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s2.createSpan({ text: 'Meta 3.000 ml batida:' });
+            s2.createSpan({ cls: 'kt-health-chart-stat-val', text: `${goalMetDays} de ${range} dias (${Math.round((goalMetDays / range) * 100)}%)` });
+
+            const s3 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s3.createSpan({ text: 'Total no período:' });
+            const totalWaterLiters = (days.reduce((a, b) => a + b.water, 0) / 1000).toFixed(1);
+            s3.createSpan({ cls: 'kt-health-chart-stat-val', text: `${totalWaterLiters} L` });
+        } else if (this.healthOverviewMetric === 'weight') {
+            const validWeights = days.filter(d => d.weight > 0);
+            const firstWeight = validWeights.length > 0 ? validWeights[0].weight : null;
+            const lastWeight = validWeights.length > 0 ? validWeights[validWeights.length - 1].weight : null;
+            const diff = (firstWeight !== null && lastWeight !== null) ? (lastWeight - firstWeight).toFixed(1) : null;
+
+            const s1 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s1.createSpan({ text: 'Peso Mais Recente:' });
+            s1.createSpan({ cls: 'kt-health-chart-stat-val', text: lastWeight ? `${lastWeight} kg` : 'Sem registros' });
+
+            const s2 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s2.createSpan({ text: 'Variação no Período:' });
+            const diffSign = diff !== null && parseFloat(diff) > 0 ? `+${diff}` : (diff !== null ? `${diff}` : '-');
+            s2.createSpan({ cls: 'kt-health-chart-stat-val', text: diff !== null ? `${diffSign} kg` : '-' });
+
+            const s3 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s3.createSpan({ text: 'Pesagens Realizadas:' });
+            s3.createSpan({ cls: 'kt-health-chart-stat-val', text: `${validWeights.length} dias` });
+        }
+
+        // SVG Canvas
+        const chartWrap = chartCard.createDiv('kt-health-chart-wrap');
+        chartWrap.style.marginTop = '12px';
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 960 230');
+        svg.classList.add('kt-health-chart-svg');
+
+        const padX = 55;
+        const padY = 35;
+        const chartW = 860;
+        const chartH = 150;
+        const bottomY = padY + chartH;
+
+        // Grid Lines (horizontal)
+        for (let g = 0; g <= 4; g++) {
+            const gy = padY + (g / 4) * chartH;
+            const gLine = document.createElementNS(svgNS, 'line');
+            gLine.setAttribute('x1', String(padX));
+            gLine.setAttribute('y1', String(gy));
+            gLine.setAttribute('x2', String(padX + chartW));
+            gLine.setAttribute('y2', String(gy));
+            gLine.classList.add('kt-fin-chart-grid-line');
+            svg.appendChild(gLine);
+        }
+
+        const getX = (idx) => padX + (idx / Math.max(1, days.length - 1)) * chartW;
+
+        // RENDER SPECIFIC METRICS
+        if (this.healthOverviewMetric === 'sleep_energy') {
+            // Legends
+            const lSleep = document.createElementNS(svgNS, 'text');
+            lSleep.setAttribute('x', '60'); lSleep.setAttribute('y', '20');
+            lSleep.setAttribute('fill', '#38bdf8'); lSleep.setAttribute('font-size', '11.5'); lSleep.setAttribute('font-weight', '600');
+            lSleep.textContent = '● — Horas de Sono (0 a 12h)';
+            svg.appendChild(lSleep);
+
+            const lEnergy = document.createElementNS(svgNS, 'text');
+            lEnergy.setAttribute('x', '260'); lEnergy.setAttribute('y', '20');
+            lEnergy.setAttribute('fill', '#10b981'); lEnergy.setAttribute('font-size', '11.5'); lEnergy.setAttribute('font-weight', '600');
+            lEnergy.textContent = '● — Nível de Energia (1 a 5)';
+            svg.appendChild(lEnergy);
+
+            // Recommended sleep line (7.5h)
+            const recY = bottomY - (7.5 / 12) * chartH;
+            const recLine = document.createElementNS(svgNS, 'line');
+            recLine.setAttribute('x1', String(padX)); recLine.setAttribute('y1', String(recY));
+            recLine.setAttribute('x2', String(padX + chartW)); recLine.setAttribute('y2', String(recY));
+            recLine.setAttribute('stroke', 'rgba(56, 189, 248, 0.25)');
+            recLine.setAttribute('stroke-dasharray', '4 4');
+            recLine.setAttribute('stroke-width', '1.5');
+            svg.appendChild(recLine);
+
+            const getSleepY = (h) => bottomY - (Math.min(12, h) / 12) * chartH;
+            const getEnergyY = (e) => bottomY - (Math.min(5, e) / 5) * chartH;
+
+            // Sleep path
+            const activeSleep = days.filter(d => d.sleep > 0);
+            if (activeSleep.length >= 2) {
+                let pStr = '';
+                days.forEach((d, idx) => {
+                    if (d.sleep > 0) {
+                        pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getSleepY(d.sleep).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getSleepY(d.sleep).toFixed(1)}`;
+                    }
+                });
+                const path = document.createElementNS(svgNS, 'path');
+                path.setAttribute('d', pStr); path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', '#38bdf8'); path.setAttribute('stroke-width', '2.5');
+                svg.appendChild(path);
+            }
+
+            // Energy path
+            const activeEnergy = days.filter(d => d.energy > 0);
+            if (activeEnergy.length >= 2) {
+                let pStr = '';
+                days.forEach((d, idx) => {
+                    if (d.energy > 0) {
+                        pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getEnergyY(d.energy).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getEnergyY(d.energy).toFixed(1)}`;
+                    }
+                });
+                const path = document.createElementNS(svgNS, 'path');
+                path.setAttribute('d', pStr); path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', '#10b981'); path.setAttribute('stroke-width', '2');
+                path.setAttribute('stroke-dasharray', '4 3');
+                svg.appendChild(path);
+            }
+
+            // Dots & X Labels
+            days.forEach((d, idx) => {
+                const cx = getX(idx);
+                if (range <= 14 || idx % 2 === 0 || idx === days.length - 1) {
+                    const lbl = document.createElementNS(svgNS, 'text');
+                    lbl.setAttribute('x', String(cx)); lbl.setAttribute('y', String(bottomY + 18));
+                    lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('fill', 'var(--text-muted)');
+                    lbl.setAttribute('font-size', '10.5'); lbl.textContent = d.label;
+                    svg.appendChild(lbl);
+                }
+                if (d.sleep > 0) {
+                    const c = document.createElementNS(svgNS, 'circle');
+                    c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(getSleepY(d.sleep)));
+                    c.setAttribute('r', '4'); c.setAttribute('fill', '#38bdf8');
+                    const t = document.createElementNS(svgNS, 'title');
+                    t.textContent = `${d.date} (${d.dayOfWeek}): ${d.sleep}h sono`;
+                    c.appendChild(t);
+                    svg.appendChild(c);
+                }
+                if (d.energy > 0) {
+                    const c = document.createElementNS(svgNS, 'circle');
+                    c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(getEnergyY(d.energy)));
+                    c.setAttribute('r', '3.5'); c.setAttribute('fill', '#10b981');
+                    const t = document.createElementNS(svgNS, 'title');
+                    t.textContent = `${d.date} (${d.dayOfWeek}): ${d.energy}/5 energia`;
+                    c.appendChild(t);
+                    svg.appendChild(c);
+                }
+            });
+
+        } else if (this.healthOverviewMetric === 'mood_stress') {
+            // Legends
+            const lMood = document.createElementNS(svgNS, 'text');
+            lMood.setAttribute('x', '60'); lMood.setAttribute('y', '20');
+            lMood.setAttribute('fill', '#22c55e'); lMood.setAttribute('font-size', '11.5'); lMood.setAttribute('font-weight', '600');
+            lMood.textContent = '● — Humor (1 a 5)';
+            svg.appendChild(lMood);
+
+            const lStress = document.createElementNS(svgNS, 'text');
+            lStress.setAttribute('x', '220'); lStress.setAttribute('y', '20');
+            lStress.setAttribute('fill', '#ef4444'); lStress.setAttribute('font-size', '11.5'); lStress.setAttribute('font-weight', '600');
+            lStress.textContent = '● — Estresse (1 a 5)';
+            svg.appendChild(lStress);
+
+            const getScoreY = (s) => bottomY - (Math.min(5, s) / 5) * chartH;
+
+            // Mood Line
+            const activeMood = days.filter(d => d.mood > 0);
+            if (activeMood.length >= 2) {
+                let pStr = '';
+                days.forEach((d, idx) => {
+                    if (d.mood > 0) {
+                        pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getScoreY(d.mood).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getScoreY(d.mood).toFixed(1)}`;
+                    }
+                });
+                const path = document.createElementNS(svgNS, 'path');
+                path.setAttribute('d', pStr); path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', '#22c55e'); path.setAttribute('stroke-width', '2.5');
+                svg.appendChild(path);
+            }
+
+            // Stress Line
+            const activeStress = days.filter(d => d.stress > 0);
+            if (activeStress.length >= 2) {
+                let pStr = '';
+                days.forEach((d, idx) => {
+                    if (d.stress > 0) {
+                        pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getScoreY(d.stress).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getScoreY(d.stress).toFixed(1)}`;
+                    }
+                });
+                const path = document.createElementNS(svgNS, 'path');
+                path.setAttribute('d', pStr); path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', '#ef4444'); path.setAttribute('stroke-width', '2.5');
+                svg.appendChild(path);
+            }
+
+            // Dots & X Labels
+            days.forEach((d, idx) => {
+                const cx = getX(idx);
+                if (range <= 14 || idx % 2 === 0 || idx === days.length - 1) {
+                    const lbl = document.createElementNS(svgNS, 'text');
+                    lbl.setAttribute('x', String(cx)); lbl.setAttribute('y', String(bottomY + 18));
+                    lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('fill', 'var(--text-muted)');
+                    lbl.setAttribute('font-size', '10.5'); lbl.textContent = d.label;
+                    svg.appendChild(lbl);
+                }
+                if (d.mood > 0) {
+                    const c = document.createElementNS(svgNS, 'circle');
+                    c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(getScoreY(d.mood)));
+                    c.setAttribute('r', '4'); c.setAttribute('fill', '#22c55e');
+                    const t = document.createElementNS(svgNS, 'title');
+                    t.textContent = `${d.date} (${d.dayOfWeek}): Humor ${d.mood}/5`;
+                    c.appendChild(t);
+                    svg.appendChild(c);
+                }
+                if (d.stress > 0) {
+                    const c = document.createElementNS(svgNS, 'circle');
+                    c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(getScoreY(d.stress)));
+                    c.setAttribute('r', '4'); c.setAttribute('fill', '#ef4444');
+                    const t = document.createElementNS(svgNS, 'title');
+                    t.textContent = `${d.date} (${d.dayOfWeek}): Estresse ${d.stress}/5`;
+                    c.appendChild(t);
+                    svg.appendChild(c);
+                }
+            });
+
+        } else if (this.healthOverviewMetric === 'water') {
+            // Legends
+            const lWater = document.createElementNS(svgNS, 'text');
+            lWater.setAttribute('x', '60'); lWater.setAttribute('y', '20');
+            lWater.setAttribute('fill', '#0284c7'); lWater.setAttribute('font-size', '11.5'); lWater.setAttribute('font-weight', '600');
+            lWater.textContent = '■ — Consumo de Água (ml)';
+            svg.appendChild(lWater);
+
+            const lGoal = document.createElementNS(svgNS, 'text');
+            lGoal.setAttribute('x', '250'); lGoal.setAttribute('y', '20');
+            lGoal.setAttribute('fill', '#38bdf8'); lGoal.setAttribute('font-size', '11.5'); lGoal.setAttribute('font-weight', '600');
+            lGoal.textContent = '- - - Meta Diária: 3.000 ml';
+            svg.appendChild(lGoal);
+
+            const maxWater = Math.max(3500, ...days.map(d => d.water));
+            const getWaterY = (w) => bottomY - (Math.min(maxWater, w) / maxWater) * chartH;
+
+            // Target Line (3000 ml)
+            const goalY = getWaterY(3000);
+            const goalLine = document.createElementNS(svgNS, 'line');
+            goalLine.setAttribute('x1', String(padX)); goalLine.setAttribute('y1', String(goalY));
+            goalLine.setAttribute('x2', String(padX + chartW)); goalLine.setAttribute('y2', String(goalY));
+            goalLine.setAttribute('stroke', '#38bdf8');
+            goalLine.setAttribute('stroke-dasharray', '5 4');
+            goalLine.setAttribute('stroke-width', '1.5');
+            svg.appendChild(goalLine);
+
+            // Water Bars
+            const barWidth = Math.max(6, Math.min(24, (chartW / days.length) * 0.55));
+            days.forEach((d, idx) => {
+                const cx = getX(idx);
+                if (range <= 14 || idx % 2 === 0 || idx === days.length - 1) {
+                    const lbl = document.createElementNS(svgNS, 'text');
+                    lbl.setAttribute('x', String(cx)); lbl.setAttribute('y', String(bottomY + 18));
+                    lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('fill', 'var(--text-muted)');
+                    lbl.setAttribute('font-size', '10.5'); lbl.textContent = d.label;
+                    svg.appendChild(lbl);
+                }
+
+                if (d.water > 0) {
+                    const bH = (d.water / maxWater) * chartH;
+                    const rect = document.createElementNS(svgNS, 'rect');
+                    rect.setAttribute('x', String(cx - barWidth / 2));
+                    rect.setAttribute('y', String(bottomY - bH));
+                    rect.setAttribute('width', String(barWidth));
+                    rect.setAttribute('height', String(bH));
+                    rect.setAttribute('rx', '3');
+                    rect.setAttribute('fill', d.water >= 3000 ? '#0284c7' : 'rgba(2, 132, 199, 0.6)');
+                    const t = document.createElementNS(svgNS, 'title');
+                    t.textContent = `${d.date} (${d.dayOfWeek}): ${d.water.toLocaleString('pt-BR')} ml`;
+                    rect.appendChild(t);
+                    svg.appendChild(rect);
+                }
+            });
+
+        } else if (this.healthOverviewMetric === 'weight') {
+            // Legends
+            const lWeight = document.createElementNS(svgNS, 'text');
+            lWeight.setAttribute('x', '60'); lWeight.setAttribute('y', '20');
+            lWeight.setAttribute('fill', '#a855f7'); lWeight.setAttribute('font-size', '11.5'); lWeight.setAttribute('font-weight', '600');
+            lWeight.textContent = '● — Peso Corporal (kg)';
+            svg.appendChild(lWeight);
+
+            const weights = days.map(d => d.weight).filter(w => w > 0);
+            let minW = weights.length > 0 ? Math.floor(Math.min(...weights) - 1) : 60;
+            let maxW = weights.length > 0 ? Math.ceil(Math.max(...weights) + 1) : 90;
+            if (minW === maxW) { minW -= 2; maxW += 2; }
+            const rangeW = maxW - minW;
+
+            const getWeightY = (w) => bottomY - ((w - minW) / rangeW) * chartH;
+
+            // Y-axis labels (min, mid, max)
+            [minW, (minW + maxW) / 2, maxW].forEach((val, i) => {
+                const yPos = bottomY - (i / 2) * chartH;
+                const txt = document.createElementNS(svgNS, 'text');
+                txt.setAttribute('x', String(padX - 8)); txt.setAttribute('y', String(yPos + 4));
+                txt.setAttribute('text-anchor', 'end'); txt.setAttribute('fill', 'var(--text-muted)');
+                txt.setAttribute('font-size', '10'); txt.textContent = `${val.toFixed(1)}kg`;
+                svg.appendChild(txt);
+            });
+
+            // Weight Line
+            const activeWeight = days.filter(d => d.weight > 0);
+            if (activeWeight.length >= 2) {
+                let pStr = '';
+                days.forEach((d, idx) => {
+                    if (d.weight > 0) {
+                        pStr += pStr === '' ? `M ${getX(idx).toFixed(1)} ${getWeightY(d.weight).toFixed(1)}` : ` L ${getX(idx).toFixed(1)} ${getWeightY(d.weight).toFixed(1)}`;
+                    }
+                });
+                const path = document.createElementNS(svgNS, 'path');
+                path.setAttribute('d', pStr); path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', '#a855f7'); path.setAttribute('stroke-width', '3');
+                svg.appendChild(path);
+            }
+
+            // Dots & X Labels
+            days.forEach((d, idx) => {
+                const cx = getX(idx);
+                if (range <= 14 || idx % 2 === 0 || idx === days.length - 1) {
+                    const lbl = document.createElementNS(svgNS, 'text');
+                    lbl.setAttribute('x', String(cx)); lbl.setAttribute('y', String(bottomY + 18));
+                    lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('fill', 'var(--text-muted)');
+                    lbl.setAttribute('font-size', '10.5'); lbl.textContent = d.label;
+                    svg.appendChild(lbl);
+                }
+                if (d.weight > 0) {
+                    const c = document.createElementNS(svgNS, 'circle');
+                    c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(getWeightY(d.weight)));
+                    c.setAttribute('r', '5'); c.setAttribute('fill', '#a855f7');
+                    const t = document.createElementNS(svgNS, 'title');
+                    t.textContent = `${d.date} (${d.dayOfWeek}): ${d.weight} kg`;
+                    c.appendChild(t);
+                    svg.appendChild(c);
+                }
+            });
+        }
+
+        chartWrap.appendChild(svg);
     }
 
     // ----------------------------------------------------------
@@ -21157,7 +22682,7 @@ kanban-plugin: basic
         };
 
         // ----------------------------------------------------
-        // SECTION 1: QUICK CHECK-IN & JOURNAL DO DIA
+        // SECTION 1: COCKPIT DE SAÚDE MENTAL & CHECK-IN
         // ----------------------------------------------------
         const todayStr = new Date().toISOString().split('T')[0];
         if (!profileData.dailyLogs[todayStr]) {
@@ -21175,12 +22700,18 @@ kanban-plugin: basic
         if (!Array.isArray(todayLog.emotions)) todayLog.emotions = [];
         if (!Array.isArray(todayLog.medicationsTaken)) todayLog.medicationsTaken = [];
 
-        const journalBox = mentalWrap.createDiv('kt-health-journal-box');
+        // 2-Column Cockpit Container
+        const cockpit = mentalWrap.createDiv('kt-health-mental-cockpit');
+        const leftCol = cockpit.createDiv('kt-health-mental-left');
+        const rightCol = cockpit.createDiv('kt-health-mental-right');
+
+        // --- LEFT COLUMN: Check-in Box ---
+        const journalBox = leftCol.createDiv('kt-health-journal-box');
 
         const jHdr = journalBox.createDiv('kt-health-section-hdr');
         const jHdrLeft = jHdr.createDiv();
-        jHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📖 Diário Emocional & Check-in do Dia' });
-        jHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Registre como você se sentiu, seus pensamentos, gratidão e marque suas doses diárias:' });
+        jHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📖 Diário & Check-in Emocional' });
+        jHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Registre como você se sentiu, seus pensamentos e reflexão diária:' });
 
         const dateBadge = jHdr.createDiv('kt-health-date-selector');
         dateBadge.createSpan({ text: '📅 Data:' });
@@ -21347,16 +22878,28 @@ kanban-plugin: basic
             jInputWrap.createEl('div', { cls: 'kt-health-scale-label', text: '✍️ Pedacinho para Escrever / Reflexão do Dia:' });
             const jTextarea = jInputWrap.createEl('textarea', { cls: 'kt-health-journal-textarea' });
             jTextarea.value = activeLog.journal || activeLog.notes || '';
-            jTextarea.placeholder = 'Como foi seu dia? O que aconteceu, pensamentos, vitórias, preocupações ou coisas pelas quais você é grato...';
+            jTextarea.placeholder = 'Como foi seu dia? O que aconteceu, pensamentos, vitórias, preocupações ou coisas pelas quais você é grato... (Ctrl+Enter para salvar)';
 
-            const saveActionRow = dynamicFormWrap.createDiv({ style: 'display:flex; justify-content:flex-end; gap:8px; margin-top:10px;' });
+            const saveActionRow = dynamicFormWrap.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; margin-top:10px;' });
+            saveActionRow.createSpan({ text: 'Dica: Ctrl+Enter para salvar rápido', style: 'font-size:11px; color:var(--text-muted);' });
+
             const saveJBtn = saveActionRow.createEl('button', { cls: 'mod-cta', text: '💾 Salvar Journal & Check-in' });
-            saveJBtn.onclick = async () => {
+            
+            const performSave = async () => {
                 activeLog.journal = jTextarea.value.trim();
                 activeLog.notes = jTextarea.value.trim();
                 await this.plugin.saveSettings();
                 this.render();
                 new obsidian.Notice(`✓ Diário de ${activeCheckinDate} salvo com sucesso!`);
+            };
+
+            saveJBtn.onclick = performSave;
+
+            jTextarea.onkeydown = async (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    await performSave();
+                }
             };
         };
 
@@ -21368,6 +22911,106 @@ kanban-plugin: basic
         };
 
         renderCheckinForm();
+
+        // --- RIGHT COLUMN: Chart, Burnout Warning & Insights ---
+        const recentDates = [];
+        for (let i = 0; i < 14; i++) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            recentDates.push(d.toISOString().split('T')[0]);
+        }
+
+        let highStressLowSleepDays = 0;
+        recentDates.forEach(dStr => {
+            const l = profileData.dailyLogs[dStr];
+            if (l && l.stress >= 4 && (l.sleepHours || 8) < 6.5) {
+                highStressLowSleepDays++;
+            }
+        });
+
+        if (highStressLowSleepDays >= 3) {
+            const banner = rightCol.createDiv('kt-health-burnout-banner');
+            banner.style.marginBottom = '6px';
+            const bLeft = banner.createDiv();
+            bLeft.createDiv({ cls: 'kt-health-burnout-title', text: '⚠️ Atenção Preventiva: Risco de Sobrecarga' });
+            bLeft.createDiv({ cls: 'kt-health-burnout-desc', text: `Detectados ${highStressLowSleepDays} dias recentes com estresse elevado (≥ 4) e sono insuficiente (< 6.5h). Considere pausas.` });
+        }
+
+        // Correlation Chart Card
+        const chartCard = rightCol.createDiv('kt-health-card');
+        const chartHdr = chartCard.createDiv('kt-health-section-hdr');
+        const chartHdrLeft = chartHdr.createDiv();
+        chartHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📊 Humor vs. Estresse vs. Sono (14d)' });
+        chartHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Cruzamento temporal diário de indicadores emocionais e descanso:' });
+
+        this.renderHealthMentalCorrelationChart(chartCard, profile, profileData);
+
+        // Insights & Padrões Emocionais Card
+        const insightsCard = rightCol.createDiv('kt-health-insights-card');
+        const inHdr = insightsCard.createDiv('kt-health-cockpit-hdr');
+        const inTitle = inHdr.createDiv('kt-health-cockpit-title');
+        inTitle.createSpan({ text: '💡 Padrões & Insights Recentes (14 Dias)' });
+
+        // 1. Tag frequency
+        const tagCounts = {};
+        recentDates.forEach(dStr => {
+            const l = profileData.dailyLogs[dStr];
+            if (l && Array.isArray(l.emotions)) {
+                l.emotions.forEach(t => {
+                    tagCounts[t] = (tagCounts[t] || 0) + 1;
+                });
+            }
+        });
+        const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        
+        const tagsRow = insightsCard.createDiv('kt-health-metric-row');
+        tagsRow.createEl('div', { cls: 'kt-health-scale-label', text: 'Sentimentos Mais Frequentes:' });
+        if (topTags.length > 0) {
+            const tList = tagsRow.createDiv('kt-health-tags-list');
+            topTags.forEach(([tag, count]) => {
+                const chip = tList.createDiv('kt-health-emotion-chip is-active');
+                chip.setText(`${tag} (${count}x)`);
+                chip.style.cursor = 'default';
+            });
+        } else {
+            tagsRow.createEl('div', { text: 'Nenhuma tag marcada nos últimos 14 dias.', style: 'font-size:11.5px; color:var(--text-muted);' });
+        }
+
+        // 2. Sleep vs. Stress correlation insight
+        const sleepStressRow = insightsCard.createDiv('kt-health-metric-row');
+        sleepStressRow.createEl('div', { cls: 'kt-health-scale-label', text: 'Impacto do Sono no Estresse:' });
+        
+        let stressLowSleep = 0, countLowSleep = 0;
+        let stressGoodSleep = 0, countGoodSleep = 0;
+        recentDates.forEach(dStr => {
+            const l = profileData.dailyLogs[dStr];
+            if (l && l.stress && l.sleepHours) {
+                if (l.sleepHours < 7) {
+                    stressLowSleep += l.stress;
+                    countLowSleep++;
+                } else {
+                    stressGoodSleep += l.stress;
+                    countGoodSleep++;
+                }
+            }
+        });
+
+        const insBox = sleepStressRow.createDiv('kt-health-chart-stats-strip');
+        insBox.style.padding = '8px 10px';
+        if (countLowSleep > 0 || countGoodSleep > 0) {
+            const avgLow = countLowSleep > 0 ? (stressLowSleep / countLowSleep).toFixed(1) : '-';
+            const avgGood = countGoodSleep > 0 ? (stressGoodSleep / countGoodSleep).toFixed(1) : '-';
+            
+            const item1 = insBox.createDiv('kt-health-chart-stat-item');
+            item1.createSpan({ text: 'Sono < 7h:' });
+            item1.createSpan({ cls: 'kt-health-chart-stat-val', text: avgLow !== '-' ? `${avgLow} / 5 estresse` : '-' });
+
+            const item2 = insBox.createDiv('kt-health-chart-stat-item');
+            item2.createSpan({ text: 'Sono ≥ 7h:' });
+            item2.createSpan({ cls: 'kt-health-chart-stat-val', text: avgGood !== '-' ? `${avgGood} / 5 estresse` : '-' });
+        } else {
+            insBox.createSpan({ text: 'Registre sono e estresse por alguns dias para gerar correlações.', style: 'color:var(--text-muted); font-size:11.5px;' });
+        }
 
         // ----------------------------------------------------
         // SECTION 2: CENTRAL DE MEDICAMENTOS & ESTOQUE
@@ -21574,42 +23217,6 @@ kanban-plugin: basic
             });
         }
 
-        // ----------------------------------------------------
-        // SECTION 4: ANALYTICS & CORRELAÇÃO DE SAÚDE MENTAL
-        // ----------------------------------------------------
-        const analyticsSection = mentalWrap.createDiv('kt-health-card');
-        const anaHdr = analyticsSection.createDiv('kt-health-section-hdr');
-        const anaHdrLeft = anaHdr.createDiv();
-        anaHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📊 Gráficos de Humor, Estresse & Prevenção de Burnout' });
-        anaHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Cruzamento temporal de Humor vs. Estresse Diário vs. Horas de Sono:' });
-
-        // Burnout Detector
-        const recentDates = [];
-        for (let i = 0; i < 14; i++) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
-            recentDates.push(d.toISOString().split('T')[0]);
-        }
-
-        let highStressLowSleepDays = 0;
-        recentDates.forEach(dStr => {
-            const l = profileData.dailyLogs[dStr];
-            if (l) {
-                if (l.stress >= 4 && (l.sleepHours || 8) < 6.5) {
-                    highStressLowSleepDays++;
-                }
-            }
-        });
-
-        if (highStressLowSleepDays >= 3) {
-            const banner = analyticsSection.createDiv('kt-health-burnout-banner');
-            banner.style.marginBottom = '12px';
-            const bLeft = banner.createDiv();
-            bLeft.createDiv({ cls: 'kt-health-burnout-title', text: '⚠️ Atenção Preventiva: Risco de Sobrecarga / Burnout' });
-            bLeft.createDiv({ cls: 'kt-health-burnout-desc', text: `Detectados ${highStressLowSleepDays} dias recentes com estresse elevado (≥ 4) associados a sono insuficiente (< 6.5h). Considere pausas e ajuste de prioridades.` });
-        }
-
-        this.renderHealthMentalCorrelationChart(analyticsSection, profile, profileData);
     }
 
     renderHealthMentalCorrelationChart(container, profile, profileData) {
@@ -22739,24 +24346,18 @@ kanban-plugin: basic
 
         const split = container.createDiv('kt-tb-split kt-tb-week-split');
 
-        // Sidebar with Backlog
-        const sidebar = split.createDiv('kt-tb-sidebar kt-tb-week-sidebar');
-        if (this.savedSidebarScrollTop !== undefined && this.savedSidebarScrollTop !== null) {
-            sidebar.scrollTop = this.savedSidebarScrollTop;
-        }
+        const hideWeekends = !!this.plugin.settings.timeblockHideWeekends;
+        const daysCount   = hideWeekends ? 5 : 7;
+        const we = new Date(ws); we.setDate(we.getDate() + (daysCount - 1));
 
-        // Section: BACKLOG GERAL SEM DATA
-        const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
-        this.renderTbBacklogSection(sidebar, unscheduled, null);
+        // Sidebar with Backlog & Cronograma
+        const sidebar = split.createDiv('kt-tb-sidebar kt-tb-week-sidebar');
+        this.renderTbUnifiedSidebar(sidebar, { isWeekView: true, weekStart: ws, weekEnd: we, daysCount: daysCount });
 
         // Main MultiDayView
         const main = split.createDiv('kt-tb-main kt-tb-week-main');
 
-        const hideWeekends = !!this.plugin.settings.timeblockHideWeekends;
-        const daysCount   = hideWeekends ? 5 : 7;
-
         // Week Title Header
-        const we = new Date(ws); we.setDate(we.getDate() + (daysCount - 1));
         const hdr = main.createDiv('kt-tb-day-header kt-tb-week-day-header');
         hdr.createEl('span', { cls: 'kt-tb-day-title', text: `Semana: ${this.dayLabel(ws, false)} — ${this.dayLabel(we, false)}` });
 
@@ -22847,6 +24448,8 @@ kanban-plugin: basic
 
             const dayCol = colsWrap.createDiv(`kt-tb-week-day-col${isToday ? ' kt-is-today' : ''}${isWeekend ? ' kt-is-weekend' : ''}${isSel ? ' kt-selected' : ''}`);
             dayCol.style.height = `${TOTAL_HEIGHT}px`;
+            dayCol._ktDate = day;
+            dayCol.dataset.date = formatDate(day);
 
             // Background Grid Slots with exact lines matching daily view!
             const slotsLayer = dayCol.createDiv('kt-tb-slots-layer');
@@ -22871,6 +24474,7 @@ kanban-plugin: basic
 
             // Events Layer
             const eventsLayer = dayCol.createDiv('kt-tb-events-layer');
+            dayCol._ktEventsLayer = eventsLayer;
 
             const allDayItems = [];
             dayCards.forEach(card => {
@@ -23023,265 +24627,404 @@ kanban-plugin: basic
 
     renderTbSidebar(parent) {
         const sidebar = parent.createDiv('kt-tb-sidebar');
-        if (this.savedSidebarScrollTop !== undefined && this.savedSidebarScrollTop !== null) {
-            sidebar.scrollTop = this.savedSidebarScrollTop;
-        }
-        const ws      = this.getWeekStart();
-        const day     = this.selectedDay || new Date();
-
-        sidebar.createEl('p', { cls: 'kt-section-label', text: 'SEMANA' });
-
-        for (let i = 0; i < 7; i++) {
-            const d   = new Date(ws); d.setDate(d.getDate() + i);
-            const btn = sidebar.createDiv('kt-sb-day');
-
-            const isToday = sameDay(d, new Date());
-            const isSel   = sameDay(d, day);
-
-            if (isToday) btn.addClass('kt-is-today');
-            if (isSel)   btn.addClass('kt-selected');
-
-            // Day name + date
-            const nameEl = btn.createSpan(); nameEl.setText(this.dayLabel(d));
-
-            // Badge: how many cards on this day (excluding routine blocks)
-            const dayCards = this.cards.filter(c => {
-                if (c.isEvent || c.column === 'Rotina') return false;
-                if (!c.startDate) return false;
-                const s = startOfDay(c.startDate);
-                const e = endOfDay(c.endDate || c.startDate);
-                return startOfDay(d) >= s && startOfDay(d) <= e;
-            });
-            if (dayCards.length) {
-                const badge = btn.createSpan('kt-day-badge');
-                badge.setText(String(dayCards.length));
-            }
-
-            btn.onclick = () => { 
-                this.selectedDay = d; 
-                this.savedTbScrollTop = null; 
-                this.render(); 
-            };
-        }
-
-        // Section 1: TAREFAS DO CRONOGRAMA DESTE DIA (Exclui blocos de rotina/reunião)
-        const dayCards = this.cards.filter(c => {
-            if (c.isEvent || c.column === 'Rotina') return false;
-            if (!c.startDate) return false;
-            const s = startOfDay(c.startDate);
-            const e = endOfDay(c.endDate || c.startDate);
-            return startOfDay(day) >= s && startOfDay(day) <= e;
-        });
-
-        if (dayCards.length > 0) {
-            sidebar.createEl('p', { cls: 'kt-section-label kt-section-today-label', text: `📅 DO CRONOGRAMA (${dayCards.length})` });
-            dayCards.forEach(card => {
-                const isDone = card.isCompleted || isIgnoredColumn(card.column);
-                const c = sidebar.createDiv(`kt-sb-card kt-sb-card-scheduled${isDone ? ' is-completed' : ''}`);
-                c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
-                if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
-                
-                const daySlots = getTimesForDay(card, day);
-                if (daySlots.length > 0) {
-                    const timeLabelText = daySlots.length === 1
-                        ? `⏰ ${daySlots[0].timeStart} – ${daySlots[0].timeEnd}`
-                        : `⏰ ${daySlots.map(s => `${s.timeStart}–${s.timeEnd}`).join(', ')}`;
-                    c.createDiv('kt-tb-card-time').setText(timeLabelText);
-                }
-
-                c.createDiv('kt-c-title').setText(isDone ? `✓ ${card.title}` : card.title);
-                const metaRow = c.createDiv('kt-card-meta-row');
-                this.renderTagPills(metaRow, card.tags, true);
-
-                let dayMinutes = 0;
-                daySlots.forEach(s => {
-                    const dur = timeToMinutes(s.timeEnd) - timeToMinutes(s.timeStart);
-                    if (dur > 0) dayMinutes += dur;
-                });
-
-                if (dayMinutes > 0) {
-                    const estBadge = metaRow.createSpan('kt-card-est-badge');
-                    const badgeText = daySlots.length > 1
-                        ? `⏱ ${formatMinutesToHours(dayMinutes)} (${daySlots.length}x)`
-                        : `⏱ ${formatMinutesToHours(dayMinutes)}`;
-                    estBadge.setText(badgeText);
-                    estBadge.title = `Duração somada hoje: ${formatMinutesToHours(dayMinutes)} em ${daySlots.length} bloco(s)`;
-                } else if (card.estimateMinutes && card.estimateMinutes > 0) {
-                    const estBadge = metaRow.createSpan('kt-card-est-badge');
-                    estBadge.setText(`⏱ ${card.estimateText}`);
-                }
-
-                const matchedProj = getProjectForCard(card, this.plugin.settings.projects);
-                if (matchedProj && matchedProj.hourlyRate > 0) {
-                    let minCount = dayMinutes > 0 ? dayMinutes : (card.estimateMinutes || 0);
-                    if (minCount > 0) {
-                        const amount = (minCount / 60) * matchedProj.hourlyRate;
-                        const curr = matchedProj.currency || 'R$';
-                        const earnBadge = metaRow.createSpan('kt-card-earnings-badge');
-                        earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
-                        earnBadge.title = daySlots.length > 1
-                            ? `Ganho previsto hoje: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h • ${formatMinutesToHours(minCount)} em ${daySlots.length} blocos)`
-                            : `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
-                    }
-                }
-                
-                c.title = 'Arraste para a grade de horários ou clique para abrir detalhes';
-                c.setAttribute('draggable', 'true');
-
-                c.addEventListener('dragstart', (e) => {
-                    this.draggedCard = card;
-                    const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
-                    try {
-                        e.dataTransfer.setData('text/plain', cardIdStr);
-                        e.dataTransfer.effectAllowed = 'move';
-                    } catch(err) {}
-                    c.classList.add('kt-dragging');
-                    document.body.classList.add('kt-is-card-dragging');
-                });
-
-                c.addEventListener('dragend', () => {
-                    c.classList.remove('kt-dragging');
-                    document.body.classList.remove('kt-is-card-dragging');
-                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
-                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
-                    this.draggedCard = null;
-                });
-
-                c.onclick = () => {
-                    this.openCardOptionsModal(card, day);
-                };
-            });
-        }
-
-        // Section 2: BACKLOG GERAL SEM DATA (Exclui blocos de rotina/reunião)
-        const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
-        this.renderTbBacklogSection(sidebar, unscheduled, day);
+        this.renderTbUnifiedSidebar(sidebar, { isWeekView: false, day: this.selectedDay || new Date() });
     }
 
     renderTbBacklogSection(sidebar, unscheduled, day = null) {
-        if (!unscheduled || unscheduled.length === 0) {
-            sidebar.createEl('p', { cls: 'kt-section-label', text: '📋 BACKLOG GERAL (0)' });
-            const emptyNotice = sidebar.createDiv('kt-empty');
-            emptyNotice.setText('Nenhum card no backlog.');
-            return;
+        this.renderTbUnifiedSidebar(sidebar, { isWeekView: !day, day: day });
+    }
+
+    renderTbUnifiedSidebar(sidebar, opts = {}) {
+        if (this.savedSidebarScrollTop !== undefined && this.savedSidebarScrollTop !== null) {
+            sidebar.scrollTop = this.savedSidebarScrollTop;
+        }
+        sidebar.addEventListener('scroll', () => {
+            this.savedSidebarScrollTop = sidebar.scrollTop;
+        });
+
+        const isWeekView = !!opts.isWeekView;
+        const ws = opts.weekStart || this.getWeekStart();
+        const day = opts.day || this.selectedDay || new Date();
+        const daysCount = opts.daysCount || (this.plugin.settings.timeblockHideWeekends ? 5 : 7);
+        const we = opts.weekEnd || (() => { const d = new Date(ws); d.setDate(d.getDate() + (daysCount - 1)); return d; })();
+
+        // In 1-Day view, show Week Selector buttons at the top of the sidebar
+        if (!isWeekView) {
+            sidebar.createEl('p', { cls: 'kt-section-label', text: 'SEMANA' });
+
+            for (let i = 0; i < 7; i++) {
+                const d   = new Date(ws); d.setDate(d.getDate() + i);
+                const btn = sidebar.createDiv('kt-sb-day');
+                btn._ktDate = d;
+                btn.dataset.date = formatDate(d);
+
+                const isToday = sameDay(d, new Date());
+                const isSel   = sameDay(d, day);
+
+                if (isToday) btn.addClass('kt-is-today');
+                if (isSel)   btn.addClass('kt-selected');
+
+                const nameEl = btn.createSpan(); nameEl.setText(this.dayLabel(d));
+
+                const dayCardsCount = this.cards.filter(c => {
+                    if (c.isEvent || c.column === 'Rotina') return false;
+                    if (!c.startDate) return false;
+                    const s = startOfDay(c.startDate);
+                    const e = endOfDay(c.endDate || c.startDate);
+                    return startOfDay(d) >= s && startOfDay(d) <= e;
+                }).length;
+                if (dayCardsCount > 0) {
+                    const badge = btn.createSpan('kt-day-badge');
+                    badge.setText(String(dayCardsCount));
+                }
+
+                btn.onclick = () => { 
+                    this.selectedDay = d; 
+                    this.savedTbScrollTop = null; 
+                    this.render(); 
+                };
+            }
         }
 
-        const sectionHeader = sidebar.createEl('p', { cls: 'kt-section-label' });
-
-        // Search bar
+        // Search bar (Universal across all cards: Backlog + Cronograma + Timeblocking)
         const searchBox = sidebar.createDiv('kt-tb-search-box');
         searchBox.createSpan({ cls: 'kt-tb-search-icon', text: '🔍' });
         const searchInput = searchBox.createEl('input', {
             cls: 'kt-tb-search-input',
             type: 'text',
-            placeholder: 'Buscar no backlog geral...'
+            placeholder: isWeekView ? 'Buscar tarefas na semana ou backlog...' : 'Buscar tarefas do dia, semana ou backlog...'
         });
-        searchInput.value = this.tbBacklogSearchQuery || '';
+        searchInput.value = this.tbSearchQuery || this.tbBacklogSearchQuery || '';
 
         const clearBtn = searchBox.createEl('button', {
             cls: 'kt-tb-search-clear',
             text: '✕'
         });
         clearBtn.title = 'Limpar busca';
-        clearBtn.style.display = this.tbBacklogSearchQuery ? 'inline-flex' : 'none';
+        clearBtn.style.display = searchInput.value ? 'inline-flex' : 'none';
 
-        const cardsContainer = sidebar.createDiv('kt-tb-backlog-items');
+        const contentContainer = sidebar.createDiv('kt-tb-sidebar-content');
 
-        const updateBacklogCards = () => {
-            const query = (this.tbBacklogSearchQuery || '').trim().toLowerCase();
+        const updateSidebarContent = () => {
+            const query = (this.tbSearchQuery || this.tbBacklogSearchQuery || '').trim().toLowerCase();
             clearBtn.style.display = query ? 'inline-flex' : 'none';
+            contentContainer.empty();
 
-            let filtered = unscheduled;
             if (query) {
-                filtered = unscheduled.filter(c => {
+                // SEARCH MODE: Search across ALL candidate cards (Backlog + Cronograma + Timeblocking)
+                const candidateCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+                const matched = candidateCards.filter(c => {
                     const titleMatch = (c.title || '').toLowerCase().includes(query);
                     const cleanTitleMatch = (c.cleanTitle || '').toLowerCase().includes(query);
                     const colMatch = (c.column || '').toLowerCase().includes(query);
                     const tagMatch = c.tags && c.tags.some(t => t.toLowerCase().includes(query));
-                    return titleMatch || cleanTitleMatch || colMatch || tagMatch;
+                    const dateMatch = c.startDate ? (formatDate(c.startDate).includes(query) || (this.dayLabel ? this.dayLabel(c.startDate, true).toLowerCase().includes(query) : false)) : false;
+                    return titleMatch || cleanTitleMatch || colMatch || tagMatch || dateMatch;
                 });
-            }
 
-            if (query) {
-                sectionHeader.setText(`📋 BACKLOG GERAL (${filtered.length} / ${unscheduled.length})`);
+                // Sort: uncompleted first, then by startDate, then title
+                matched.sort((a, b) => {
+                    if (a.isCompleted !== b.isCompleted) return a.isCompleted ? 1 : -1;
+                    const tA = a.startDate ? new Date(a.startDate).getTime() : Infinity;
+                    const tB = b.startDate ? new Date(b.startDate).getTime() : Infinity;
+                    if (tA !== tB) return tA - tB;
+                    return (a.title || '').localeCompare(b.title || '');
+                });
+
+                const searchHeader = contentContainer.createDiv('kt-section-label kt-section-search-label');
+                searchHeader.setText(`🔍 RESULTADOS DA BUSCA (${matched.length})`);
+
+                if (matched.length === 0) {
+                    const emptyNotice = contentContainer.createDiv('kt-empty');
+                    emptyNotice.setText(`Nenhum card encontrado para "${query}".`);
+                    return;
+                }
+
+                const searchList = contentContainer.createDiv('kt-tb-backlog-items');
+                matched.forEach(card => {
+                    this.renderTbSidebarCardItem(searchList, card, {
+                        contextDay: card.startDate ? startOfDay(card.startDate) : null,
+                        showDateBadge: true,
+                        showTimeSlot: true,
+                        isSearch: true,
+                        isWeekView: isWeekView
+                    });
+                });
             } else {
-                sectionHeader.setText(`📋 BACKLOG GERAL (${unscheduled.length})`);
-            }
+                // NORMAL MODE: Query is empty
+                if (isWeekView) {
+                    // WEEK VIEW:
+                    // 1. Cronograma da Semana
+                    const weekScheduledCards = this.cards.filter(c => {
+                        if (c.isEvent || c.column === 'Rotina' || isIgnoredColumn(c.column) || c.isCompleted) return false;
+                        if (!c.startDate) return false;
+                        const s = startOfDay(c.startDate);
+                        const e = endOfDay(c.endDate || c.startDate);
+                        return s <= endOfDay(we) && e >= startOfDay(ws);
+                    });
 
-            cardsContainer.empty();
+                    weekScheduledCards.sort((a, b) => {
+                        const tA = a.startDate ? new Date(a.startDate).getTime() : 0;
+                        const tB = b.startDate ? new Date(b.startDate).getTime() : 0;
+                        if (tA !== tB) return tA - tB;
+                        return (a.title || '').localeCompare(b.title || '');
+                    });
 
-            if (filtered.length === 0) {
-                const emptyNotice = cardsContainer.createDiv('kt-empty');
-                emptyNotice.setText(`Nenhum card encontrado para "${query}".`);
-                return;
-            }
+                    // Section 1: DO CRONOGRAMA DA SEMANA
+                    const cronoHeader = contentContainer.createDiv('kt-section-label kt-section-today-label kt-section-collapsible');
+                    const cronoArrow = cronoHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.weekCronoCollapsed ? '▶' : '▼' });
+                    cronoHeader.createSpan({ text: ` 🗓️ DO CRONOGRAMA DA SEMANA (${weekScheduledCards.length})` });
 
-            filtered.forEach(card => {
-                const c = cardsContainer.createDiv('kt-sb-card');
-                c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
-                if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
-                c.createDiv('kt-c-title').setText(card.title);
-                const metaRow = c.createDiv('kt-card-meta-row');
-                this.renderTagPills(metaRow, card.tags, true);
-                if (card.estimateMinutes && card.estimateMinutes > 0) {
-                    const estBadge = metaRow.createSpan('kt-card-est-badge');
-                    estBadge.setText(`⏱ ${card.estimateText}`);
-                }
-                const matchedProj = getProjectForCard(card, this.plugin.settings.projects);
-                if (matchedProj && matchedProj.hourlyRate > 0 && card.estimateMinutes > 0) {
-                    const amount = (card.estimateMinutes / 60) * matchedProj.hourlyRate;
-                    const curr = matchedProj.currency || 'R$';
-                    const earnBadge = metaRow.createSpan('kt-card-earnings-badge');
-                    earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
-                    earnBadge.title = `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
-                }
-                c.title = day ? 'Arraste para a grade de horários ou clique para abrir detalhes' : 'Arraste para qualquer dia da semana para agendar horário';
-                c.setAttribute('draggable', 'true');
-
-                c.addEventListener('dragstart', (e) => {
-                    this.draggedCard = card;
-                    const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
-                    try {
-                        e.dataTransfer.setData('text/plain', cardIdStr);
-                        e.dataTransfer.effectAllowed = 'move';
-                    } catch(err) {}
-                    c.classList.add('kt-dragging');
-                    document.body.classList.add('kt-is-card-dragging');
-                });
-
-                c.addEventListener('dragend', () => {
-                    c.classList.remove('kt-dragging');
-                    document.body.classList.remove('kt-is-card-dragging');
-                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
-                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
-                    this.draggedCard = null;
-                });
-
-                c.onclick = () => {
-                    if (day) {
-                        this.openCardOptionsModal(card, day);
-                    } else {
-                        this.openCardOptionsModal(card);
+                    const cronoContainer = contentContainer.createDiv('kt-tb-backlog-items kt-crono-week-list');
+                    if (this.weekCronoCollapsed) {
+                        cronoContainer.style.display = 'none';
                     }
-                };
-            });
+                    cronoHeader.onclick = () => {
+                        this.weekCronoCollapsed = !this.weekCronoCollapsed;
+                        cronoArrow.setText(this.weekCronoCollapsed ? '▶' : '▼');
+                        cronoContainer.style.display = this.weekCronoCollapsed ? 'none' : 'flex';
+                    };
+
+                    if (weekScheduledCards.length === 0) {
+                        const empty = cronoContainer.createDiv('kt-empty');
+                        empty.setText('Nenhuma tarefa agendada nesta semana.');
+                    } else {
+                        weekScheduledCards.forEach(card => {
+                            this.renderTbSidebarCardItem(cronoContainer, card, {
+                                contextDay: card.startDate ? startOfDay(card.startDate) : null,
+                                showDateBadge: true,
+                                showTimeSlot: true,
+                                isWeekView: true
+                            });
+                        });
+                    }
+
+                    // Section 2: BACKLOG GERAL SEM DATA
+                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+                    const backlogHeader = contentContainer.createDiv('kt-section-label kt-section-collapsible');
+                    const backlogArrow = backlogHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.backlogCollapsed ? '▶' : '▼' });
+                    backlogHeader.createSpan({ text: ` 📋 BACKLOG GERAL (${unscheduled.length})` });
+
+                    const backlogContainer = contentContainer.createDiv('kt-tb-backlog-items');
+                    if (this.backlogCollapsed) {
+                        backlogContainer.style.display = 'none';
+                    }
+                    backlogHeader.onclick = () => {
+                        this.backlogCollapsed = !this.backlogCollapsed;
+                        backlogArrow.setText(this.backlogCollapsed ? '▶' : '▼');
+                        backlogContainer.style.display = this.backlogCollapsed ? 'none' : 'flex';
+                    };
+
+                    if (unscheduled.length === 0) {
+                        const empty = backlogContainer.createDiv('kt-empty');
+                        empty.setText('Nenhum card no backlog.');
+                    } else {
+                        unscheduled.forEach(card => {
+                            this.renderTbSidebarCardItem(backlogContainer, card, {
+                                contextDay: null,
+                                showDateBadge: false,
+                                showTimeSlot: false,
+                                isWeekView: true
+                            });
+                        });
+                    }
+
+                } else {
+                    // 1-DAY VIEW:
+                    // Section 1: DO CRONOGRAMA DESTE DIA
+                    const dayCards = this.cards.filter(c => {
+                        if (c.isEvent || c.column === 'Rotina') return false;
+                        if (!c.startDate) return false;
+                        const s = startOfDay(c.startDate);
+                        const e = endOfDay(c.endDate || c.startDate);
+                        return startOfDay(day) >= s && startOfDay(day) <= e;
+                    });
+
+                    if (dayCards.length > 0) {
+                        const dayCronoHeader = contentContainer.createDiv('kt-section-label kt-section-today-label kt-section-collapsible');
+                        const dayCronoArrow = dayCronoHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.dayCronoCollapsed ? '▶' : '▼' });
+                        dayCronoHeader.createSpan({ text: ` 📅 DO CRONOGRAMA (${dayCards.length})` });
+
+                        const dayCronoContainer = contentContainer.createDiv('kt-tb-backlog-items kt-crono-day-list');
+                        if (this.dayCronoCollapsed) {
+                            dayCronoContainer.style.display = 'none';
+                        }
+                        dayCronoHeader.onclick = () => {
+                            this.dayCronoCollapsed = !this.dayCronoCollapsed;
+                            dayCronoArrow.setText(this.dayCronoCollapsed ? '▶' : '▼');
+                            dayCronoContainer.style.display = this.dayCronoCollapsed ? 'none' : 'flex';
+                        };
+
+                        dayCards.forEach(card => {
+                            this.renderTbSidebarCardItem(dayCronoContainer, card, {
+                                contextDay: day,
+                                showDateBadge: false,
+                                showTimeSlot: true,
+                                isWeekView: false
+                            });
+                        });
+                    }
+
+                    // Section 2: BACKLOG GERAL SEM DATA
+                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+                    const backlogHeader = contentContainer.createDiv('kt-section-label kt-section-collapsible');
+                    const backlogArrow = backlogHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.backlogCollapsed ? '▶' : '▼' });
+                    backlogHeader.createSpan({ text: ` 📋 BACKLOG GERAL (${unscheduled.length})` });
+
+                    const backlogContainer = contentContainer.createDiv('kt-tb-backlog-items');
+                    if (this.backlogCollapsed) {
+                        backlogContainer.style.display = 'none';
+                    }
+                    backlogHeader.onclick = () => {
+                        this.backlogCollapsed = !this.backlogCollapsed;
+                        backlogArrow.setText(this.backlogCollapsed ? '▶' : '▼');
+                        backlogContainer.style.display = this.backlogCollapsed ? 'none' : 'flex';
+                    };
+
+                    if (unscheduled.length === 0) {
+                        const empty = backlogContainer.createDiv('kt-empty');
+                        empty.setText('Nenhum card no backlog.');
+                    } else {
+                        unscheduled.forEach(card => {
+                            this.renderTbSidebarCardItem(backlogContainer, card, {
+                                contextDay: null,
+                                showDateBadge: false,
+                                showTimeSlot: false,
+                                isWeekView: false
+                            });
+                        });
+                    }
+                }
+            }
         };
 
         searchInput.addEventListener('input', (e) => {
+            this.tbSearchQuery = e.target.value;
             this.tbBacklogSearchQuery = e.target.value;
-            updateBacklogCards();
+            updateSidebarContent();
         });
 
         clearBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            this.tbSearchQuery = '';
             this.tbBacklogSearchQuery = '';
             searchInput.value = '';
             searchInput.focus();
-            updateBacklogCards();
+            updateSidebarContent();
         });
 
-        // Initial render
-        updateBacklogCards();
+        updateSidebarContent();
+    }
+
+    renderTbSidebarCardItem(parent, card, opts = {}) {
+        const isDone = card.isCompleted || isIgnoredColumn(card.column);
+        const hasDate = !!card.startDate;
+        const c = parent.createDiv(`kt-sb-card${hasDate ? ' kt-sb-card-scheduled' : ''}${isDone ? ' is-completed' : ''}`);
+        c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
+        if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
+
+        const refDay = opts.contextDay || (card.startDate ? startOfDay(card.startDate) : null);
+        const daySlots = refDay ? getTimesForDay(card, refDay) : [];
+        const hasTimeSlots = daySlots.length > 0;
+        const showPending = hasDate && !hasTimeSlots && !isDone;
+
+        if (opts.showDateBadge || opts.showTimeSlot || opts.isSearch || showPending) {
+            const topRow = c.createDiv('kt-sb-card-top-row');
+
+            // Date Badge
+            if (opts.showDateBadge && hasDate) {
+                const dateBadge = topRow.createSpan('kt-sb-date-badge');
+                const isSame = !card.endDate || sameDay(card.startDate, card.endDate);
+                if (isSame) {
+                    dateBadge.setText(`📅 ${this.dayLabel(card.startDate, true)}`);
+                } else {
+                    dateBadge.setText(`📅 ${formatDate(card.startDate).slice(0,5)} → ${formatDate(card.endDate).slice(0,5)}`);
+                }
+            } else if (opts.isSearch && !hasDate) {
+                const backlogBadge = topRow.createSpan('kt-sb-date-badge kt-sb-backlog-badge');
+                backlogBadge.setText('📋 Backlog');
+            }
+
+            // Time Badge or Pending Badge
+            if (hasTimeSlots && opts.showTimeSlot) {
+                const timeBadge = topRow.createSpan('kt-tb-card-time');
+                const timeLabelText = daySlots.length === 1
+                    ? `⏰ ${daySlots[0].timeStart} – ${daySlots[0].timeEnd}`
+                    : `⏰ ${daySlots.map(s => `${s.timeStart}–${s.timeEnd}`).join(', ')}`;
+                timeBadge.setText(timeLabelText);
+            } else if (showPending && (opts.isWeekView || opts.isSearch)) {
+                const pendingBadge = topRow.createSpan('kt-sb-pending-badge');
+                pendingBadge.setText('⚡ Sem horário');
+                pendingBadge.title = 'Agendado no Cronograma, aguardando alocação de horário no Timeblocking';
+            }
+        }
+
+        // Card Title
+        c.createDiv('kt-c-title').setText(isDone ? `✓ ${card.title}` : card.title);
+
+        // Metadata Row
+        const metaRow = c.createDiv('kt-card-meta-row');
+        this.renderTagPills(metaRow, card.tags, true);
+
+        let dayMinutes = 0;
+        daySlots.forEach(s => {
+            const dur = timeToMinutes(s.timeEnd) - timeToMinutes(s.timeStart);
+            if (dur > 0) dayMinutes += dur;
+        });
+
+        if (dayMinutes > 0) {
+            const estBadge = metaRow.createSpan('kt-card-est-badge');
+            const badgeText = daySlots.length > 1
+                ? `⏱ ${formatMinutesToHours(dayMinutes)} (${daySlots.length}x)`
+                : `⏱ ${formatMinutesToHours(dayMinutes)}`;
+            estBadge.setText(badgeText);
+            estBadge.title = `Duração somada hoje: ${formatMinutesToHours(dayMinutes)} em ${daySlots.length} bloco(s)`;
+        } else if (card.estimateMinutes && card.estimateMinutes > 0) {
+            const estBadge = metaRow.createSpan('kt-card-est-badge');
+            estBadge.setText(`⏱ ${card.estimateText}`);
+        }
+
+        const matchedProj = getProjectForCard(card, this.plugin.settings.projects);
+        if (matchedProj && matchedProj.hourlyRate > 0) {
+            let minCount = dayMinutes > 0 ? dayMinutes : (card.estimateMinutes || 0);
+            if (minCount > 0) {
+                const amount = (minCount / 60) * matchedProj.hourlyRate;
+                const curr = matchedProj.currency || 'R$';
+                const earnBadge = metaRow.createSpan('kt-card-earnings-badge');
+                earnBadge.setText(`💵 ${formatCurrency(amount, curr)}`);
+                earnBadge.title = daySlots.length > 1
+                    ? `Ganho previsto hoje: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h • ${formatMinutesToHours(minCount)} em ${daySlots.length} blocos)`
+                    : `Ganho previsto: ${formatCurrency(amount, curr)} (${curr} ${matchedProj.hourlyRate}/h)`;
+            }
+        }
+
+        c.title = opts.isWeekView
+            ? 'Arraste para qualquer dia da semana para agendar horário ou clique para abrir detalhes'
+            : 'Arraste para a grade de horários ou clique para abrir detalhes';
+        c.setAttribute('draggable', 'true');
+
+        c.addEventListener('dragstart', (e) => {
+            this.draggedCard = card;
+            const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
+            try {
+                e.dataTransfer.setData('text/plain', cardIdStr);
+                e.dataTransfer.effectAllowed = 'move';
+            } catch(err) {}
+            c.classList.add('kt-dragging');
+            document.body.classList.add('kt-is-card-dragging');
+        });
+
+        c.addEventListener('dragend', () => {
+            c.classList.remove('kt-dragging');
+            document.body.classList.remove('kt-is-card-dragging');
+            document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+            document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
+            this.draggedCard = null;
+        });
+
+        c.onclick = () => {
+            this.openCardOptionsModal(card, refDay || this.selectedDay || new Date());
+        };
     }
 
     renderDayGrid(parent) {
@@ -24059,6 +25802,40 @@ kanban-plugin: basic
                         });
                 });
 
+                menu.addSeparator();
+
+                menu.addItem(item => {
+                    item.setTitle('➡️ Passar para o dia seguinte (+1 dia)')
+                        .setIcon('arrow-right')
+                        .onClick(async () => {
+                            const nextDay = new Date(day);
+                            nextDay.setDate(nextDay.getDate() + 1);
+                            await this.moveTimeblockCardToDate(card, day, nextDay, startStr, endStr, instanceIndex);
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('⬅️ Passar para o dia anterior (-1 dia)')
+                        .setIcon('arrow-left')
+                        .onClick(async () => {
+                            const prevDay = new Date(day);
+                            prevDay.setDate(prevDay.getDate() - 1);
+                            await this.moveTimeblockCardToDate(card, day, prevDay, startStr, endStr, instanceIndex);
+                        });
+                });
+
+                menu.addItem(item => {
+                    item.setTitle('📅 Mover para outro dia...')
+                        .setIcon('calendar')
+                        .onClick(() => {
+                            new MoveCardToDateModal(this.app, this.plugin, card, day, startStr, endStr, instanceIndex, async (targetDay, ts, te) => {
+                                await this.moveTimeblockCardToDate(card, day, targetDay, ts, te, instanceIndex);
+                            }).open();
+                        });
+                });
+
+                menu.addSeparator();
+
                 menu.addItem(item => {
                     item.setTitle('➕ Adicionar outro bloco hoje')
                         .setIcon('plus')
@@ -24270,30 +26047,132 @@ kanban-plugin: basic
 
             const origStartMin = timeToMinutes(currentStart || getTimeForDay(card, day)?.timeStart || '09:00');
             const origEndMin   = timeToMinutes(currentEnd   || getTimeForDay(card, day)?.timeEnd   || '10:00');
-            const duration     = origEndMin - origStartMin;
+            const duration     = Math.max(15, origEndMin - origStartMin);
+            const startX       = e.clientX;
             const startY       = e.clientY;
             let previewStartMin = origStartMin;
             let previewEndMin   = origEndMin;
+            let currentTargetDay = day;
             let hasMoved        = false;
+            let ghostPreviewEl  = null;
 
             const timeLabel = cardEl.querySelector('.kt-tb-card-time');
 
             const onPointerMove = (moveEvt) => {
+                const deltaX = moveEvt.clientX - startX;
                 const deltaY = moveEvt.clientY - startY;
-                if (Math.abs(deltaY) > 3) {
+
+                if (Math.abs(deltaY) > 3 || Math.abs(deltaX) > 4) {
                     hasMoved = true;
                     document.body.classList.add('kt-is-tb-resizing');
                     cardEl.classList.add('kt-dragging');
 
-                    const deltaMin = Math.round((deltaY / pxPerMin) / 15) * 15; // Snap de 15 min
-                    previewStartMin = Math.max(dayStart * 60, Math.min((dayEnd + 1) * 60 - duration, origStartMin + deltaMin));
-                    previewEndMin   = previewStartMin + duration;
+                    // Check which day column the cursor is currently over in week/multi-day view
+                    const allCols = Array.from(document.querySelectorAll('.kt-tb-week-day-col'));
+                    let hoveredCol = null;
+                    if (allCols.length > 0) {
+                        for (const col of allCols) {
+                            const r = col.getBoundingClientRect();
+                            if (moveEvt.clientX >= r.left && moveEvt.clientX <= r.right) {
+                                hoveredCol = col;
+                                break;
+                            }
+                        }
+                    }
 
-                    const newTop = (previewStartMin - dayStart * 60) * pxPerMin;
-                    cardEl.style.top = `${newTop}px`;
+                    if (hoveredCol && hoveredCol._ktDate) {
+                        const targetDay = hoveredCol._ktDate;
+                        const targetColRect = hoveredCol.getBoundingClientRect();
+                        const relY = moveEvt.clientY - targetColRect.top;
+                        const totalMinutes = dayStart * 60 + Math.round((relY / pxPerMin) / 15) * 15;
+                        previewStartMin = Math.max(dayStart * 60, Math.min((dayEnd + 1) * 60 - duration, totalMinutes));
+                        previewEndMin   = previewStartMin + duration;
 
-                    if (timeLabel) {
-                        timeLabel.setText(`⏰ ${minutesToTime(previewStartMin)} – ${minutesToTime(previewEndMin)}`);
+                        if (sameDay(targetDay, day)) {
+                            // Dragging within the same original day
+                            currentTargetDay = day;
+                            if (ghostPreviewEl) {
+                                ghostPreviewEl.remove();
+                                ghostPreviewEl = null;
+                            }
+                            document.querySelectorAll('.kt-tb-week-day-col.kt-tb-col-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover'));
+                            cardEl.style.opacity = '';
+                            cardEl.style.transform = '';
+                            const newTop = (previewStartMin - dayStart * 60) * pxPerMin;
+                            cardEl.style.top = `${newTop}px`;
+                            if (timeLabel) {
+                                timeLabel.setText(`⏰ ${minutesToTime(previewStartMin)} – ${minutesToTime(previewEndMin)}`);
+                            }
+                        } else {
+                            // Dragging OVER ANOTHER DAY COLUMN!
+                            currentTargetDay = targetDay;
+                            document.querySelectorAll('.kt-tb-week-day-col.kt-tb-col-drop-hover').forEach(el => {
+                                if (el !== hoveredCol) el.classList.remove('kt-tb-col-drop-hover');
+                            });
+                            hoveredCol.classList.add('kt-tb-col-drop-hover');
+
+                            // Faint original card and let it translate smoothly with cursor
+                            cardEl.style.opacity = '0.35';
+                            cardEl.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+
+                            // Ghost drop preview in target column
+                            const targetEventsLayer = hoveredCol._ktEventsLayer || hoveredCol.querySelector('.kt-tb-events-layer') || hoveredCol;
+                            if (!ghostPreviewEl || ghostPreviewEl.parentNode !== targetEventsLayer) {
+                                if (ghostPreviewEl) ghostPreviewEl.remove();
+                                ghostPreviewEl = targetEventsLayer.createDiv('kt-tb-drop-preview kt-tb-cross-day-preview');
+                            }
+                            const topPx = (previewStartMin - dayStart * 60) * pxPerMin;
+                            const heightPx = Math.max(26, duration * pxPerMin - 2);
+                            ghostPreviewEl.style.top = `${topPx}px`;
+                            ghostPreviewEl.style.height = `${heightPx}px`;
+                            const projColor = card.tagColor || card.projectColor || card.priorityColor || 'var(--interactive-accent)';
+                            ghostPreviewEl.style.setProperty('--proj-color', projColor);
+                            ghostPreviewEl.innerHTML = '';
+                            const gLabel = ghostPreviewEl.createDiv('kt-tb-ghost-label');
+                            gLabel.setText(`📅 ${this.dayLabel(targetDay, true)} • ${minutesToTime(previewStartMin)} – ${minutesToTime(previewEndMin)}`);
+                            const gTitle = ghostPreviewEl.createDiv('kt-tb-ghost-title');
+                            gTitle.setText(card.title);
+
+                            if (timeLabel) {
+                                timeLabel.setText(`➡️ ${this.dayLabel(targetDay, true)}: ${minutesToTime(previewStartMin)} – ${minutesToTime(previewEndMin)}`);
+                            }
+                        }
+                    } else {
+                        // 1-Day View or outside columns: check sidebar day buttons if in 1-day view
+                        const sidebarDays = Array.from(document.querySelectorAll('.kt-sb-day'));
+                        let hoveredSbDay = null;
+                        for (const sb of sidebarDays) {
+                            const r = sb.getBoundingClientRect();
+                            if (moveEvt.clientX >= r.left && moveEvt.clientX <= r.right && moveEvt.clientY >= r.top && moveEvt.clientY <= r.bottom) {
+                                hoveredSbDay = sb;
+                                break;
+                            }
+                        }
+
+                        if (hoveredSbDay && hoveredSbDay._ktDate && !sameDay(hoveredSbDay._ktDate, day)) {
+                            currentTargetDay = hoveredSbDay._ktDate;
+                            document.querySelectorAll('.kt-sb-day.kt-sb-day-drop-hover').forEach(el => el.classList.remove('kt-sb-day-drop-hover'));
+                            hoveredSbDay.classList.add('kt-sb-day-drop-hover');
+                            cardEl.style.opacity = '0.4';
+                            cardEl.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+                            if (timeLabel) {
+                                timeLabel.setText(`➡️ Mover para ${this.dayLabel(currentTargetDay, true)}`);
+                            }
+                        } else {
+                            // Normal 1-day vertical drag
+                            document.querySelectorAll('.kt-sb-day.kt-sb-day-drop-hover').forEach(el => el.classList.remove('kt-sb-day-drop-hover'));
+                            currentTargetDay = day;
+                            cardEl.style.opacity = '';
+                            cardEl.style.transform = '';
+                            const deltaMin = Math.round((deltaY / pxPerMin) / 15) * 15;
+                            previewStartMin = Math.max(dayStart * 60, Math.min((dayEnd + 1) * 60 - duration, origStartMin + deltaMin));
+                            previewEndMin   = previewStartMin + duration;
+                            const newTop = (previewStartMin - dayStart * 60) * pxPerMin;
+                            cardEl.style.top = `${newTop}px`;
+                            if (timeLabel) {
+                                timeLabel.setText(`⏰ ${minutesToTime(previewStartMin)} – ${minutesToTime(previewEndMin)}`);
+                            }
+                        }
                     }
                 }
             };
@@ -24303,6 +26182,15 @@ kanban-plugin: basic
                 document.removeEventListener('pointerup', onPointerUp);
                 document.body.classList.remove('kt-is-tb-resizing');
                 cardEl.classList.remove('kt-dragging');
+                cardEl.style.opacity = '';
+                cardEl.style.transform = '';
+
+                if (ghostPreviewEl) {
+                    ghostPreviewEl.remove();
+                    ghostPreviewEl = null;
+                }
+                document.querySelectorAll('.kt-tb-week-day-col.kt-tb-col-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover'));
+                document.querySelectorAll('.kt-sb-day.kt-sb-day-drop-hover').forEach(el => el.classList.remove('kt-sb-day-drop-hover'));
 
                 if (hasMoved) {
                     cardEl._ktJustMoved = Date.now();
@@ -24311,13 +26199,16 @@ kanban-plugin: basic
                         clickEvt.preventDefault();
                     };
                     window.addEventListener('click', blockClick, { capture: true, once: true });
-                }
 
-                if (hasMoved && previewStartMin !== origStartMin) {
-                    const ts = minutesToTime(previewStartMin);
-                    const te = minutesToTime(previewEndMin);
-                    await this.persistTimeBlock(card, day, ts, te, instanceIndex, 'set');
-                    await this.refresh();
+                    const newTs = minutesToTime(previewStartMin);
+                    const newTe = minutesToTime(previewEndMin);
+
+                    if (!sameDay(currentTargetDay, day)) {
+                        await this.moveTimeblockCardToDate(card, day, currentTargetDay, newTs, newTe, instanceIndex);
+                    } else if (previewStartMin !== origStartMin) {
+                        await this.persistTimeBlock(card, day, newTs, newTe, instanceIndex, 'set');
+                        await this.refresh();
+                    }
                 }
             };
 
