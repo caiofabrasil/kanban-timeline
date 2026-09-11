@@ -1092,17 +1092,114 @@ body.kt-is-resizing * {
 
 /* Notes & Links in Kanban Card */
 .kt-card-notes {
-    margin: 2px 0;
+    margin: 3px 0 2px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 3px;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .kt-card-note-line {
     font-size: 11.5px;
     color: var(--text-muted);
     line-height: 1.35;
-    opacity: 0.85;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Smart Link Pill / Chip inside Cards */
+.kt-task-link-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2.5px 7px;
+    margin: 1px 0;
+    background: rgba(var(--color-accent-1, 99, 102, 241), 0.08);
+    border: 1px solid rgba(var(--color-accent-1, 99, 102, 241), 0.22);
+    border-radius: 6px;
+    color: var(--text-normal);
+    text-decoration: none !important;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
+    max-width: 100%;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.kt-task-link-pill:hover {
+    background: rgba(var(--color-accent-1, 99, 102, 241), 0.18);
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+    transform: translateY(-0.5px);
+}
+
+.kt-task-link-pill .kt-link-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.kt-task-link-pill .kt-link-domain {
+    font-weight: 600;
+    color: var(--text-accent, var(--link-color));
+    white-space: nowrap;
+}
+
+.kt-task-link-pill .kt-link-domain-sub {
+    color: var(--text-faint);
+    font-size: 10px;
+    margin-left: 2px;
+    white-space: nowrap;
+}
+
+.kt-task-link-pill .kt-link-path {
+    opacity: 0.75;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+    font-family: var(--font-monospace);
+    font-size: 10px;
+}
+
+.kt-task-link-pill .kt-link-label {
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+.kt-task-link-pill .kt-link-arrow {
+    opacity: 0.65;
+    font-size: 10px;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding-left: 2px;
+}
+
+/* Inline Links inside Task Text */
+.kt-task-inline-link {
+    color: var(--link-color, var(--interactive-accent));
+    text-decoration: underline;
+    text-decoration-color: rgba(var(--color-accent-1, 99, 102, 241), 0.35);
+    text-underline-offset: 2px;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    font-weight: 500;
+}
+
+.kt-task-inline-link:hover {
+    color: var(--link-hover-color, var(--interactive-accent-hover));
+    text-decoration-color: currentColor;
 }
 
 .kt-card-body a.internal-link {
@@ -1110,7 +1207,10 @@ body.kt-is-resizing * {
     text-decoration: none;
     cursor: pointer;
     font-weight: 500;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
+
 .kt-card-body a.internal-link:hover {
     text-decoration: underline;
 }
@@ -2952,6 +3052,335 @@ body.kt-is-tb-resizing * {
 .kt-stat-l {
     font-size: 10.5px;
     color: var(--text-faint);
+}
+
+/* ================================================================
+   PROJECT RESOURCES & DOCUMENTS HUB (Miro, ClickUp, GDD, PDF, Web)
+   ================================================================ */
+.kt-proj-res-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 8px;
+    margin-bottom: 4px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--background-modifier-border);
+}
+
+.kt-proj-res-header {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.kt-proj-res-header-left {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.kt-proj-res-icon {
+    font-size: 12px;
+}
+
+.kt-proj-res-title {
+    color: var(--text-muted);
+}
+
+.kt-proj-add-res-btn {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1.5px 7px;
+    border-radius: 4px;
+    background: transparent;
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-accent, var(--interactive-accent));
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-proj-add-res-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+}
+
+.kt-proj-res-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 160px;
+    overflow-y: auto;
+    background: var(--background-secondary-alt, rgba(0,0,0,0.15));
+    border-radius: 6px;
+    padding: 5px 6px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-proj-res-empty {
+    font-size: 11px;
+    color: var(--text-faint);
+    text-align: center;
+    padding: 8px 4px;
+}
+
+.kt-proj-empty-add-link {
+    color: var(--text-accent, var(--interactive-accent));
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.kt-proj-empty-add-link:hover {
+    text-decoration: underline;
+}
+
+.kt-proj-res-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 5px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-proj-res-item:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+    transform: translateY(-0.5px);
+}
+
+.kt-proj-res-item-left {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-proj-res-item-icon {
+    font-size: 13px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.kt-proj-res-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.kt-proj-res-item-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-proj-res-item-sub {
+    font-size: 10px;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-proj-res-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+}
+
+.kt-res-btn {
+    font-size: 10px;
+    padding: 1.5px 5px;
+    border-radius: 3px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-res-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+    border-color: var(--text-muted);
+}
+
+.kt-res-open-btn {
+    color: var(--text-accent, var(--interactive-accent));
+    font-weight: 600;
+}
+
+.kt-res-del-btn:hover {
+    color: #ef4444;
+    border-color: #ef4444;
+}
+
+/* Vault File Picker Modal */
+.kt-file-picker-modal .kt-file-search-box {
+    margin-bottom: 12px;
+}
+
+.kt-file-search-input {
+    width: 100%;
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    box-sizing: border-box;
+}
+
+.kt-file-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-bottom: 12px;
+}
+
+.kt-file-picker-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-file-picker-item:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+}
+
+.kt-file-item-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+
+.kt-file-item-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.kt-file-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.kt-file-item-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-file-item-path {
+    font-size: 10px;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-file-ext-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--background-modifier-border);
+    color: var(--text-muted);
+}
+
+.kt-file-ext-badge.ext-pdf {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+.kt-file-ext-badge.ext-md {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3b82f6;
+}
+
+.kt-file-ext-badge.ext-canvas {
+    background: rgba(168, 85, 247, 0.15);
+    color: #a855f7;
+}
+
+.kt-file-empty {
+    font-size: 12px;
+    color: var(--text-faint);
+    text-align: center;
+    padding: 24px;
+}
+
+/* Report Modal Resources Row */
+.kt-report-resources-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--background-secondary-alt);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+}
+
+.kt-report-res-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-right: 4px;
+}
+
+.kt-report-res-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-accent, var(--interactive-accent));
+    font-size: 11px;
+    font-weight: 500;
+    text-decoration: none !important;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-report-res-chip:hover {
+    border-color: var(--interactive-accent);
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
 }
 
 /* Tasks Section (Always open) */
@@ -10188,7 +10617,212 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     margin-top: 4px;
 }
 
-/* 3. Journal Timeline / Feed Cards */
+/* 3. Mental Health Timeline & Journal Feed */
+.kt-mental-timeline-section {
+    margin-top: 12px;
+}
+
+.kt-mental-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.kt-mental-filter-btn {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 12px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-mental-filter-btn:hover {
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+}
+
+.kt-mental-filter-btn.is-active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent, #ffffff);
+    border-color: var(--interactive-accent);
+    font-weight: 700;
+}
+
+.kt-mental-timeline-empty {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-mental-timeline-flow {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 12px 0 12px 14px;
+}
+
+/* Continuous vertical track */
+.kt-mental-timeline-flow::before {
+    content: '';
+    position: absolute;
+    top: 20px;
+    bottom: 20px;
+    left: 29px;
+    width: 2px;
+    background: linear-gradient(180deg, var(--interactive-accent) 0%, var(--background-modifier-border) 100%);
+    z-index: 1;
+}
+
+.kt-mental-timeline-item {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    z-index: 2;
+}
+
+/* Timeline node circle */
+.kt-mental-timeline-node {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--background-secondary);
+    border: 2px solid var(--background-modifier-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 4px var(--background-primary);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    user-select: none;
+    cursor: default;
+}
+
+.kt-mental-timeline-node:hover {
+    transform: scale(1.1);
+}
+
+.kt-mental-timeline-node.is-mood-5 {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 4px var(--background-primary), 0 0 10px rgba(34, 197, 94, 0.3);
+}
+
+.kt-mental-timeline-node.is-mood-4 {
+    border-color: #38bdf8;
+    box-shadow: 0 0 0 4px var(--background-primary), 0 0 10px rgba(56, 189, 248, 0.3);
+}
+
+.kt-mental-timeline-node.is-mood-3 {
+    border-color: #eab308;
+    box-shadow: 0 0 0 4px var(--background-primary), 0 0 10px rgba(234, 179, 8, 0.3);
+}
+
+.kt-mental-timeline-node.is-mood-2 {
+    border-color: #f97316;
+    box-shadow: 0 0 0 4px var(--background-primary), 0 0 10px rgba(249, 115, 22, 0.3);
+}
+
+.kt-mental-timeline-node.is-mood-1 {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 4px var(--background-primary), 0 0 10px rgba(239, 68, 68, 0.3);
+}
+
+/* Timeline card */
+.kt-mental-timeline-card {
+    flex: 1;
+    min-width: 0;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    box-sizing: border-box;
+}
+
+.kt-mental-timeline-card:hover {
+    border-color: var(--text-muted);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
+}
+
+.kt-mental-timeline-card-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.kt-mental-timeline-date-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-mental-timeline-date-text {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-mental-timeline-hdr-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-mental-timeline-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-left: 4px;
+}
+
+.kt-mental-timeline-quote {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-normal);
+    background: var(--background-secondary);
+    border-left: 3px solid var(--interactive-accent);
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-style: normal;
+    margin-top: 2px;
+}
+
+.kt-mental-timeline-meds {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.kt-mental-meds-title {
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+/* Common journal pills & chips */
 .kt-health-journal-feed {
     display: flex;
     flex-direction: column;
@@ -10250,6 +10884,7 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 .kt-health-journal-pill.is-mood-3 { background: rgba(234, 179, 8, 0.15); color: #eab308; border-color: rgba(234, 179, 8, 0.3); }
 .kt-health-journal-pill.is-mood-2 { background: rgba(249, 115, 22, 0.15); color: #f97316; border-color: rgba(249, 115, 22, 0.3); }
 .kt-health-journal-pill.is-mood-1 { background: rgba(239, 68, 68, 0.15); color: #ef4444; border-color: rgba(239, 68, 68, 0.3); }
+.kt-health-journal-pill.is-stress-high { background: rgba(239, 68, 68, 0.15); color: #ef4444; border-color: rgba(239, 68, 68, 0.35); font-weight: 700; }
 
 .kt-health-journal-quote {
     font-size: 13px;
@@ -10328,6 +10963,66 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     gap: 6px;
 }
 
+.kt-health-date-nav-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-health-nav-btn {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    line-height: 1.3;
+}
+
+.kt-health-nav-btn:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+}
+
+.kt-health-nav-btn.is-disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.kt-health-today-btn {
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.12);
+    border: 1px solid var(--interactive-accent);
+    color: var(--interactive-accent);
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-health-today-btn:hover {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent, #ffffff);
+}
+
+.kt-health-rel-chip {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent, #ffffff);
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-left: 4px;
+    display: inline-block;
+    vertical-align: middle;
+}
+
 .kt-health-cockpit-date-pill {
     font-size: 11px;
     font-weight: 600;
@@ -10335,6 +11030,9 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     background: var(--background-modifier-hover);
     padding: 2px 8px;
     border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .kt-health-metric-row {
@@ -10436,6 +11134,181 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 .kt-health-quick-journal-textarea:focus {
     border-color: var(--interactive-accent);
     box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+/* ================================================================
+   HEALTH DAILY STRIP (MINI-FEED RESUMIDO DOS ÚLTIMOS DIAS)
+   ================================================================ */
+
+.kt-health-daily-strip-section {
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
+.kt-health-daily-strip-list {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 4px 2px 10px 2px;
+    scrollbar-width: thin;
+}
+
+.kt-daily-strip-card {
+    flex: 0 0 152px;
+    min-width: 152px;
+    max-width: 164px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    box-sizing: border-box;
+}
+
+.kt-daily-strip-card:hover {
+    border-color: var(--text-muted);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
+}
+
+.kt-daily-strip-card.is-selected {
+    border-color: var(--interactive-accent);
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.07);
+    box-shadow: 0 0 0 1px var(--interactive-accent), 0 4px 12px rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.16);
+}
+
+.kt-daily-strip-card-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 4px;
+}
+
+.kt-daily-strip-day {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.kt-daily-strip-day.is-today {
+    color: var(--interactive-accent);
+}
+
+.kt-daily-strip-day.is-yesterday {
+    color: #38bdf8;
+}
+
+.kt-daily-strip-date {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-daily-strip-metrics {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-daily-strip-mood {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.kt-daily-strip-mood.is-empty {
+    font-size: 14px;
+    color: var(--text-muted);
+}
+
+.kt-daily-strip-stress {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-daily-strip-stress.is-low {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.kt-daily-strip-stress.is-med {
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.kt-daily-strip-stress.is-high {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.kt-daily-strip-submetrics {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.kt-daily-strip-pill {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--background-secondary);
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-daily-strip-pill.is-meds {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.25);
+}
+
+.kt-daily-strip-journal {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    border-top: 1px dashed var(--background-modifier-border);
+    padding-top: 4px;
+}
+
+.kt-daily-strip-journal-icon {
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.kt-daily-strip-journal-text {
+    color: var(--text-normal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-style: italic;
+}
+
+.kt-daily-strip-journal-empty {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-style: italic;
+    opacity: 0.7;
 }
 
 .kt-health-hub-charts-card {
@@ -10993,5 +11866,436 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     border-radius: 3px;
     transition: width 0.3s ease-out;
 }
+
+/* ================================================================
+   HEALTH: MEDICATION REMINDERS & ALERTS
+   ================================================================ */
+
+.kt-health-med-reminder-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 5px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-health-med-reminder-btn:hover {
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+}
+
+.kt-health-med-reminder-btn.is-active {
+    background: rgba(234, 179, 8, 0.12);
+    color: #eab308;
+    border-color: rgba(234, 179, 8, 0.4);
+}
+
+.kt-health-med-meta-rem-badge {
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    transition: all 0.12s ease;
+}
+
+.kt-health-med-meta-rem-badge:hover {
+    background: rgba(234, 179, 8, 0.25);
+    border-color: #eab308;
+}
+
+.kt-med-reminder-modal-wrap,
+.kt-med-alert-modal-wrap {
+    padding: 0;
+}
+
+.kt-med-modal-hdr {
+    margin-bottom: 14px;
+}
+
+.kt-med-modal-hdr h2 {
+    margin: 0 0 4px 0;
+    font-size: 18px;
+}
+
+.kt-med-modal-sub {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--interactive-accent);
+}
+
+.kt-med-modal-notes {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.kt-med-reminder-test-box {
+    background: var(--background-secondary);
+    border: 1px dashed var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+/* Alert Modal */
+.kt-med-alert-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.kt-med-alert-top-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-med-alert-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(234, 179, 8, 0.15);
+    border: 2px solid #eab308;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    animation: kt-pulse-amber 2s infinite ease-in-out;
+}
+
+@keyframes kt-pulse-amber {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(234, 179, 8, 0); }
+}
+
+.kt-med-alert-title-box h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-med-alert-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.kt-med-alert-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kt-med-alert-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-med-alert-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
+.kt-med-alert-dosage {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--interactive-accent);
+    background: var(--background-primary);
+    padding: 2px 8px;
+    border-radius: 12px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-med-alert-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-med-alert-pill {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--background-primary);
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-med-alert-pill.is-stock {
+    color: #22c55e;
+}
+
+.kt-med-alert-instructions {
+    font-size: 12px;
+    color: var(--text-normal);
+    background: var(--background-primary);
+    border-left: 3px solid var(--interactive-accent);
+    padding: 6px 10px;
+    border-radius: 0 4px 4px 0;
+    white-space: pre-wrap;
+}
+
+.kt-med-alert-question p {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    text-align: center;
+}
+
+.kt-med-alert-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.kt-med-alert-yes-btn {
+    width: 100%;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    background: #16a34a !important;
+    color: #ffffff !important;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-med-alert-yes-btn:hover {
+    background: #15803d !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.35);
+}
+
+.kt-med-alert-snooze-btn {
+    width: 100%;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-weight: 600;
+    background: var(--background-secondary);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.4);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-med-alert-snooze-btn:hover {
+    background: rgba(234, 179, 8, 0.15);
+}
+
+.kt-med-alert-dismiss-btn {
+    width: 100%;
+    padding: 6px 12px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 0.15s ease;
+    text-align: center;
+}
+
+.kt-med-alert-dismiss-btn:hover {
+    color: var(--text-normal);
+    text-decoration: underline;
+}
+
+/* 
+================================================================
+   HEALTH: NON-PERIODIC / SOS CUSTOM MEDICATIONS
+================================================================
+*/
+
+.kt-health-sos-subrow {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--background-modifier-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kt-health-sos-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.kt-health-sos-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #f59e0b;
+}
+
+.kt-health-sos-chips-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.kt-health-sos-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: var(--text-normal);
+    transition: all 0.15s ease;
+}
+
+.kt-health-sos-chip .kt-health-sos-icon {
+    font-size: 11px;
+}
+
+.kt-health-sos-chip .kt-health-sos-text {
+    font-weight: 600;
+    color: #f59e0b;
+}
+
+.kt-health-sos-chip .kt-health-sos-reason {
+    color: var(--text-muted);
+    font-size: 10.5px;
+}
+
+.kt-health-sos-chip .kt-health-sos-time {
+    color: var(--text-muted);
+    font-size: 10px;
+    opacity: 0.85;
+}
+
+.kt-health-sos-chip .kt-health-sos-del {
+    margin-left: 3px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: bold;
+    padding: 0 3px;
+    border-radius: 50%;
+    transition: color 0.12s ease;
+}
+
+.kt-health-sos-chip .kt-health-sos-del:hover {
+    color: #ef4444;
+}
+
+.kt-health-sos-add-btn {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--background-secondary);
+    border: 1px dashed rgba(245, 158, 11, 0.5);
+    color: #f59e0b;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-health-sos-add-btn:hover {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: #f59e0b;
+}
+
+.kt-daily-strip-pill.has-sos {
+    color: #f59e0b !important;
+    background: rgba(245, 158, 11, 0.12) !important;
+    border-color: rgba(245, 158, 11, 0.35) !important;
+}
+
+.kt-health-journal-med-chip.is-sos {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #f59e0b;
+}
+
+.kt-health-symptom-chip {
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 10px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-health-symptom-chip:hover {
+    color: var(--text-normal);
+    border-color: var(--interactive-accent);
+}
+
+.kt-health-sos-history-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.kt-health-sos-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.kt-health-sos-history-table th {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.kt-health-sos-history-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--background-modifier-border-focus);
+    color: var(--text-normal);
+}
+
+.kt-health-sos-history-table tr:hover td {
+    background: var(--background-secondary);
+}
+
 
 

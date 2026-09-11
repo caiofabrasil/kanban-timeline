@@ -326,29 +326,182 @@ function formatCurrency(amount, currency = 'R$', hide = false) {
     return `${currency} ${formattedNum}`;
 }
 
+function getResourceMeta(urlOrPath) {
+    if (!urlOrPath) return { icon: '🔗', label: 'Link', type: 'url' };
+    const lower = urlOrPath.toLowerCase().trim();
+    if (lower.includes('miro.com')) return { icon: '🎨', label: 'Miro', type: 'miro' };
+    if (lower.includes('clickup.com')) return { icon: '📋', label: 'ClickUp', type: 'clickup' };
+    if (lower.includes('notion.so') || lower.includes('notion.com')) return { icon: '📑', label: 'Notion', type: 'notion' };
+    if (lower.includes('figma.com')) return { icon: '🎯', label: 'Figma', type: 'figma' };
+    if (lower.includes('github.com')) return { icon: '🐙', label: 'GitHub', type: 'github' };
+    if (lower.includes('drive.google.com') || lower.includes('docs.google.com')) return { icon: '📁', label: 'Google Drive', type: 'gdrive' };
+    if (lower.includes('trello.com')) return { icon: '📊', label: 'Trello', type: 'trello' };
+    if (lower.includes('mercadolivre.com') || lower.includes('mercadolivre.com.br')) return { icon: '🛍️', label: 'Mercado Livre', type: 'mercadolivre' };
+    if (lower.includes('amazon.com') || lower.includes('amazon.com.br')) return { icon: '📦', label: 'Amazon', type: 'amazon' };
+    if (lower.includes('youtube.com') || lower.includes('youtu.be')) return { icon: '▶️', label: 'YouTube', type: 'youtube' };
+    if (lower.endsWith('.pdf') || lower.includes('.pdf?')) return { icon: '📄', label: 'PDF', type: 'pdf' };
+    if (lower.endsWith('.md') || lower.includes('gdd')) return { icon: '📝', label: 'GDD / Doc', type: 'gdd' };
+    return { icon: '🔗', label: 'Link', type: 'url' };
+}
+
+function renderTaskLinkPill(parentEl, url, displayLabel, app, sourcePath) {
+    const meta = getResourceMeta(url);
+    const pill = parentEl.createEl('a', {
+        cls: 'kt-task-link-pill',
+        attr: {
+            href: url,
+            title: url,
+            target: '_blank',
+            rel: 'noopener noreferrer'
+        }
+    });
+
+    pill.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (/^https?:\/\//i.test(url)) {
+            window.open(url, '_blank');
+        } else if (app && app.workspace) {
+            app.workspace.openLinkText(url, sourcePath || '', false);
+        }
+    };
+
+    pill.createSpan({ cls: 'kt-link-icon', text: meta.icon });
+
+    let domainStr = '';
+    let pathStr = '';
+    if (/^https?:\/\//i.test(url)) {
+        try {
+            const parsed = new URL(url);
+            domainStr = parsed.hostname.replace(/^www\./, '');
+            pathStr = parsed.pathname !== '/' ? parsed.pathname : '';
+            if (pathStr.length > 20) {
+                pathStr = pathStr.slice(0, 18) + '…';
+            }
+        } catch (e) {
+            domainStr = meta.label;
+        }
+    } else {
+        domainStr = url.split('/').pop() || url;
+    }
+
+    if (displayLabel) {
+        pill.createSpan({ cls: 'kt-link-label', text: displayLabel });
+        if (domainStr) {
+            pill.createSpan({ cls: 'kt-link-domain-sub', text: `(${domainStr})` });
+        }
+    } else {
+        pill.createSpan({ cls: 'kt-link-domain', text: domainStr });
+        if (pathStr) {
+            pill.createSpan({ cls: 'kt-link-path', text: pathStr });
+        }
+    }
+
+    pill.createSpan({ cls: 'kt-link-arrow', text: '↗' });
+    return pill;
+}
+
 function renderFormattedTextWithLinks(parentEl, text, app, sourcePath) {
     if (!text) return;
-    const linkRegex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+    const trimmed = text.trim();
+
+    // 1. Single standalone URL on its own line -> Render as Smart Link Pill
+    const singleUrlMatch = trimmed.match(/^https?:\/\/[^\s]+$/i);
+    if (singleUrlMatch) {
+        renderTaskLinkPill(parentEl, trimmed, null, app, sourcePath);
+        return;
+    }
+
+    // 2. Single standalone Markdown link on its own line -> Render as Smart Link Pill
+    const singleMdMatch = trimmed.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+|[^\s)]+)\)$/);
+    if (singleMdMatch) {
+        renderTaskLinkPill(parentEl, singleMdMatch[2], singleMdMatch[1], app, sourcePath);
+        return;
+    }
+
+    // 3. Mixed content: parse wikilinks [[...]], markdown links [...](...), and raw URLs
+    const tokenRegex = /(\[\[([^\]|]+)(?:\|([^\]]+))?\]\])|(\[([^\]]+)\]\((https?:\/\/[^\s)]+|[^\s)]+)\))|(https?:\/\/[^\s<>"'`()[\]]+)/g;
     let lastIdx = 0;
     let match;
-    while ((match = linkRegex.exec(text)) !== null) {
+
+    while ((match = tokenRegex.exec(text)) !== null) {
         const preText = text.slice(lastIdx, match.index);
         if (preText) parentEl.createSpan().setText(preText);
-        const linkTarget = match[1];
-        const linkDisplay = match[2] || linkTarget;
-        const linkEl = parentEl.createEl('a', {
-            cls: 'internal-link',
-            text: linkDisplay,
-            attr: { 'data-href': linkTarget }
-        });
-        linkEl.onclick = (e) => {
-            e.stopPropagation();
-            if (app && app.workspace) {
-                app.workspace.openLinkText(linkTarget, sourcePath || '', false);
+
+        if (match[1]) {
+            // Wikilink: [[Target|Display]]
+            const linkTarget = match[2];
+            const linkDisplay = match[3] || linkTarget;
+            const linkEl = parentEl.createEl('a', {
+                cls: 'internal-link',
+                text: linkDisplay,
+                attr: { 'data-href': linkTarget }
+            });
+            linkEl.onclick = (e) => {
+                e.stopPropagation();
+                if (app && app.workspace) {
+                    app.workspace.openLinkText(linkTarget, sourcePath || '', false);
+                }
+            };
+        } else if (match[4]) {
+            // Markdown link: [Display](URL or Vault path)
+            const linkDisplay = match[5];
+            const linkUrl = match[6];
+            const isHttp = /^https?:\/\//i.test(linkUrl);
+
+            const linkEl = parentEl.createEl('a', {
+                cls: isHttp ? 'kt-task-inline-link' : 'internal-link',
+                text: isHttp ? `${linkDisplay} ↗` : linkDisplay,
+                attr: {
+                    href: linkUrl,
+                    title: linkUrl,
+                    ...(isHttp ? { target: '_blank', rel: 'noopener noreferrer' } : { 'data-href': linkUrl })
+                }
+            });
+
+            linkEl.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isHttp) {
+                    window.open(linkUrl, '_blank');
+                } else if (app && app.workspace) {
+                    app.workspace.openLinkText(linkUrl, sourcePath || '', false);
+                }
+            };
+        } else if (match[7]) {
+            // Raw URL inline: https://...
+            const rawUrl = match[7];
+            let shortDisplay = rawUrl;
+            try {
+                const u = new URL(rawUrl);
+                const host = u.hostname.replace(/^www\./, '');
+                const p = u.pathname !== '/' ? (u.pathname.length > 18 ? u.pathname.slice(0, 16) + '…' : u.pathname) : '';
+                shortDisplay = `${host}${p} ↗`;
+            } catch (e) {
+                if (shortDisplay.length > 35) shortDisplay = shortDisplay.slice(0, 32) + '… ↗';
             }
-        };
+
+            const linkEl = parentEl.createEl('a', {
+                cls: 'kt-task-inline-link',
+                text: shortDisplay,
+                attr: {
+                    href: rawUrl,
+                    title: rawUrl,
+                    target: '_blank',
+                    rel: 'noopener noreferrer'
+                }
+            });
+
+            linkEl.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                window.open(rawUrl, '_blank');
+            };
+        }
+
         lastIdx = match.index + match[0].length;
     }
+
     const postText = text.slice(lastIdx);
     if (postText) parentEl.createSpan().setText(postText);
 }
@@ -2613,6 +2766,7 @@ class ProjectModal extends obsidian.Modal {
             }
             this.close();
             const projData = {
+                ...(project || {}),
                 id: project ? project.id : 'proj-' + Date.now(),
                 name,
                 tag,
@@ -2621,9 +2775,294 @@ class ProjectModal extends obsidian.Modal {
                 targetHours,
                 hourlyRate,
                 currency,
-                awPattern
+                awPattern,
+                excludedTaskTitles: (project && project.excludedTaskTitles) || [],
+                resources: (project && project.resources) || []
             };
             if (this.onSave) await this.onSave(projData);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+function getTypeIcon(type) {
+    switch (type) {
+        case 'miro': return '🎨';
+        case 'clickup': return '📋';
+        case 'notion': return '📑';
+        case 'figma': return '🎯';
+        case 'github': return '🐙';
+        case 'gdrive': return '📁';
+        case 'pdf': return '📄';
+        case 'gdd': return '📝';
+        case 'url': return '🌐';
+        default: return '🔗';
+    }
+}
+
+// ================================================================
+// VAULT FILE PICKER MODAL (Busca e seleção de arquivos do Vault)
+// ================================================================
+
+class VaultFilePickerModal extends obsidian.Modal {
+    constructor(app, onSelect) {
+        super(app);
+        this.app = app;
+        this.onSelect = onSelect;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper');
+        this.modalEl.style.width = '540px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.addClass('kt-card-edit-modal', 'kt-file-picker-modal');
+
+        contentEl.createEl('h2', { text: '📁 Selecionar Arquivo do Vault' });
+        contentEl.createEl('p', {
+            cls: 'kt-proj-subtitle',
+            text: 'Escolha um arquivo Markdown (GDD, notas) ou PDF para vincular ao projeto.'
+        });
+
+        const searchBox = contentEl.createDiv('kt-file-search-box');
+        const searchInput = searchBox.createEl('input', {
+            type: 'text',
+            cls: 'kt-file-search-input',
+            attr: { placeholder: '🔍 Digite o nome do arquivo...' }
+        });
+        searchInput.focus();
+
+        const fileListContainer = contentEl.createDiv('kt-file-picker-list');
+
+        let allFiles = [];
+        try {
+            if (this.app && this.app.vault) {
+                allFiles = this.app.vault.getFiles() || [];
+            }
+        } catch (e) {}
+
+        const allowedExts = ['md', 'pdf', 'canvas', 'png', 'jpg', 'jpeg'];
+        const relevantFiles = allFiles.filter(f => allowedExts.includes((f.extension || '').toLowerCase()));
+
+        const renderList = (query) => {
+            fileListContainer.empty();
+            const q = (query || '').toLowerCase().trim();
+            const matched = q
+                ? relevantFiles.filter(f => f.path.toLowerCase().includes(q) || f.basename.toLowerCase().includes(q))
+                : relevantFiles.slice(0, 50);
+
+            if (matched.length === 0) {
+                fileListContainer.createDiv('kt-file-empty').setText('Nenhum arquivo encontrado.');
+                return;
+            }
+
+            matched.slice(0, 60).forEach(file => {
+                const item = fileListContainer.createDiv('kt-file-picker-item');
+                const ext = (file.extension || '').toLowerCase();
+                const icon = ext === 'pdf' ? '📄' : (ext === 'canvas' ? '🎨' : '📝');
+
+                const left = item.createDiv('kt-file-item-left');
+                left.createSpan({ cls: 'kt-file-item-icon', text: icon });
+
+                const textWrap = left.createDiv('kt-file-item-text');
+                textWrap.createSpan({ cls: 'kt-file-item-name', text: file.name });
+                if (file.parent && file.parent.path && file.parent.path !== '/') {
+                    textWrap.createSpan({ cls: 'kt-file-item-path', text: file.parent.path });
+                }
+
+                const right = item.createDiv('kt-file-item-right');
+                right.createSpan({ cls: `kt-file-ext-badge ext-${ext}`, text: ext.toUpperCase() });
+
+                item.onclick = () => {
+                    this.close();
+                    if (this.onSelect) this.onSelect(file);
+                };
+            });
+        };
+
+        renderList('');
+        searchInput.addEventListener('input', () => {
+            renderList(searchInput.value);
+        });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
+// PROJECT RESOURCE MODAL (Adicionar / Editar Link, Miro, GDD, PDF)
+// ================================================================
+
+class ProjectResourceModal extends obsidian.Modal {
+    constructor(app, plugin, project, resourceToEdit, onSave) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.project = project;
+        this.resource = resourceToEdit || null;
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl, project, resource } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const titleText = resource
+            ? `Editar Recurso: ${resource.title}`
+            : `Adicionar Recurso • ${project ? project.name : 'Projeto'}`;
+        contentEl.createEl('h2', { text: titleText });
+
+        let title = resource ? resource.title : '';
+        let type = resource ? resource.type : 'auto';
+        let url = resource ? resource.url : '';
+        let note = resource ? (resource.note || '') : '';
+
+        // Title field
+        new obsidian.Setting(contentEl)
+            .setName('Nome do Recurso / Título')
+            .setDesc('Como este documento ou link será exibido (ex: GDD Principal, Miro Board, Tarefas)')
+            .addText(t => {
+                t.setPlaceholder('ex: GDD do Jogo, Miro Sprint...').setValue(title).onChange(v => title = v.trim());
+            });
+
+        // Type dropdown
+        new obsidian.Setting(contentEl)
+            .setName('Tipo de Recurso')
+            .setDesc('Plataforma ou formato para ícone e agrupamento')
+            .addDropdown(d => {
+                d.addOption('auto', 'Auto-detectar pelo link');
+                d.addOption('miro', '🎨 Miro');
+                d.addOption('clickup', '📋 ClickUp');
+                d.addOption('notion', '📑 Notion');
+                d.addOption('figma', '🎯 Figma');
+                d.addOption('github', '🐙 GitHub');
+                d.addOption('gdrive', '📁 Google Drive / Docs');
+                d.addOption('pdf', '📄 PDF (Vault ou Link)');
+                d.addOption('gdd', '📝 Documento do Vault (GDD / Markdown)');
+                d.addOption('url', '🌐 Link Web Geral');
+                d.setValue(type);
+                d.onChange(v => type = v);
+            });
+
+        // URL or Vault File Path
+        let urlInputComp = null;
+        new obsidian.Setting(contentEl)
+            .setName('Link (URL) ou Arquivo do Vault')
+            .setDesc('Cole a URL (https://...) ou selecione um arquivo do Obsidian (GDD, PDF)')
+            .addText(t => {
+                urlInputComp = t;
+                t.setPlaceholder('https://... ou caminho/do/arquivo.pdf')
+                 .setValue(url)
+                 .onChange(v => {
+                     url = v.trim();
+                     if (!title && url) {
+                         const autoMeta = getResourceMeta(url);
+                         if (autoMeta.label && autoMeta.label !== 'Link') {
+                             title = autoMeta.label;
+                         }
+                     }
+                 });
+            })
+            .addButton(b => {
+                b.setButtonText('📁 Procurar no Vault')
+                 .setTooltip('Escolher um arquivo PDF, GDD ou Markdown do vault')
+                 .onClick(() => {
+                     new VaultFilePickerModal(this.app, (file) => {
+                         url = file.path;
+                         if (urlInputComp) urlInputComp.setValue(url);
+                         if (!title) {
+                             title = file.basename;
+                             const titleInput = contentEl.querySelector('input[placeholder*="GDD do Jogo"]');
+                             if (titleInput) titleInput.value = title;
+                         }
+                         if (type === 'auto') {
+                             type = file.extension === 'pdf' ? 'pdf' : 'gdd';
+                             const sel = contentEl.querySelector('select');
+                             if (sel) sel.value = type;
+                         }
+                     }).open();
+                 });
+            });
+
+        // Note / Observation
+        new obsidian.Setting(contentEl)
+            .setName('Observação (Opcional)')
+            .setDesc('Anotação curta ou versão (ex: Versão 2.4 aprovada, Sprint atual)')
+            .addText(t => {
+                t.setPlaceholder('ex: Versão revisada com cliente...').setValue(note).onChange(v => note = v.trim());
+            });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        const leftGroup = footer.createDiv('kt-modal-footer-left');
+        if (resource) {
+            const delBtn = leftGroup.createEl('button', { cls: 'mod-warning', text: 'Excluir Recurso' });
+            delBtn.onclick = async () => {
+                this.close();
+                if (project.resources) {
+                    project.resources = project.resources.filter(r => r.id !== resource.id);
+                    await this.plugin.saveSettings();
+                    if (this.onSave) await this.onSave();
+                    new obsidian.Notice(`Recurso "${resource.title}" excluído.`);
+                }
+            };
+        }
+
+        const rightGroup = footer.createDiv('kt-modal-footer-right');
+        const cancelBtn = rightGroup.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: 'Salvar Recurso' });
+        saveBtn.onclick = async () => {
+            if (!url) {
+                new obsidian.Notice('Por favor, informe a URL ou selecione um arquivo do Vault.');
+                return;
+            }
+            if (!title) {
+                try {
+                    if (/^https?:\/\//i.test(url)) {
+                        title = new URL(url).hostname.replace(/^www\./, '');
+                    } else {
+                        title = url.split('/').pop() || 'Recurso';
+                    }
+                } catch (e) {
+                    title = 'Recurso';
+                }
+            }
+
+            this.close();
+            if (!project.resources) project.resources = [];
+
+            if (resource) {
+                resource.title = title;
+                resource.type = type;
+                resource.url = url;
+                resource.note = note;
+            } else {
+                project.resources.push({
+                    id: 'res-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+                    title,
+                    type,
+                    url,
+                    note,
+                    createdAt: new Date().toISOString().slice(0, 10)
+                });
+            }
+
+            await this.plugin.saveSettings();
+            if (this.onSave) await this.onSave();
+            new obsidian.Notice(`Recurso "${title}" salvo com sucesso!`);
         };
     }
 
@@ -2895,6 +3334,29 @@ class ProjectReportModal extends obsidian.Modal {
         const pctDone = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0;
         kpi3.createDiv('kt-report-kpi-val').setText(`${doneCount} / ${totalTasks} (${pctDone}%)`);
         kpi3.createDiv('kt-report-kpi-lbl').setText('Tarefas Concluídas');
+
+        // Resources & Documents Row in Report
+        if (project.resources && project.resources.length > 0) {
+            const resRow = contentEl.createDiv('kt-report-resources-row');
+            resRow.createSpan({ cls: 'kt-report-res-label', text: '📎 Documentos & Links:' });
+            project.resources.forEach(r => {
+                const meta = getResourceMeta(r.url);
+                const icon = r.type && r.type !== 'auto' ? getTypeIcon(r.type) : meta.icon;
+                const chip = resRow.createEl('a', {
+                    cls: 'kt-report-res-chip',
+                    text: `${icon} ${r.title} ↗`,
+                    attr: { href: r.url, title: r.note ? `${r.title} (${r.note})\n${r.url}` : `${r.title}\n${r.url}` }
+                });
+                chip.onclick = (e) => {
+                    e.preventDefault();
+                    if (/^https?:\/\//i.test(r.url)) {
+                        window.open(r.url, '_blank');
+                    } else if (this.app && this.app.workspace) {
+                        this.app.workspace.openLinkText(r.url, '', false);
+                    }
+                };
+            });
+        }
 
         // 4. Action Export Buttons (Pronto para enviar ao chefe)
         const actionsBar = contentEl.createDiv('kt-report-actions-bar');
@@ -10013,8 +10475,18 @@ class HealthMedicationModal extends obsidian.Modal {
             stockAlertThreshold: 5,
             unit: 'comprimidos',
             notes: '',
-            active: true
+            active: true,
+            reminderEnabled: false,
+            reminderTime: '',
+            snoozeMinutes: 15
         };
+        if (medication) {
+            this.medication.reminderEnabled = !!medication.reminderEnabled;
+            this.medication.reminderTime = medication.reminderTime || '';
+            this.medication.snoozeMinutes = medication.snoozeMinutes || 15;
+            this.medication.lastAlertDate = medication.lastAlertDate || null;
+            this.medication.snoozedUntil = medication.snoozedUntil || null;
+        }
         this.isNew = !medication;
         this.onSave = onSave;
         this.onDelete = onDelete;
@@ -10091,6 +10563,23 @@ class HealthMedicationModal extends obsidian.Modal {
             if (String(this.medication.active !== false) === opt.v) el.selected = true;
         });
 
+        // Row 5: Reminder & Alarm
+        const row5 = contentEl.createDiv('kt-form-row');
+        const remField = row5.createDiv('kt-form-field');
+        remField.createEl('label', { text: '⏰ Lembrete com Alarme Diário:' });
+        const remSelect = remField.createEl('select');
+        [
+            { v: 'false', l: '🔕 Desativado' },
+            { v: 'true', l: '🔔 Ativo (Alarme & Popup)' }
+        ].forEach(opt => {
+            const el = remSelect.createEl('option', { value: opt.v, text: opt.l });
+            if (String(!!this.medication.reminderEnabled) === opt.v) el.selected = true;
+        });
+
+        const remTimeField = row5.createDiv('kt-form-field');
+        remTimeField.createEl('label', { text: 'Horário Exato do Lembrete:' });
+        const remTimeInput = remTimeField.createEl('input', { type: 'time', value: this.medication.reminderTime || '08:00' });
+
         // Instructions & Notes
         const notesField = contentEl.createDiv('kt-form-field');
         notesField.createEl('label', { text: 'Instruções Médicas / Observações:' });
@@ -10137,6 +10626,8 @@ class HealthMedicationModal extends obsidian.Modal {
             this.medication.stockAlertThreshold = Math.max(0, parseInt(threshInput.value, 10) || 5);
             this.medication.unit = unitSelect.value;
             this.medication.active = activeSelect.value === 'true';
+            this.medication.reminderEnabled = remSelect.value === 'true';
+            this.medication.reminderTime = remTimeInput.value || '';
             this.medication.notes = notesInput.value.trim();
 
             this.close();
@@ -10201,6 +10692,454 @@ class HealthMedicationRefillModal extends obsidian.Modal {
             }
             this.close();
             this.onRefill(qty);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthMedicationReminderModal extends obsidian.Modal {
+    constructor(app, plugin, profile, medication, onSave) {
+        super(app);
+        this.plugin = plugin;
+        this.profile = profile;
+        this.medication = medication;
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper', 'kt-med-reminder-modal-wrap');
+        this.modalEl.style.width = '460px';
+        contentEl.addClass('kt-card-edit-modal', 'kt-med-reminder-modal');
+
+        // Header
+        const hdr = contentEl.createDiv('kt-med-modal-hdr');
+        hdr.createEl('h2', { text: '⏰ Configurar Lembrete de Medicamento' });
+        hdr.createDiv({ cls: 'kt-med-modal-sub', text: `${this.medication.name} ${this.medication.dosage ? `(${this.medication.dosage})` : ''}` });
+        if (this.medication.notes) {
+            hdr.createDiv({ cls: 'kt-med-modal-notes', text: `📝 ${this.medication.notes}` });
+        }
+
+        // Status Toggle
+        const toggleRow = contentEl.createDiv('kt-form-row');
+        const toggleField = toggleRow.createDiv('kt-form-field');
+        toggleField.createEl('label', { text: 'Status do Lembrete:' });
+        const toggleSelect = toggleField.createEl('select');
+        const optActive = toggleSelect.createEl('option', { value: 'true', text: '🔔 Ativo (Alarme & Popup)' });
+        const optInactive = toggleSelect.createEl('option', { value: 'false', text: '🔕 Desativado' });
+        if (this.medication.reminderEnabled !== false) {
+            optActive.selected = true;
+        } else {
+            optInactive.selected = true;
+        }
+
+        // Time Picker
+        const timeRow = contentEl.createDiv('kt-form-row');
+        const timeField = timeRow.createDiv('kt-form-field');
+        timeField.createEl('label', { text: 'Horário do Alarme Diário:' });
+        const timeInput = timeField.createEl('input', { type: 'time', value: this.medication.reminderTime || '08:00' });
+        timeInput.style.fontSize = '15px';
+        timeInput.style.fontWeight = '600';
+        timeInput.style.padding = '6px 10px';
+
+        // Snooze Options
+        const snoozeField = timeRow.createDiv('kt-form-field');
+        snoozeField.createEl('label', { text: 'Tempo do botão "Mais tarde":' });
+        const snoozeSelect = snoozeField.createEl('select');
+        [
+            { v: 10, l: '10 minutos' },
+            { v: 15, l: '15 minutos (Padrão)' },
+            { v: 30, l: '30 minutos' },
+            { v: 60, l: '1 hora' }
+        ].forEach(s => {
+            const opt = snoozeSelect.createEl('option', { value: String(s.v), text: s.l });
+            if ((this.medication.snoozeMinutes || 15) === s.v) opt.selected = true;
+        });
+
+        // Test Reminder button box
+        const testBox = contentEl.createDiv('kt-med-reminder-test-box');
+        testBox.createDiv({ text: 'Quer ver como o alarme funciona na prática?', style: 'font-size:12px; color:var(--text-muted);' });
+        const testBtn = testBox.createEl('button', { cls: 'kt-fin-smart-btn', text: '🔔 Testar Popup de Alerta Agora' });
+        testBtn.onclick = () => {
+            new HealthMedicationAlertModal(this.app, this.plugin, this.profile, this.medication, new Date().toISOString().split('T')[0], () => {
+                if (this.onSave) this.onSave();
+            }).open();
+        };
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '20px';
+
+        if (this.medication.reminderEnabled) {
+            const disableBtn = footer.createEl('button', { cls: 'mod-warning', text: 'Desativar Lembrete' });
+            disableBtn.onclick = async () => {
+                this.medication.reminderEnabled = false;
+                await this.plugin.saveSettings();
+                this.close();
+                if (this.onSave) this.onSave();
+                new obsidian.Notice(`🔕 Lembrete de ${this.medication.name} desativado.`);
+            };
+        } else {
+            footer.createDiv();
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '8px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: 'Salvar Lembrete' });
+        saveBtn.onclick = async () => {
+            const isEnabled = toggleSelect.value === 'true';
+            const timeVal = timeInput.value || '08:00';
+            const snoozeVal = parseInt(snoozeSelect.value, 10) || 15;
+
+            this.medication.reminderEnabled = isEnabled;
+            this.medication.reminderTime = timeVal;
+            this.medication.snoozeMinutes = snoozeVal;
+            this.medication.snoozedUntil = null; // reset any previous snooze
+
+            await this.plugin.saveSettings();
+            this.close();
+            if (this.onSave) this.onSave();
+            new obsidian.Notice(`✓ Lembrete de ${this.medication.name} configurado para ${timeVal}!`);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class HealthMedicationAlertModal extends obsidian.Modal {
+    constructor(app, plugin, profile, medication, dateStr, onActionDone) {
+        super(app);
+        this.plugin = plugin;
+        this.profile = profile;
+        this.medication = medication;
+        this.dateStr = dateStr || new Date().toISOString().split('T')[0];
+        this.onActionDone = onActionDone;
+    }
+
+    onOpen() {
+        if (this.plugin) this.plugin.activeMedicationAlertModal = this;
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-med-alert-modal-wrap');
+        this.modalEl.style.width = '480px';
+        contentEl.addClass('kt-card-edit-modal', 'kt-med-alert-modal');
+
+        // Header with pulsing icon & title
+        const topRow = contentEl.createDiv('kt-med-alert-top-row');
+        const iconDiv = topRow.createDiv('kt-med-alert-icon');
+        iconDiv.createSpan({ text: '⏰' });
+
+        const titleDiv = topRow.createDiv('kt-med-alert-title-box');
+        titleDiv.createEl('h2', { text: 'Hora do seu Medicamento!' });
+        titleDiv.createDiv({ cls: 'kt-med-alert-subtitle', text: 'Lembrete de saúde diário programado' });
+
+        // Medication Details Card
+        const medBox = contentEl.createDiv('kt-med-alert-card');
+        const medNameRow = medBox.createDiv('kt-med-alert-name-row');
+        medNameRow.createSpan({ cls: 'kt-med-alert-name', text: this.medication.name });
+        if (this.medication.dosage) {
+            medNameRow.createSpan({ cls: 'kt-med-alert-dosage', text: this.medication.dosage });
+        }
+
+        const medMetaRow = medBox.createDiv('kt-med-alert-meta-row');
+        if (this.medication.reminderTime) {
+            medMetaRow.createSpan({ cls: 'kt-med-alert-pill', text: `⏰ Programado: ${this.medication.reminderTime}` });
+        }
+        medMetaRow.createSpan({ cls: 'kt-med-alert-pill is-stock', text: `📦 Estoque: ${this.medication.stock || 0} ${this.medication.unit || 'comprimidos'}` });
+
+        if (this.medication.notes) {
+            const instrBox = medBox.createDiv('kt-med-alert-instructions');
+            instrBox.createSpan({ text: `📝 Instrução: ${this.medication.notes}` });
+        }
+
+        // Question prompt
+        const promptText = contentEl.createDiv('kt-med-alert-question');
+        promptText.createEl('p', { text: `Você já tomou ${this.medication.name} hoje (${this.dateStr})?` });
+
+        // Action Buttons Row
+        const actionsRow = contentEl.createDiv('kt-med-alert-actions');
+
+        // 1. "✓ Sim, já tomei" (Primary CTA)
+        const yesBtn = actionsRow.createEl('button', { cls: 'mod-cta kt-med-alert-yes-btn', text: '✓ Sim, já tomei' });
+        yesBtn.onclick = async () => {
+            await this.markAsTaken();
+        };
+
+        // 2. "⏰ Mais tarde (15 min)"
+        const snoozeMin = this.medication.snoozeMinutes || 15;
+        const snoozeBtn = actionsRow.createEl('button', { cls: 'kt-med-alert-snooze-btn', text: `⏰ Mais tarde (${snoozeMin} min)` });
+        snoozeBtn.onclick = async () => {
+            await this.snoozeReminder(snoozeMin);
+        };
+
+        // 3. "✕ Dispensar hoje"
+        const dismissBtn = actionsRow.createEl('button', { cls: 'kt-med-alert-dismiss-btn', text: 'Dispensar por hoje' });
+        dismissBtn.onclick = async () => {
+            await this.dismissToday();
+        };
+    }
+
+    async markAsTaken() {
+        const activeProfileId = (this.profile && this.profile.id) || (this.plugin && this.plugin.settings.health?.activeProfile) || 'profile-me';
+        const profileData = this.plugin && this.plugin.settings.health?.data?.[activeProfileId];
+        if (profileData) {
+            if (!profileData.dailyLogs) profileData.dailyLogs = {};
+            if (!profileData.dailyLogs[this.dateStr]) {
+                profileData.dailyLogs[this.dateStr] = {
+                    mood: 3,
+                    stress: 2,
+                    energy: 3,
+                    notes: '',
+                    journal: '',
+                    emotions: [],
+                    medicationsTaken: []
+                };
+            }
+
+            const log = profileData.dailyLogs[this.dateStr];
+            if (!Array.isArray(log.medicationsTaken)) log.medicationsTaken = [];
+
+            if (!log.medicationsTaken.includes(this.medication.id)) {
+                log.medicationsTaken.push(this.medication.id);
+                if (this.medication.stock > 0) {
+                    this.medication.stock = this.medication.stock - 1;
+                }
+            }
+        }
+
+        this.medication.snoozedUntil = null;
+        this.medication.lastAlertDate = this.dateStr;
+
+        if (this.plugin) {
+            await this.plugin.saveSettings();
+
+            // Refresh all active views so the user sees the checkmark immediately ("já coloca lá")
+            const leaves = this.app.workspace.getLeavesOfType('kanban-timeline-view');
+            leaves.forEach(l => {
+                if (l.view && l.view.render) l.view.render();
+            });
+        }
+
+        if (this.onActionDone) this.onActionDone();
+        this.close();
+
+        new obsidian.Notice(`✓ ${this.medication.name} marcado como tomado hoje! (${this.medication.stock || 0} restantes)`);
+    }
+
+    async snoozeReminder(minutes) {
+        this.medication.snoozedUntil = Date.now() + minutes * 60 * 1000;
+        if (this.plugin) await this.plugin.saveSettings();
+        if (this.onActionDone) this.onActionDone();
+        this.close();
+        new obsidian.Notice(`⏰ Lembrete de ${this.medication.name} adiado por ${minutes} minutos.`);
+    }
+
+    async dismissToday() {
+        this.medication.lastAlertDate = this.dateStr;
+        this.medication.snoozedUntil = null;
+        if (this.plugin) await this.plugin.saveSettings();
+        if (this.onActionDone) this.onActionDone();
+        this.close();
+        new obsidian.Notice(`Lembrete de ${this.medication.name} dispensado para hoje.`);
+    }
+
+    onClose() {
+        if (this.plugin && this.plugin.activeMedicationAlertModal === this) {
+            this.plugin.activeMedicationAlertModal = null;
+        }
+        this.contentEl.empty();
+    }
+}
+
+class HealthCustomMedicationModal extends obsidian.Modal {
+    constructor(app, plugin, profile, profileData, targetDate, initialData, onSave) {
+        super(app);
+        this.plugin = plugin;
+        this.profile = profile;
+        this.profileData = profileData;
+        this.targetDate = targetDate || new Date().toISOString().split('T')[0];
+        this.initialData = initialData || null;
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        contentEl.addClass('kt-card-edit-modal');
+
+        const titleText = this.initialData ? 'Editar Medicamento Não Periódico / SOS' : 'Registrar Medicamento Pontual / SOS';
+        contentEl.createEl('h2', { text: `💊 ${titleText}` });
+        contentEl.createDiv({ 
+            cls: 'kt-health-section-desc', 
+            text: `Adicione medicamentos tomados de forma esporádica ou sob demanda para o histórico de ${this.profile.name}:`,
+            style: 'margin-bottom:12px;'
+        });
+
+        // Gather historical custom medications & registered SOS meds for 1-click suggestions
+        const historyMap = new Map();
+        (this.profileData.medications || []).forEach(m => {
+            if (m.name) {
+                const key = m.name.trim().toLowerCase();
+                if (!historyMap.has(key)) {
+                    historyMap.set(key, { name: m.name, dosage: m.dosage || '', reason: m.notes || '' });
+                }
+            }
+        });
+        Object.values(this.profileData.dailyLogs || {}).forEach(log => {
+            if (Array.isArray(log.customMedications)) {
+                log.customMedications.forEach(cm => {
+                    const key = (cm.name || '').trim().toLowerCase();
+                    if (key && !historyMap.has(key)) {
+                        historyMap.set(key, { name: cm.name, dosage: cm.dosage || '', reason: cm.reason || '' });
+                    }
+                });
+            }
+        });
+
+        // Date & Time Row
+        const dtRow = contentEl.createDiv('kt-form-row');
+        const dateField = dtRow.createDiv('kt-form-field');
+        dateField.createEl('label', { text: 'Data da Tomada:' });
+        const dateInput = dateField.createEl('input', { type: 'date', value: this.targetDate });
+
+        const now = new Date();
+        const curTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const timeField = dtRow.createDiv('kt-form-field');
+        timeField.createEl('label', { text: 'Horário aproximado:' });
+        const timeInput = timeField.createEl('input', { type: 'time', value: (this.initialData && this.initialData.time) || curTimeStr });
+
+        // Name & Dosage Row
+        const nameDoseRow = contentEl.createDiv('kt-form-row');
+        const nameField = nameDoseRow.createDiv('kt-form-field');
+        nameField.createEl('label', { text: 'Nome do Medicamento:' });
+        const nameInput = nameField.createEl('input', { type: 'text', value: (this.initialData && this.initialData.name) || '' });
+        nameInput.placeholder = 'Ex: Dipirona, Dorflex, Ibuprofeno, Allegra';
+
+        const doseField = nameDoseRow.createDiv('kt-form-field');
+        doseField.createEl('label', { text: 'Dosagem / Quantidade:' });
+        const doseInput = doseField.createEl('input', { type: 'text', value: (this.initialData && this.initialData.dosage) || '' });
+        doseInput.placeholder = 'Ex: 1g, 500mg, 1 cp, 30 gotas';
+
+        // Reason / Symptom Row
+        const reasonField = contentEl.createDiv('kt-form-field');
+        reasonField.createEl('label', { text: 'Motivo / Sintoma que motivou o uso:' });
+        const reasonInput = reasonField.createEl('input', { type: 'text', value: (this.initialData && this.initialData.reason) || '' });
+        reasonInput.placeholder = 'Ex: Dor de cabeça, Dor muscular nas costas, Alergia, Crise de ansiedade, Cólica';
+
+        // Suggestion chips if history exists
+        if (historyMap.size > 0 && !this.initialData) {
+            const suggRow = contentEl.createDiv({ style: 'margin-top:-6px; margin-bottom:8px;' });
+            suggRow.createSpan({ text: 'Remédios do histórico: ', style: 'font-size:11px; color:var(--text-muted); font-weight:600;' });
+            const chipsWrap = suggRow.createDiv({ style: 'display:inline-flex; flex-wrap:wrap; gap:5px; margin-top:3px;' });
+            Array.from(historyMap.values()).slice(0, 6).forEach(sugg => {
+                const chip = chipsWrap.createEl('button', {
+                    cls: 'kt-health-symptom-chip',
+                    text: sugg.dosage ? `${sugg.name} (${sugg.dosage})` : sugg.name
+                });
+                chip.onclick = (e) => {
+                    e.preventDefault();
+                    nameInput.value = sugg.name;
+                    if (sugg.dosage) doseInput.value = sugg.dosage;
+                    if (sugg.reason && !reasonInput.value) reasonInput.value = sugg.reason;
+                };
+            });
+        }
+
+        // Common Symptoms Quick Pills
+        const sympRow = contentEl.createDiv({ style: 'display:flex; flex-wrap:wrap; gap:5px; margin-top:4px; margin-bottom:12px;' });
+        sympRow.createSpan({ text: 'Sintomas comuns: ', style: 'font-size:11px; color:var(--text-muted); font-weight:600; line-height:22px;' });
+        ['Dor de cabeça', 'Dor muscular', 'Ansiedade', 'Alergia', 'Cólica', 'Insônia', 'Febre', 'Estômago / Azia'].forEach(symp => {
+            const sBtn = sympRow.createEl('button', { cls: 'kt-health-symptom-chip', text: symp });
+            sBtn.onclick = (e) => {
+                e.preventDefault();
+                reasonInput.value = symp;
+            };
+        });
+
+        // Notes Row
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.createEl('label', { text: 'Observações Adicionais (opcional):' });
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = (this.initialData && this.initialData.notes) || '';
+        notesInput.rows = 2;
+        notesInput.placeholder = 'Ex: Tomado após o almoço, alívio após 40 minutos...';
+
+        // Footer
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.marginTop = '18px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Salvar no Histórico' });
+        saveBtn.onclick = async () => {
+            const name = nameInput.value.trim();
+            if (!name) {
+                new obsidian.Notice('Por favor, informe o nome do medicamento.');
+                return;
+            }
+            const targetDate = dateInput.value || this.targetDate;
+            if (!this.profileData.dailyLogs[targetDate]) {
+                this.profileData.dailyLogs[targetDate] = {
+                    mood: 3,
+                    stress: 2,
+                    journal: '',
+                    emotions: [],
+                    medicationsTaken: [],
+                    customMedications: []
+                };
+            }
+            const log = this.profileData.dailyLogs[targetDate];
+            if (!Array.isArray(log.customMedications)) log.customMedications = [];
+
+            if (this.initialData) {
+                const idx = log.customMedications.findIndex(it => it.id === this.initialData.id);
+                if (idx !== -1) {
+                    log.customMedications[idx] = Object.assign(log.customMedications[idx], {
+                        name: name,
+                        dosage: doseInput.value.trim(),
+                        reason: reasonInput.value.trim(),
+                        time: timeInput.value || '',
+                        notes: notesInput.value.trim()
+                    });
+                }
+            } else {
+                const newRecord = {
+                    id: `custom-med-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                    name: name,
+                    dosage: doseInput.value.trim(),
+                    reason: reasonInput.value.trim(),
+                    time: timeInput.value || curTimeStr,
+                    notes: notesInput.value.trim(),
+                    timestamp: Date.now()
+                };
+                log.customMedications.push(newRecord);
+
+                // If this matches an SOS med in cabinet with stock > 0, decrement 1 stock
+                const cabinetMed = (this.profileData.medications || []).find(m => m.name && m.name.trim().toLowerCase() === name.toLowerCase());
+                if (cabinetMed && typeof cabinetMed.stock === 'number' && cabinetMed.stock > 0) {
+                    cabinetMed.stock -= 1;
+                }
+            }
+
+            if (this.plugin) await this.plugin.saveSettings();
+            this.close();
+            if (this.onSave) this.onSave();
+            new obsidian.Notice(`✓ Remédio pontual "${name}" registrado em ${targetDate}!`);
         };
     }
 
@@ -12828,6 +13767,10 @@ kanban-plugin: basic
         if (prevFinRightScroll) {
             this.savedFinancesRightColScrollTop = prevFinRightScroll.scrollTop;
         }
+        const prevHealthScroll = wrap.querySelector('.kt-health-view');
+        if (prevHealthScroll) {
+            this.savedHealthScrollTop = prevHealthScroll.scrollTop;
+        }
 
         wrap.empty();
         wrap.addClass('kt-wrap');
@@ -15025,6 +15968,15 @@ kanban-plugin: basic
 
         const actions = hdr.createDiv('kt-proj-card-actions');
 
+        const resBtn = actions.createEl('button', { cls: 'kt-proj-action-btn kt-proj-res-btn', text: '📎' });
+        resBtn.title = 'Adicionar Miro, ClickUp, GDD, PDF ou link a este projeto';
+        resBtn.onclick = (e) => {
+            e.stopPropagation();
+            new ProjectResourceModal(this.app, this.plugin, project, null, async () => {
+                this.render();
+            }).open();
+        };
+
         const reportBtn = actions.createEl('button', { cls: 'kt-proj-action-btn kt-proj-report-btn', text: '📋' });
         reportBtn.title = 'Gerar discriminado de tarefas, horas e datas para enviar ao chefe';
         reportBtn.onclick = (e) => {
@@ -15129,7 +16081,10 @@ kanban-plugin: basic
         stat3.createSpan({ cls: 'kt-stat-n', text: `${stats.backlogTasks}` });
         stat3.createSpan({ cls: 'kt-stat-l', text: 'No Backlog' });
 
-        // 6. Tasks Section (Always Visible & Scrollable)
+        // 6. Project Resources & Documents Hub (Miro, ClickUp, GDD, PDF, Web)
+        this.renderProjectResourcesSection(card, project);
+
+        // 7. Tasks Section (Always Visible & Scrollable)
         const tasksSection = card.createDiv('kt-proj-tasks-section');
         const tasksHeader = tasksSection.createDiv('kt-proj-tasks-header');
         tasksHeader.createSpan({ cls: 'kt-proj-th-title', text: `Tarefas (${stats.totalTasks})` });
@@ -15222,6 +16177,116 @@ kanban-plugin: basic
                     this.render();
                 };
             });
+        }
+    }
+
+    renderProjectResourcesSection(parentEl, project) {
+        const resSection = parentEl.createDiv('kt-proj-res-section');
+        const resHeader = resSection.createDiv('kt-proj-res-header');
+
+        const resHeaderLeft = resHeader.createDiv('kt-proj-res-header-left');
+        resHeaderLeft.createSpan({ cls: 'kt-proj-res-icon', text: '📎' });
+        const resCount = (project.resources || []).length;
+        resHeaderLeft.createSpan({ cls: 'kt-proj-res-title', text: `Documentos & Links (${resCount})` });
+
+        const addResBtn = resHeader.createEl('button', {
+            cls: 'kt-proj-add-res-btn',
+            text: '＋ Adicionar'
+        });
+        addResBtn.title = 'Adicionar Miro, ClickUp, GDD, PDF ou link a este projeto';
+        addResBtn.onclick = (e) => {
+            e.stopPropagation();
+            new ProjectResourceModal(this.app, this.plugin, project, null, async () => {
+                this.render();
+            }).open();
+        };
+
+        const resList = resSection.createDiv('kt-proj-res-list');
+        if (!project.resources || project.resources.length === 0) {
+            const emptyRes = resList.createDiv('kt-proj-res-empty');
+            emptyRes.setText('Nenhum documento ou link adicionado. ');
+            const emptyAddLink = emptyRes.createEl('span', {
+                cls: 'kt-proj-empty-add-link',
+                text: '＋ Adicionar'
+            });
+            emptyAddLink.onclick = (e) => {
+                e.stopPropagation();
+                new ProjectResourceModal(this.app, this.plugin, project, null, async () => {
+                    this.render();
+                }).open();
+            };
+        } else {
+            project.resources.forEach(res => {
+                const item = resList.createDiv('kt-proj-res-item');
+                const meta = getResourceMeta(res.url);
+                const icon = res.type && res.type !== 'auto' ? getTypeIcon(res.type) : meta.icon;
+                item.title = res.note ? `${res.title} — ${res.note}\n(${res.url})` : `${res.title}\n(${res.url})`;
+
+                const left = item.createDiv('kt-proj-res-item-left');
+                left.createSpan({ cls: 'kt-proj-res-item-icon', text: icon });
+
+                const textGroup = left.createDiv('kt-proj-res-item-text');
+                textGroup.createSpan({ cls: 'kt-proj-res-item-title', text: res.title });
+
+                let subtitleText = '';
+                if (res.note) {
+                    subtitleText = res.note;
+                } else {
+                    try {
+                        if (/^https?:\/\//i.test(res.url)) {
+                            subtitleText = new URL(res.url).hostname.replace(/^www\./, '');
+                        } else {
+                            subtitleText = res.url.split('/').pop() || res.url;
+                        }
+                    } catch (e) {
+                        subtitleText = res.url;
+                    }
+                }
+                textGroup.createSpan({ cls: 'kt-proj-res-item-sub', text: subtitleText });
+
+                const actions = item.createDiv('kt-proj-res-item-actions');
+
+                const openBtn = actions.createEl('button', { cls: 'kt-res-btn kt-res-open-btn', text: 'Abrir ↗' });
+                openBtn.title = 'Abrir documento ou link';
+                openBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.openProjectResource(res.url);
+                };
+
+                const editBtn = actions.createEl('button', { cls: 'kt-res-btn kt-res-edit-btn', text: '✎' });
+                editBtn.title = 'Editar recurso';
+                editBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    new ProjectResourceModal(this.app, this.plugin, project, res, async () => {
+                        this.render();
+                    }).open();
+                };
+
+                const delBtn = actions.createEl('button', { cls: 'kt-res-btn kt-res-del-btn', text: '×' });
+                delBtn.title = 'Remover recurso';
+                delBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    project.resources = (project.resources || []).filter(r => r.id !== res.id);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`Recurso "${res.title}" removido.`);
+                };
+
+                item.onclick = (e) => {
+                    if (e.target.closest('button')) return;
+                    this.openProjectResource(res.url);
+                };
+            });
+        }
+    }
+
+    openProjectResource(urlOrPath) {
+        if (!urlOrPath) return;
+        const clean = urlOrPath.trim();
+        if (/^https?:\/\//i.test(clean)) {
+            window.open(clean, '_blank');
+        } else if (this.app && this.app.workspace) {
+            this.app.workspace.openLinkText(clean, '', false);
         }
     }
 
@@ -20726,6 +21791,7 @@ kanban-plugin: basic
 
             pill.onclick = () => {
                 if (health.selectedProfileId !== p.id) {
+                    this.savedHealthScrollTop = 0;
                     health.selectedProfileId = p.id;
                     this.plugin.saveSettings();
                     this.render();
@@ -20836,6 +21902,7 @@ kanban-plugin: basic
                 text: t.label
             });
             tabBtn.onclick = () => {
+                this.savedHealthScrollTop = 0;
                 health.activeSubTab = t.id;
                 this.plugin.saveSettings();
                 this.render();
@@ -20854,6 +21921,13 @@ kanban-plugin: basic
         } else {
             this.renderHealthOverviewTab(viewWrap, profile, profileData);
         }
+
+        if (this.savedHealthScrollTop != null && this.savedHealthScrollTop > 0) {
+            viewWrap.scrollTop = this.savedHealthScrollTop;
+            requestAnimationFrame(() => {
+                if (viewWrap) viewWrap.scrollTop = this.savedHealthScrollTop;
+            });
+        }
     }
 
     // ----------------------------------------------------------
@@ -20862,8 +21936,13 @@ kanban-plugin: basic
 
     renderHealthOverviewTab(container, profile, profileData) {
         const todayStr = new Date().toISOString().split('T')[0];
-        if (!profileData.dailyLogs[todayStr]) {
-            profileData.dailyLogs[todayStr] = {
+        if (!this.healthOverviewActiveDate) {
+            this.healthOverviewActiveDate = todayStr;
+        }
+        const activeDateStr = this.healthOverviewActiveDate;
+
+        if (!profileData.dailyLogs[activeDateStr]) {
+            profileData.dailyLogs[activeDateStr] = {
                 weight: undefined,
                 water: 0,
                 sleepHours: undefined,
@@ -20877,9 +21956,15 @@ kanban-plugin: basic
                 medicationsTaken: []
             };
         }
-        const todayLog = profileData.dailyLogs[todayStr];
+        const todayLog = profileData.dailyLogs[activeDateStr];
         if (!Array.isArray(todayLog.emotions)) todayLog.emotions = [];
         if (!Array.isArray(todayLog.medicationsTaken)) todayLog.medicationsTaken = [];
+        if (!Array.isArray(profileData.consultations)) profileData.consultations = [];
+        if (!Array.isArray(profileData.vaccines)) profileData.vaccines = [];
+        if (!Array.isArray(profileData.exams)) profileData.exams = [];
+        if (!Array.isArray(profileData.medications)) profileData.medications = [];
+        if (!Array.isArray(profileData.bioimpedance)) profileData.bioimpedance = [];
+        if (!Array.isArray(profileData.biomarkers)) profileData.biomarkers = [];
 
         // 1. Cockpit: Quick Metrics (Left) + Diário & Reflexão do Dia (Right)
         const cockpit = container.createDiv('kt-health-hub-cockpit');
@@ -20887,16 +21972,64 @@ kanban-plugin: basic
         // --- LEFT COLUMN: Quick Metrics ---
         const metricsCol = cockpit.createDiv('kt-health-quick-metrics');
         
-        // Header
+        // Header with Day Stepper / Navigator
         const mHdr = metricsCol.createDiv('kt-health-cockpit-hdr');
         const mTitle = mHdr.createDiv('kt-health-cockpit-title');
-        mTitle.createSpan({ text: '⚡ Check-in Rápido de Hoje' });
+        mTitle.createSpan({ text: '⚡ Check-in Diário' });
         
-        const dateParts = todayStr.split('-');
+        const navGroup = mHdr.createDiv('kt-health-date-nav-group');
+
+        const prevBtn = navGroup.createEl('button', { cls: 'kt-health-nav-btn', text: '◀' });
+        prevBtn.title = 'Dia Anterior';
+        prevBtn.onclick = () => {
+            const curD = new Date(activeDateStr + 'T12:00:00');
+            curD.setDate(curD.getDate() - 1);
+            this.healthOverviewActiveDate = curD.toISOString().split('T')[0];
+            this.render();
+        };
+
+        const normDateStr = activeDateStr.replace(/\s+/g, '-');
+        const dateParts = normDateStr.split('-');
         const dateObj = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
         const weekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
         const weekdayStr = weekdays[dateObj.getDay()] || '';
-        mHdr.createSpan({ cls: 'kt-health-cockpit-date-pill', text: `📅 ${todayStr} (${weekdayStr})` });
+
+        let relText = '';
+        if (activeDateStr === todayStr) relText = 'Hoje';
+        else {
+            const yest = new Date(); yest.setDate(yest.getDate() - 1);
+            if (activeDateStr === yest.toISOString().split('T')[0]) relText = 'Ontem';
+        }
+
+        const datePill = navGroup.createDiv('kt-health-cockpit-date-pill');
+        datePill.createSpan({ text: `📅 ${activeDateStr} (${weekdayStr})` });
+        if (relText) {
+            datePill.createSpan({ cls: 'kt-health-rel-chip', text: relText });
+        }
+
+        const isTodayOrFuture = activeDateStr >= todayStr;
+        const nextBtn = navGroup.createEl('button', { 
+            cls: `kt-health-nav-btn ${isTodayOrFuture ? 'is-disabled' : ''}`, 
+            text: '▶' 
+        });
+        nextBtn.title = isTodayOrFuture ? 'Já está no dia de hoje' : 'Próximo Dia';
+        if (!isTodayOrFuture) {
+            nextBtn.onclick = () => {
+                const curD = new Date(activeDateStr + 'T12:00:00');
+                curD.setDate(curD.getDate() + 1);
+                this.healthOverviewActiveDate = curD.toISOString().split('T')[0];
+                this.render();
+            };
+        }
+
+        if (activeDateStr !== todayStr) {
+            const todayBtn = navGroup.createEl('button', { cls: 'kt-health-today-btn', text: 'Hoje' });
+            todayBtn.title = 'Voltar para o dia de hoje';
+            todayBtn.onclick = () => {
+                this.healthOverviewActiveDate = todayStr;
+                this.render();
+            };
+        }
 
         // Water Metric
         const waterRow = metricsCol.createDiv('kt-health-metric-row');
@@ -21028,15 +22161,25 @@ kanban-plugin: basic
             };
         });
 
-        // Active Medications Check-in for Today
-        const activeMeds = (profileData.medications || []).filter(m => m.active !== false);
-        if (activeMeds.length > 0) {
-            const medRow = metricsCol.createDiv('kt-health-metric-row');
-            const medLblRow = medRow.createDiv('kt-health-metric-label-row');
-            medLblRow.createSpan({ text: '💊 Remédios de Hoje' });
-            const takenSet = new Set(todayLog.medicationsTaken || []);
-            medLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${takenSet.size} / ${activeMeds.length} tomados` });
+        // Active Medications & Non-Periodic / SOS Check-in for Day
+        const activeMeds = (profileData.medications || []).filter(m => m.active !== false && m.category !== 'sos');
+        const sosCabinetMeds = (profileData.medications || []).filter(m => m.active !== false && m.category === 'sos');
+        const todayCustomMeds = Array.isArray(todayLog.customMedications) ? todayLog.customMedications : [];
+        if (!Array.isArray(todayLog.customMedications)) todayLog.customMedications = todayCustomMeds;
 
+        const medRow = metricsCol.createDiv('kt-health-metric-row kt-health-meds-section');
+        const medLblRow = medRow.createDiv('kt-health-metric-label-row');
+        medLblRow.createSpan({ text: '💊 Remédios do Dia' });
+        const takenSet = new Set(todayLog.medicationsTaken || []);
+
+        if (activeMeds.length > 0) {
+            medLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${takenSet.size} / ${activeMeds.length} tomados` });
+        } else if (todayCustomMeds.length > 0) {
+            medLblRow.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${todayCustomMeds.length} pontuais tomados` });
+        }
+
+        // 1. Routine Medications Buttons
+        if (activeMeds.length > 0) {
             const medBtnsWrap = medRow.createDiv('kt-health-btn-group-row');
             activeMeds.forEach(m => {
                 const isTaken = takenSet.has(m.id);
@@ -21061,12 +22204,62 @@ kanban-plugin: basic
             });
         }
 
+        // 2. Non-periodic / SOS Medications Sub-row
+        const sosRow = medRow.createDiv('kt-health-sos-subrow');
+        const sosHdr = sosRow.createDiv('kt-health-sos-hdr');
+        const sosTitle = sosHdr.createSpan('kt-health-sos-title');
+        sosTitle.createSpan({ text: '⚡ Remédios Pontuais / SOS (Não Periódicos):' });
+        if (todayCustomMeds.length > 0) {
+            sosHdr.createSpan({ cls: 'kt-health-metric-val-highlight', text: `${todayCustomMeds.length} tomado${todayCustomMeds.length > 1 ? 's' : ''}` });
+        }
+
+        const sosChipsWrap = sosRow.createDiv('kt-health-sos-chips-wrap');
+        
+        // Render existing custom meds for today
+        todayCustomMeds.forEach((cm, idx) => {
+            const chip = sosChipsWrap.createDiv('kt-health-sos-chip');
+            chip.createSpan({ cls: 'kt-health-sos-icon', text: '💊' });
+            const label = cm.dosage ? `${cm.name} ${cm.dosage}` : cm.name;
+            chip.createSpan({ cls: 'kt-health-sos-text', text: label });
+            if (cm.reason) {
+                chip.createSpan({ cls: 'kt-health-sos-reason', text: `• ${cm.reason}` });
+            }
+            if (cm.time) {
+                chip.createSpan({ cls: 'kt-health-sos-time', text: `(${cm.time})` });
+            }
+            const delBtn = chip.createSpan({ cls: 'kt-health-sos-del', text: '✕' });
+            delBtn.title = `Remover ${cm.name} desta data`;
+            delBtn.onclick = async (e) => {
+                e.stopPropagation();
+                todayLog.customMedications.splice(idx, 1);
+                // Return stock if cabinet med
+                const cabinetMed = (profileData.medications || []).find(m => m.name && m.name.trim().toLowerCase() === cm.name.trim().toLowerCase());
+                if (cabinetMed && typeof cabinetMed.stock === 'number') {
+                    cabinetMed.stock += 1;
+                }
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`✕ ${cm.name} removido de ${activeDateStr}.`);
+            };
+        });
+
+        // Quick button to add custom SOS medication
+        const addSosBtn = sosChipsWrap.createEl('button', {
+            cls: 'kt-health-sos-add-btn',
+            text: todayCustomMeds.length > 0 ? '+ Outro Remédio SOS' : '+ Remédio Pontual / SOS'
+        });
+        addSosBtn.onclick = () => {
+            new HealthCustomMedicationModal(this.app, this.plugin, profile, profileData, activeDateStr, null, () => {
+                this.render();
+            }).open();
+        };
+
         // --- RIGHT COLUMN: Diário & Reflexão do Dia ---
         const journalCol = cockpit.createDiv('kt-health-quick-journal');
         
         const jHdr = journalCol.createDiv('kt-health-cockpit-hdr');
         const jTitle = jHdr.createDiv('kt-health-cockpit-title');
-        jTitle.createSpan({ text: '✍️ Diário & Reflexão do Dia' });
+        jTitle.createSpan({ text: `✍️ Diário & Reflexão (${relText || activeDateStr})` });
         
         const saveJBtn = jHdr.createEl('button', { cls: 'mod-cta', text: '💾 Salvar Diário', style: 'padding:3px 10px; font-size:11.5px;' });
 
@@ -21094,14 +22287,14 @@ kanban-plugin: basic
         // Quick Journal Textarea
         const jTextarea = journalCol.createEl('textarea', { cls: 'kt-health-quick-journal-textarea' });
         jTextarea.value = todayLog.journal || todayLog.notes || '';
-        jTextarea.placeholder = 'Como está sendo seu dia? Escreva rapidamente pensamentos, aprendizados, vitórias, preocupações ou gratidões... (Ctrl+Enter para salvar)';
+        jTextarea.placeholder = `Como foi seu dia (${activeDateStr})? Escreva pensamentos, aprendizados, vitórias, preocupações ou gratidões... (Ctrl+Enter para salvar)`;
 
         const performSaveJournal = async () => {
             const val = jTextarea.value.trim();
             todayLog.journal = val;
             todayLog.notes = val;
             await this.plugin.saveSettings();
-            new obsidian.Notice('✓ Diário salvo com sucesso!');
+            new obsidian.Notice(`✓ Diário de ${activeDateStr} salvo!`);
         };
 
         saveJBtn.onclick = async () => {
@@ -21120,10 +22313,13 @@ kanban-plugin: basic
         const hintRow = journalCol.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--text-muted);' });
         hintRow.createSpan({ text: 'Dica: Pressione Ctrl+Enter para salvar rapidamente.' });
         if (todayLog.journal || todayLog.notes) {
-            hintRow.createSpan({ text: `✓ Registro salvo hoje (${(todayLog.journal || todayLog.notes).length} caracteres)` });
+            hintRow.createSpan({ text: `✓ Registro salvo (${(todayLog.journal || todayLog.notes).length} caracteres)` });
         }
 
-        // 2. Interactive SVG Health Trends Chart Card
+        // 2. Fita Compacta dos Últimos Dias (Mini-Feed Resumido)
+        this.renderHealthDailyStrip(container, profile, profileData, activeDateStr);
+
+        // 3. Interactive SVG Health Trends Chart Card
         this.renderHealthOverviewCharts(container, profile, profileData);
 
         // 2. KPI Summary Grid
@@ -21432,54 +22628,151 @@ kanban-plugin: basic
         }
     }
 
+    renderHealthDailyStrip(container, profile, profileData, activeDateStr) {
+        const stripCard = container.createDiv('kt-health-card kt-health-daily-strip-section');
+        
+        const hdr = stripCard.createDiv('kt-health-section-hdr');
+        const leftHdr = hdr.createDiv();
+        leftHdr.createDiv({ cls: 'kt-health-section-title', text: '🗓️ Fita de Resumo dos Últimos Dias' });
+        leftHdr.createDiv({ cls: 'kt-health-section-desc', text: 'Resumo dos últimos 10 dias. Clique em qualquer dia para navegar ou editar no Cockpit acima:' });
+
+        const stripList = stripCard.createDiv('kt-health-daily-strip-list');
+
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        const weekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        const moodEmojiMap = { 5: '😄', 4: '😊', 3: '😐', 2: '😟', 1: '😫' };
+
+        // Generate past 10 days (from today down to 9 days ago)
+        for (let i = 0; i < 10; i++) {
+            const d = new Date();
+            d.setDate(today.getDate() - i);
+            const dateStr = d.toISOString().split('T')[0];
+            const log = (profileData.dailyLogs && profileData.dailyLogs[dateStr]) || {};
+
+            const isSelected = (dateStr === activeDateStr);
+            const isToday = (dateStr === todayStr);
+            const isYesterday = (i === 1);
+
+            let dayLabel = weekdays[d.getDay()];
+            if (isToday) dayLabel = 'Hoje';
+            else if (isYesterday) dayLabel = 'Ontem';
+
+            const card = stripList.createDiv(`kt-daily-strip-card ${isSelected ? 'is-selected' : ''}`);
+            card.setAttribute('title', `Clique para abrir o dia ${dateStr} no Cockpit`);
+
+            // Header of card: date + relative badge
+            const cardHdr = card.createDiv('kt-daily-strip-card-hdr');
+            cardHdr.createSpan({ cls: `kt-daily-strip-day ${isToday ? 'is-today' : isYesterday ? 'is-yesterday' : ''}`, text: dayLabel });
+            cardHdr.createSpan({ cls: 'kt-daily-strip-date', text: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}` });
+
+            // Indicators row: Mood emoji & Stress pill
+            const metricsRow = card.createDiv('kt-daily-strip-metrics');
+            if (log.mood) {
+                metricsRow.createSpan({ cls: 'kt-daily-strip-mood', text: moodEmojiMap[log.mood] || '😐' });
+            } else {
+                metricsRow.createSpan({ cls: 'kt-daily-strip-mood is-empty', text: '—' });
+            }
+
+            if (log.stress !== undefined && log.stress !== null && log.stress !== '') {
+                const sVal = Number(log.stress);
+                const stressCls = sVal >= 4 ? 'is-high' : sVal <= 2 ? 'is-low' : 'is-med';
+                metricsRow.createSpan({ cls: `kt-daily-strip-stress ${stressCls}`, text: `⚡ ${sVal}/5` });
+            }
+
+            // Submetrics: sleep & meds
+            const subRow = card.createDiv('kt-daily-strip-submetrics');
+            if (log.sleepHours) {
+                subRow.createSpan({ cls: 'kt-daily-strip-pill', text: `😴 ${log.sleepHours}h` });
+            }
+            const routineCount = (Array.isArray(log.medicationsTaken) ? log.medicationsTaken : []).length;
+            const sosCount = (Array.isArray(log.customMedications) ? log.customMedications : []).length;
+            if (routineCount > 0 || sosCount > 0) {
+                let text = `💊 ${routineCount}`;
+                if (sosCount > 0) {
+                    text = routineCount > 0 ? `💊 ${routineCount}+${sosCount}⚡` : `⚡ ${sosCount} SOS`;
+                }
+                const mPill = subRow.createSpan({ cls: `kt-daily-strip-pill is-meds ${sosCount > 0 ? 'has-sos' : ''}`, text: text });
+                if (sosCount > 0) {
+                    const sosSummary = log.customMedications.map(cm => `${cm.name} (${cm.reason || cm.dosage || 'SOS'})`).join(', ');
+                    mPill.title = `Remédios: ${routineCount} rotina, SOS: ${sosSummary}`;
+                }
+            } else if (log.water) {
+                subRow.createSpan({ cls: 'kt-daily-strip-pill', text: `💧 ${log.water}ml` });
+            }
+
+            // Journal preview
+            const journalText = (log.journal || log.notes || '').trim();
+            const previewRow = card.createDiv('kt-daily-strip-journal');
+            if (journalText.length > 0) {
+                previewRow.createSpan({ cls: 'kt-daily-strip-journal-icon', text: '📖' });
+                const cleanSnippet = journalText.replace(/\s+/g, ' ');
+                previewRow.createSpan({ cls: 'kt-daily-strip-journal-text', text: cleanSnippet });
+            } else {
+                previewRow.createSpan({ cls: 'kt-daily-strip-journal-empty', text: 'Sem notas escritas' });
+            }
+
+            card.onclick = () => {
+                this.healthOverviewActiveDate = dateStr;
+                this.render();
+            };
+        }
+    }
+
     renderHealthOverviewCharts(container, profile, profileData) {
         if (!this.healthOverviewChartRange) this.healthOverviewChartRange = 14;
         if (!this.healthOverviewMetric) this.healthOverviewMetric = 'sleep_energy';
 
         const chartCard = container.createDiv('kt-health-card kt-health-hub-charts-card');
         
-        // Header
-        const cardHdr = chartCard.createDiv('kt-health-card-header');
-        const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
-        titleGroup.createSpan({ cls: 'kt-health-card-title', text: '📈 Tendências & Histórico de Saúde' });
-        titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Visualização interativa de evolução dos seus principais indicadores:' });
+        const renderChartContent = () => {
+            const scrollParent = chartCard.closest('.kt-health-view, .kt-wrap, .kt-main, .view-content') || container;
+            const prevScroll = scrollParent ? scrollParent.scrollTop : null;
 
-        // Range Toggles (7D, 14D, 30D)
-        const rangeGroup = cardHdr.createDiv('kt-health-btn-group-row');
-        [7, 14, 30].forEach(r => {
-            const isAct = this.healthOverviewChartRange === r;
-            const btn = rangeGroup.createEl('button', {
-                cls: `kt-health-chip-btn ${isAct ? 'is-active' : ''}`,
-                text: `${r} Dias`
+            chartCard.empty();
+
+            // Header
+            const cardHdr = chartCard.createDiv('kt-health-card-header');
+            const titleGroup = cardHdr.createDiv('kt-fin-card-title-group');
+            titleGroup.createSpan({ cls: 'kt-health-card-title', text: '📈 Tendências & Histórico de Saúde' });
+            titleGroup.createSpan({ cls: 'kt-health-card-subtitle', text: 'Visualização interativa de evolução dos seus principais indicadores:' });
+
+            // Range Toggles (7D, 14D, 30D)
+            const rangeGroup = cardHdr.createDiv('kt-health-btn-group-row');
+            [7, 14, 30].forEach(r => {
+                const isAct = this.healthOverviewChartRange === r;
+                const btn = rangeGroup.createEl('button', {
+                    cls: `kt-health-chip-btn ${isAct ? 'is-active' : ''}`,
+                    text: `${r} Dias`
+                });
+                btn.onclick = () => {
+                    this.healthOverviewChartRange = r;
+                    renderChartContent();
+                };
             });
-            btn.onclick = () => {
-                this.healthOverviewChartRange = r;
-                this.render();
-            };
-        });
 
-        // Metric Selector Bar
-        const selectorWrap = chartCard.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;' });
-        const metricSelector = selectorWrap.createDiv('kt-health-chart-metric-selector');
-        
-        const metrics = [
-            { id: 'sleep_energy', label: '😴 Sono & Energia' },
-            { id: 'mood_stress', label: '😊 Humor vs. Estresse' },
-            { id: 'water', label: '💧 Hidratação (ml)' },
-            { id: 'weight', label: '⚖️ Peso Corporal (kg)' }
-        ];
+            // Metric Selector Bar
+            const selectorWrap = chartCard.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;' });
+            const metricSelector = selectorWrap.createDiv('kt-health-chart-metric-selector');
+            
+            const metrics = [
+                { id: 'sleep_energy', label: '😴 Sono & Energia' },
+                { id: 'mood_stress', label: '😊 Humor vs. Estresse' },
+                { id: 'water', label: '💧 Hidratação (ml)' },
+                { id: 'weight', label: '⚖️ Peso Corporal (kg)' }
+            ];
 
-        metrics.forEach(m => {
-            const isAct = this.healthOverviewMetric === m.id;
-            const mBtn = metricSelector.createEl('button', {
-                cls: `kt-health-metric-tab-btn ${isAct ? 'is-active' : ''}`,
-                text: m.label
+            metrics.forEach(m => {
+                const isAct = this.healthOverviewMetric === m.id;
+                const mBtn = metricSelector.createEl('button', {
+                    cls: `kt-health-metric-tab-btn ${isAct ? 'is-active' : ''}`,
+                    text: m.label
+                });
+                mBtn.onclick = () => {
+                    this.healthOverviewMetric = m.id;
+                    renderChartContent();
+                };
             });
-            mBtn.onclick = () => {
-                this.healthOverviewMetric = m.id;
-                this.render();
-            };
-        });
 
         // Prepare Days Data
         const range = this.healthOverviewChartRange;
@@ -21888,6 +23181,13 @@ kanban-plugin: basic
         }
 
         chartWrap.appendChild(svg);
+
+            if (scrollParent && prevScroll !== null && scrollParent.scrollTop !== prevScroll) {
+                scrollParent.scrollTop = prevScroll;
+            }
+        };
+
+        renderChartContent();
     }
 
     // ----------------------------------------------------------
@@ -22592,7 +23892,7 @@ kanban-plugin: basic
         let totalStress7 = 0, countStress7 = 0;
         let totalMedsExpected = 0, totalMedsTaken = 0;
 
-        const activeMeds = profileData.medications.filter(m => m.active !== false);
+        const activeMeds = profileData.medications.filter(m => m.active !== false && m.category !== 'sos');
 
         past7Days.forEach(dStr => {
             const l = profileData.dailyLogs[dStr];
@@ -22873,6 +24173,42 @@ kanban-plugin: basic
                 });
             }
 
+            // 4.1 Non-Periodic / SOS Medications for activeCheckinDate
+            const sosCheckWrap = dynamicFormWrap.createDiv('kt-health-sos-check-wrap');
+            sosCheckWrap.style.marginBottom = '14px';
+            const sosHdr = sosCheckWrap.createDiv({ style: 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;' });
+            sosHdr.createEl('div', { cls: 'kt-health-scale-label', text: '⚡ Medicamentos Pontuais / SOS (Não Periódicos):' });
+
+            const addSosBtn = sosHdr.createEl('button', { cls: 'kt-health-sos-add-btn', text: '+ Registrar Remédio SOS' });
+            addSosBtn.onclick = () => {
+                new HealthCustomMedicationModal(this.app, this.plugin, profile, profileData, activeCheckinDate, null, () => {
+                    renderCheckinForm();
+                }).open();
+            };
+
+            const curCustomMeds = Array.isArray(activeLog.customMedications) ? activeLog.customMedications : [];
+            if (curCustomMeds.length > 0) {
+                const sosList = sosCheckWrap.createDiv('kt-health-sos-chips-wrap');
+                curCustomMeds.forEach((cm, idx) => {
+                    const chip = sosList.createDiv('kt-health-sos-chip');
+                    chip.createSpan({ cls: 'kt-health-sos-icon', text: '💊' });
+                    const label = cm.dosage ? `${cm.name} (${cm.dosage})` : cm.name;
+                    chip.createSpan({ cls: 'kt-health-sos-text', text: label });
+                    if (cm.reason) chip.createSpan({ cls: 'kt-health-sos-reason', text: `• ${cm.reason}` });
+                    if (cm.time) chip.createSpan({ cls: 'kt-health-sos-time', text: `(${cm.time})` });
+                    const del = chip.createSpan({ cls: 'kt-health-sos-del', text: '✕' });
+                    del.title = 'Remover registro';
+                    del.onclick = async () => {
+                        curCustomMeds.splice(idx, 1);
+                        await this.plugin.saveSettings();
+                        renderCheckinForm();
+                    };
+                });
+            } else {
+                const emptyNotice = sosCheckWrap.createDiv({ style: 'font-size:11px; color:var(--text-muted); font-style:italic;' });
+                emptyNotice.setText('Nenhum remédio pontual tomado nesta data.');
+            }
+
             // 5. Journal Reflection Textarea
             const jInputWrap = dynamicFormWrap.createDiv('kt-health-journal-input-wrap');
             jInputWrap.createEl('div', { cls: 'kt-health-scale-label', text: '✍️ Pedacinho para Escrever / Reflexão do Dia:' });
@@ -23058,6 +24394,14 @@ kanban-plugin: basic
                 // Info row
                 const infoRow = card.createDiv('kt-health-med-meta-row');
                 infoRow.createSpan({ text: `⏰ ${m.timeOfDay || 'Manhã'}` });
+                if (m.reminderEnabled && m.reminderTime) {
+                    const remBadge = infoRow.createSpan({ cls: 'kt-health-med-meta-rem-badge', text: `🔔 Alarme: ${m.reminderTime}` });
+                    remBadge.title = 'Lembrete configurado. Clique para alterar ou testar.';
+                    remBadge.style.cursor = 'pointer';
+                    remBadge.onclick = () => {
+                        new HealthMedicationReminderModal(this.app, this.plugin, profile, m, () => this.render()).open();
+                    };
+                }
                 if (m.notes) {
                     infoRow.createSpan({ text: `📝 ${m.notes}`, style: 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;' });
                 }
@@ -23085,7 +24429,8 @@ kanban-plugin: basic
                 // Actions
                 const actions = card.createDiv('kt-health-med-card-actions');
                 
-                const refillBtn = actions.createEl('button', { cls: 'kt-fin-smart-btn', text: '+ Repor' });
+                const leftBtns = actions.createDiv({ style: 'display:flex; gap:6px; align-items:center;' });
+                const refillBtn = leftBtns.createEl('button', { cls: 'kt-fin-smart-btn', text: '+ Repor' });
                 refillBtn.onclick = () => {
                     new HealthMedicationRefillModal(this.app, m, async (addQty) => {
                         m.stock = (m.stock || 0) + addQty;
@@ -23093,6 +24438,17 @@ kanban-plugin: basic
                         this.render();
                         new obsidian.Notice(`✓ +${addQty} adicionados ao estoque de ${m.name}!`);
                     }).open();
+                };
+
+                const remBtn = leftBtns.createEl('button', { 
+                    cls: `kt-health-med-reminder-btn ${m.reminderEnabled ? 'is-active' : ''}`, 
+                    text: m.reminderEnabled && m.reminderTime ? `⏰ ${m.reminderTime}` : '⏰ Lembrete' 
+                });
+                remBtn.title = m.reminderEnabled && m.reminderTime 
+                    ? `Lembrete ativo às ${m.reminderTime}. Clique para alterar ou testar.` 
+                    : 'Configurar horário para lembrar de tomar';
+                remBtn.onclick = () => {
+                    new HealthMedicationReminderModal(this.app, this.plugin, profile, m, () => this.render()).open();
                 };
 
                 const rightBtns = actions.createDiv({ style: 'display:flex; gap:6px;' });
@@ -23123,52 +24479,131 @@ kanban-plugin: basic
         }
 
         // ----------------------------------------------------
+        // SECTION 2.1: HISTÓRICO GERAL DE REMÉDIOS NÃO PERIÓDICOS & SOS
+        // ----------------------------------------------------
+        this.renderHealthSosHistorySection(mentalWrap, profile, profileData);
+
+        // ----------------------------------------------------
         // SECTION 3: LINHA DO TEMPO & HISTÓRICO DO DIÁRIO (FEED)
         // ----------------------------------------------------
-        const feedSection = mentalWrap.createDiv('kt-health-card');
+        const feedSection = mentalWrap.createDiv('kt-health-card kt-mental-timeline-section');
         const feedHdr = feedSection.createDiv('kt-health-section-hdr');
         const feedHdrLeft = feedHdr.createDiv();
-        feedHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📜 Linha do Tempo & Entradas do Diário' });
-        feedHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Histórico de reflexões, humor diário e medicamentos tomados:' });
+        feedHdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📜 Linha do Tempo & Histórico Reflexivo' });
+        feedHdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Histórico cronológico de reflexões, humor diário e medicamentos tomados:' });
 
-        const entries = Object.entries(profileData.dailyLogs || {})
-            .filter(([date, log]) => log && (log.journal || log.notes || log.mood || log.stress || (log.medicationsTaken && log.medicationsTaken.length > 0)))
+        if (!this.mentalTimelineFilter) this.mentalTimelineFilter = 'all';
+
+        const allEntries = Object.entries(profileData.dailyLogs || {})
+            .filter(([date, log]) => log && (log.journal || log.notes || log.mood || log.stress || log.sleepHours || (log.medicationsTaken && log.medicationsTaken.length > 0) || (log.customMedications && log.customMedications.length > 0)))
             .sort(([dA], [dB]) => dB.localeCompare(dA));
 
-        if (entries.length === 0) {
-            feedSection.createDiv({ text: 'Nenhum registro no diário ainda. Escreva seu primeiro registro acima!', style: 'color:var(--text-muted); font-size:13px; padding:16px 0;' });
-        } else {
-            const feedList = feedSection.createDiv('kt-health-journal-feed');
-            entries.slice(0, 15).forEach(([dStr, log]) => {
-                const card = feedList.createDiv('kt-health-journal-entry-card');
+        const journalCount = allEntries.filter(([d, log]) => (log.journal || log.notes || '').trim().length > 0).length;
+        const stressCount = allEntries.filter(([d, log]) => (log.stress || 0) >= 4).length;
+        const sosCount = allEntries.filter(([d, log]) => (Array.isArray(log.customMedications) && log.customMedications.length > 0)).length;
 
-                const hdr = card.createDiv('kt-health-journal-entry-hdr');
-                
-                const dateParts = dStr.split('-');
+        // Filter Bar on the right of header
+        const filterBar = feedHdr.createDiv('kt-mental-filter-bar');
+        const filters = [
+            { id: 'all', label: `Todos (${allEntries.length})` },
+            { id: 'journal', label: `📖 Com Diário (${journalCount})` },
+            { id: 'stress', label: `⚡ Estresse Alto (${stressCount})` },
+            { id: 'sos', label: `💊 Remédios SOS (${sosCount})` }
+        ];
+
+        filters.forEach(f => {
+            const btn = filterBar.createEl('button', {
+                cls: `kt-mental-filter-btn ${this.mentalTimelineFilter === f.id ? 'is-active' : ''}`,
+                text: f.label
+            });
+            btn.onclick = () => {
+                this.mentalTimelineFilter = f.id;
+                this.render();
+            };
+        });
+
+        let entries = allEntries;
+        if (this.mentalTimelineFilter === 'journal') {
+            entries = allEntries.filter(([d, log]) => (log.journal || log.notes || '').trim().length > 0);
+        } else if (this.mentalTimelineFilter === 'stress') {
+            entries = allEntries.filter(([d, log]) => (log.stress || 0) >= 4);
+        } else if (this.mentalTimelineFilter === 'sos') {
+            entries = allEntries.filter(([d, log]) => (Array.isArray(log.customMedications) && log.customMedications.length > 0));
+        }
+
+        if (entries.length === 0) {
+            const emptyMsg = feedSection.createDiv({ cls: 'kt-mental-timeline-empty' });
+            emptyMsg.createDiv({ text: this.mentalTimelineFilter === 'all' 
+                ? 'Nenhum registro no diário ainda. Escreva seu primeiro registro acima!' 
+                : 'Nenhum registro encontrado para o filtro selecionado.' 
+            });
+            if (this.mentalTimelineFilter !== 'all') {
+                const resetBtn = emptyMsg.createEl('button', { cls: 'kt-fin-smart-btn', text: 'Mostrar Todos os Registros' });
+                resetBtn.style.marginTop = '8px';
+                resetBtn.onclick = () => {
+                    this.mentalTimelineFilter = 'all';
+                    this.render();
+                };
+            }
+        } else {
+            const timelineFlow = feedSection.createDiv('kt-mental-timeline-flow');
+            const today = new Date();
+            const todayStr = today.toISOString().split('T')[0];
+            const yest = new Date(); yest.setDate(yest.getDate() - 1);
+            const yestStr = yest.toISOString().split('T')[0];
+
+            const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+            const moodEmojiMap = { 5: '😄', 4: '😊', 3: '😐', 2: '😟', 1: '😫' };
+            const moodLabelMap = { 5: 'Radiante', 4: 'Bom', 3: 'Neutro', 2: 'Ansioso', 1: 'Esgotado' };
+
+            entries.slice(0, 30).forEach(([dStr, log]) => {
+                const normDateStr = dStr.replace(/\s+/g, '-');
+                const dateParts = normDateStr.split('-');
                 const dateObj = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
-                const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
                 const weekdayStr = weekdays[dateObj.getDay()] || '';
 
-                const dateBadge = hdr.createDiv('kt-health-journal-date-badge');
-                dateBadge.createSpan({ text: `📅 ${dStr} (${weekdayStr})` });
+                const item = timelineFlow.createDiv('kt-mental-timeline-item');
 
-                const pills = hdr.createDiv('kt-health-journal-pills');
+                // Left: Timeline node
+                const moodVal = log.mood || 3;
+                const node = item.createDiv(`kt-mental-timeline-node is-mood-${moodVal}`);
+                node.createSpan({ text: moodEmojiMap[moodVal] || '😐' });
+                node.setAttribute('title', `Humor: ${moodLabelMap[moodVal] || moodVal}`);
+
+                // Right: Card
+                const card = item.createDiv('kt-mental-timeline-card');
+
+                // Card Header
+                const cardHdr = card.createDiv('kt-mental-timeline-card-hdr');
                 
+                const dateGroup = cardHdr.createDiv('kt-mental-timeline-date-group');
+                dateGroup.createSpan({ cls: 'kt-mental-timeline-date-text', text: `📅 ${normDateStr} (${weekdayStr})` });
+                if (normDateStr === todayStr) {
+                    dateGroup.createSpan({ cls: 'kt-health-rel-chip', text: 'Hoje' });
+                } else if (normDateStr === yestStr) {
+                    dateGroup.createSpan({ cls: 'kt-health-rel-chip', text: 'Ontem' });
+                }
+
+                // Pills & Actions container
+                const rightHdr = cardHdr.createDiv('kt-mental-timeline-hdr-right');
+
+                const pills = rightHdr.createDiv('kt-health-journal-pills');
                 if (log.mood) {
-                    const moodEmojiMap = { 5: '😄 Radiante', 4: '😊 Bom', 3: '😐 Neutro', 2: '😟 Ansioso', 1: '😫 Esgotado' };
-                    pills.createSpan({ cls: `kt-health-journal-pill is-mood-${log.mood}`, text: `Humor: ${moodEmojiMap[log.mood] || log.mood}` });
+                    pills.createSpan({ cls: `kt-health-journal-pill is-mood-${log.mood}`, text: `${moodEmojiMap[log.mood] || ''} ${moodLabelMap[log.mood] || log.mood}` });
                 }
-
-                if (log.stress) {
-                    pills.createSpan({ cls: 'kt-health-journal-pill', text: `Estresse: ${log.stress}/5` });
+                if (log.stress !== undefined && log.stress !== null && log.stress !== '') {
+                    const sVal = Number(log.stress);
+                    const stressPillCls = sVal >= 4 ? 'is-stress-high' : '';
+                    pills.createSpan({ cls: `kt-health-journal-pill ${stressPillCls}`, text: `⚡ Estresse: ${sVal}/5` });
                 }
-
                 if (log.sleepHours) {
                     pills.createSpan({ cls: 'kt-health-journal-pill', text: `😴 ${log.sleepHours}h sono` });
                 }
 
-                const editActions = hdr.createDiv({ style: 'display:flex; gap:6px;' });
-                const editEntryBtn = editActions.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+                // Edit / Delete buttons
+                const actions = rightHdr.createDiv('kt-mental-timeline-actions');
+                const editEntryBtn = actions.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+                editEntryBtn.title = 'Editar entrada';
                 editEntryBtn.onclick = () => {
                     new HealthJournalEntryModal(this.app, profile, profileData, dStr, async (targetDate, updatedLog) => {
                         profileData.dailyLogs[targetDate] = Object.assign(profileData.dailyLogs[targetDate] || {}, updatedLog);
@@ -23183,7 +24618,8 @@ kanban-plugin: basic
                     }).open();
                 };
 
-                const delEntryBtn = editActions.createEl('button', { cls: 'kt-health-btn-minimal-danger', text: '✕' });
+                const delEntryBtn = actions.createEl('button', { cls: 'kt-health-btn-minimal-danger', text: '✕' });
+                delEntryBtn.title = 'Excluir entrada';
                 delEntryBtn.onclick = async () => {
                     delete profileData.dailyLogs[dStr];
                     await this.plugin.saveSettings();
@@ -23191,6 +24627,7 @@ kanban-plugin: basic
                     new obsidian.Notice(`✓ Entrada de ${dStr} excluída.`);
                 };
 
+                // Emotions tags
                 if (Array.isArray(log.emotions) && log.emotions.length > 0) {
                     const tagRow = card.createDiv('kt-health-tags-list');
                     log.emotions.forEach(t => {
@@ -23200,23 +24637,176 @@ kanban-plugin: basic
                     });
                 }
 
-                if (log.journal || log.notes) {
-                    const quoteBox = card.createDiv('kt-health-journal-quote');
-                    quoteBox.setText(log.journal || log.notes);
+                // Journal quote block (only if text exists!)
+                const journalText = (log.journal || log.notes || '').trim();
+                if (journalText.length > 0) {
+                    const quoteBox = card.createDiv('kt-mental-timeline-quote');
+                    quoteBox.setText(journalText);
                 }
 
-                if (Array.isArray(log.medicationsTaken) && log.medicationsTaken.length > 0) {
-                    const medsRow = card.createDiv('kt-health-journal-meds-taken');
-                    medsRow.createSpan({ text: '💊 Remédios Tomados:' });
-                    log.medicationsTaken.forEach(mId => {
-                        const mObj = (profileData.medications || []).find(it => it.id === mId);
-                        const name = mObj ? `${mObj.name} ${mObj.dosage || ''}` : 'Medicamento';
-                        medsRow.createSpan({ cls: 'kt-health-journal-med-chip', text: `✓ ${name}` });
-                    });
+                // Medications taken (Routine & Non-Periodic / SOS)
+                const hasRoutine = Array.isArray(log.medicationsTaken) && log.medicationsTaken.length > 0;
+                const hasSos = Array.isArray(log.customMedications) && log.customMedications.length > 0;
+                if (hasRoutine || hasSos) {
+                    const medsRow = card.createDiv('kt-mental-timeline-meds');
+                    medsRow.createSpan({ cls: 'kt-mental-meds-title', text: '💊 Remédios:' });
+                    if (hasRoutine) {
+                        log.medicationsTaken.forEach(mId => {
+                            const mObj = (profileData.medications || []).find(it => it.id === mId);
+                            const name = mObj ? `${mObj.name} ${mObj.dosage || ''}` : 'Medicamento';
+                            medsRow.createSpan({ cls: 'kt-health-journal-med-chip', text: `✓ ${name}` });
+                        });
+                    }
+                    if (hasSos) {
+                        log.customMedications.forEach(cm => {
+                            const meta = [cm.dosage, cm.reason, cm.time].filter(Boolean).join(' • ');
+                            const fullText = meta ? `⚡ ${cm.name} (${meta})` : `⚡ ${cm.name}`;
+                            const sosChip = medsRow.createSpan({ cls: 'kt-health-journal-med-chip is-sos', text: fullText });
+                            if (cm.notes) sosChip.title = cm.notes;
+                        });
+                    }
                 }
             });
         }
 
+    }
+
+    renderHealthSosHistorySection(container, profile, profileData) {
+        const historyCard = container.createDiv('kt-health-card kt-health-sos-history-card');
+        const hdr = historyCard.createDiv('kt-health-section-hdr');
+        const hdrLeft = hdr.createDiv();
+        hdrLeft.createDiv({ cls: 'kt-health-section-title', text: '📋 Histórico Geral de Remédios Não Periódicos & SOS' });
+        hdrLeft.createDiv({ cls: 'kt-health-section-desc', text: 'Registro cronológico completo de analgésicos, antialérgicos e remédios pontuais tomados sob demanda:' });
+
+        const hdrActions = hdr.createDiv({ style: 'display:flex; gap:8px;' });
+        const addBtn = hdrActions.createEl('button', { cls: 'kt-fin-smart-btn', text: '+ Registrar Remédio SOS' });
+        addBtn.onclick = () => {
+            const todayStr = new Date().toISOString().split('T')[0];
+            new HealthCustomMedicationModal(this.app, this.plugin, profile, profileData, todayStr, null, () => {
+                this.render();
+            }).open();
+        };
+
+        // Collect all non-periodic / custom medications across all dates
+        const allSos = [];
+        Object.entries(profileData.dailyLogs || {}).forEach(([dateStr, log]) => {
+            if (Array.isArray(log.customMedications)) {
+                log.customMedications.forEach(cm => {
+                    allSos.push({ date: dateStr, ...cm });
+                });
+            }
+        });
+
+        // Sort descending by date and time
+        allSos.sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')));
+
+        if (allSos.length === 0) {
+            const emptyDiv = historyCard.createDiv({ style: 'text-align:center; padding:20px; color:var(--text-muted); font-size:12.5px;' });
+            emptyDiv.createEl('div', { text: 'Nenhum medicamento não periódico (SOS) registrado ainda.' });
+            emptyDiv.createEl('div', { 
+                text: 'Ao tomar um analgésico, antialérgico ou outro remédio pontual, registre-o no Check-in Diário ou pelo botão acima para criar seu histórico.',
+                style: 'font-size:11.5px; margin-top:4px; opacity:0.8;'
+            });
+        } else {
+            // Summary Stats Strip
+            const statsStrip = historyCard.createDiv('kt-health-chart-stats-strip');
+            statsStrip.style.marginBottom = '8px';
+
+            const s1 = statsStrip.createDiv('kt-health-chart-stat-item');
+            s1.createSpan({ text: 'Total de Tomadas:' });
+            s1.createSpan({ cls: 'kt-health-chart-stat-val', text: `${allSos.length} registro${allSos.length > 1 ? 's' : ''}` });
+
+            // Most frequent medication
+            const medCounts = {};
+            allSos.forEach(it => {
+                const k = (it.name || '').trim();
+                if (k) medCounts[k] = (medCounts[k] || 0) + 1;
+            });
+            const topMed = Object.entries(medCounts).sort((a, b) => b[1] - a[1])[0];
+            if (topMed) {
+                const s2 = statsStrip.createDiv('kt-health-chart-stat-item');
+                s2.createSpan({ text: 'Mais Frequente:' });
+                s2.createSpan({ cls: 'kt-health-chart-stat-val', text: `${topMed[0]} (${topMed[1]}x)` });
+            }
+
+            // Most frequent symptom / reason
+            const reasonCounts = {};
+            allSos.forEach(it => {
+                const k = (it.reason || '').trim();
+                if (k) reasonCounts[k] = (reasonCounts[k] || 0) + 1;
+            });
+            const topReason = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])[0];
+            if (topReason) {
+                const s3 = statsStrip.createDiv('kt-health-chart-stat-item');
+                s3.createSpan({ text: 'Sintoma Comum:' });
+                s3.createSpan({ cls: 'kt-health-chart-stat-val', text: `${topReason[0]} (${topReason[1]}x)` });
+            }
+
+            // History Table
+            const tableWrap = historyCard.createDiv({ style: 'overflow-x:auto;' });
+            const table = tableWrap.createEl('table', { cls: 'kt-health-sos-history-table' });
+            const thead = table.createEl('thead');
+            const headRow = thead.createEl('tr');
+            headRow.createEl('th', { text: 'Data & Hora' });
+            headRow.createEl('th', { text: 'Medicamento' });
+            headRow.createEl('th', { text: 'Dosagem' });
+            headRow.createEl('th', { text: 'Motivo / Sintoma' });
+            headRow.createEl('th', { text: 'Observações' });
+            headRow.createEl('th', { text: 'Ações', style: 'text-align:right;' });
+
+            const tbody = table.createEl('tbody');
+            allSos.forEach(item => {
+                const tr = tbody.createEl('tr');
+                
+                // Date & Time
+                const tdDate = tr.createEl('td');
+                const dtSpan = tdDate.createSpan({ style: 'font-weight:600; color:var(--text-normal);' });
+                dtSpan.setText(item.date);
+                if (item.time) {
+                    tdDate.createSpan({ text: ` às ${item.time}`, style: 'color:var(--text-muted); font-size:11px;' });
+                }
+
+                // Name
+                const tdName = tr.createEl('td');
+                tdName.createSpan({ cls: 'kt-health-sos-text', text: `💊 ${item.name}` });
+
+                // Dosage
+                tr.createEl('td', { text: item.dosage || '—' });
+
+                // Reason
+                const tdReason = tr.createEl('td');
+                if (item.reason) {
+                    tdReason.createSpan({ cls: 'kt-health-symptom-chip', text: item.reason, style: 'cursor:default;' });
+                } else {
+                    tdReason.setText('—');
+                }
+
+                // Notes
+                tr.createEl('td', { text: item.notes || '—', style: 'color:var(--text-muted); font-size:11.5px;' });
+
+                // Actions
+                const tdActions = tr.createEl('td', { style: 'text-align:right;' });
+                const editBtn = tdActions.createEl('button', { cls: 'kt-fin-row-btn', text: '✎' });
+                editBtn.title = 'Editar entrada';
+                editBtn.onclick = () => {
+                    new HealthCustomMedicationModal(this.app, this.plugin, profile, profileData, item.date, item, () => {
+                        this.render();
+                    }).open();
+                };
+
+                const delBtn = tdActions.createEl('button', { cls: 'kt-health-btn-minimal-danger', text: '✕' });
+                delBtn.title = 'Excluir registro do histórico';
+                delBtn.onclick = async () => {
+                    const dayLog = profileData.dailyLogs && profileData.dailyLogs[item.date];
+                    if (dayLog && Array.isArray(dayLog.customMedications)) {
+                        dayLog.customMedications = dayLog.customMedications.filter(it => it.id !== item.id);
+                        await this.plugin.saveSettings();
+                        this.render();
+                        new obsidian.Notice(`✓ Registro de ${item.name} (${item.date}) excluído.`);
+                    }
+                };
+            });
+        }
     }
 
     renderHealthMentalCorrelationChart(container, profile, profileData) {
@@ -24223,7 +25813,7 @@ kanban-plugin: basic
 
         // Click no corpo do card inicia a edição inline no próprio card
         cardEl.onclick = (e) => {
-            if (e.target.closest('.kt-card-check') || e.target.closest('.kt-subtask-chk') || e.target.closest('.kt-card-menu-btn')) return;
+            if (e.target.closest('.kt-card-check') || e.target.closest('.kt-subtask-chk') || e.target.closest('.kt-card-menu-btn') || e.target.closest('a') || e.target.closest('.kt-task-link-pill') || e.target.closest('.kt-task-inline-link') || e.target.closest('.internal-link')) return;
             this.startInlineCardEdit(card);
         };
 
@@ -24231,6 +25821,10 @@ kanban-plugin: basic
         cardEl.setAttribute('draggable', 'true');
 
         cardEl.addEventListener('dragstart', (e) => {
+            if (e.target.closest('a') || e.target.closest('.kt-task-link-pill') || e.target.closest('.kt-task-inline-link') || e.target.closest('.internal-link')) {
+                e.preventDefault();
+                return;
+            }
             this.draggedCard = card;
             const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
             try {
@@ -26404,6 +27998,17 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
                 }
             }, 15 * 60 * 1000)
         );
+
+        // Periodic background check for medication reminders (every 30 seconds)
+        this.registerInterval(
+            window.setInterval(() => {
+                this.checkMedicationReminders();
+            }, 30000)
+        );
+
+        window.setTimeout(() => {
+            this.checkMedicationReminders();
+        }, 3000);
     }
 
     async syncCanvasAssignments(force = false) {
@@ -26827,6 +28432,54 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (!this.settings.health.data) {
             this.settings.health.data = {};
+        }
+    }
+
+    checkMedicationReminders() {
+        if (this.activeMedicationAlertModal) return;
+        if (!this.settings || !this.settings.health || !this.settings.health.data) return;
+
+        const profilesToCheck = [];
+        const activeProfileId = this.settings.health.activeProfile || 'profile-me';
+        if (this.settings.health.data[activeProfileId]) {
+            profilesToCheck.push([activeProfileId, this.settings.health.data[activeProfileId]]);
+        }
+        for (const [pId, pData] of Object.entries(this.settings.health.data)) {
+            if (pId !== activeProfileId) profilesToCheck.push([pId, pData]);
+        }
+
+        const now = new Date();
+        const todayStr = now.toISOString().split('T')[0];
+        const currentHHMM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+        for (const [pId, profileData] of profilesToCheck) {
+            if (!profileData || !Array.isArray(profileData.medications)) continue;
+
+            const todayLog = profileData.dailyLogs && profileData.dailyLogs[todayStr];
+            const takenSet = new Set((todayLog && todayLog.medicationsTaken) || []);
+
+            for (const m of profileData.medications) {
+                if (m.active === false || !m.reminderEnabled || !m.reminderTime) continue;
+                if (takenSet.has(m.id)) continue; // Already taken today!
+
+                let shouldAlert = false;
+
+                if (m.snoozedUntil) {
+                    if (Date.now() >= m.snoozedUntil) {
+                        shouldAlert = true;
+                        m.snoozedUntil = null;
+                    }
+                } else if (currentHHMM >= m.reminderTime && m.lastAlertDate !== todayStr) {
+                    shouldAlert = true;
+                }
+
+                if (shouldAlert) {
+                    const profileObj = { id: pId, name: profileData.name || 'Eu' };
+                    const alertModal = new HealthMedicationAlertModal(this.app, this, profileObj, m, todayStr);
+                    alertModal.open();
+                    return; // Trigger one modal at a time
+                }
+            }
         }
     }
 
