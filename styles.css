@@ -12297,5 +12297,719 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     background: var(--background-secondary);
 }
 
+/* ================================================================
+   TRAVEL PLANNING (PLANEJAMENTO DE VIAGEM & TERMÔMETRO VERTICAL)
+   ================================================================ */
+
+.kt-trip-view-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 0 16px 30px 16px;
+    width: 100%;
+}
+
+/* Empty State */
+.kt-trip-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 50px 24px;
+    text-align: center;
+    background: var(--background-secondary);
+    border-radius: 12px;
+    border: 1px dashed var(--background-modifier-border);
+    margin: 20px 0;
+}
+
+.kt-trip-empty-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+
+.kt-trip-empty-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text-normal);
+}
+
+.kt-trip-empty-desc {
+    font-size: 13.5px;
+    color: var(--text-muted);
+    max-width: 520px;
+    line-height: 1.55;
+    margin-bottom: 22px;
+}
+
+.kt-trip-empty-btn {
+    font-size: 14px;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+/* Top Selection & Action Bar */
+.kt-trip-top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--background-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-trip-selector-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.kt-trip-select {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+    cursor: pointer;
+}
+
+.kt-trip-chip {
+    font-size: 11.5px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+.kt-trip-status-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: filter 0.15s ease;
+}
+
+.kt-trip-status-pill:hover {
+    filter: brightness(1.1);
+}
+
+.kt-trip-status-pill.status-planning {
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.kt-trip-status-pill.status-confirmed {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.kt-trip-status-pill.status-completed {
+    background: rgba(168, 85, 247, 0.15);
+    color: #a855f7;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.kt-trip-countdown-pill {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 12px;
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.kt-trip-actions-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Top KPI Cards */
+.kt-trip-kpis-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 4px;
+}
+
+.kt-trip-kpi-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.kt-trip-kpi-content {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-trip-kpi-lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.kt-trip-kpi-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-trip-kpi-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.kt-trip-kpi-ring-wrap {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+}
+
+.kt-trip-kpi-ring {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.kt-trip-ring-bg {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.08);
+    stroke-width: 3.5;
+}
+
+.kt-trip-ring-val {
+    fill: none;
+    stroke: #10b981;
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.4s ease;
+}
+
+/* Split Dashboard Layout */
+.kt-trip-main-grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 24px;
+    align-items: start;
+}
+
+@media (max-width: 1060px) {
+    .kt-trip-main-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Right Column: Minimalist Savings Tower */
+.kt-trip-right-column {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: sticky;
+    top: 12px;
+}
+
+.kt-trip-tower-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 12px;
+    padding: 24px 20px 22px 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+.kt-trip-tower-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    margin-bottom: 8px;
+}
+
+.kt-trip-tower-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #10b981;
+    letter-spacing: 0.2px;
+}
+
+/* Minimalist Vertical Track - Taller, Spacious & Unbugged */
+.kt-trip-tower-track-wrap {
+    position: relative;
+    width: 100%;
+    height: 520px;
+    margin: 20px 0 24px 0;
+}
+
+/* Continuous Vertical Rail */
+.kt-trip-tower-rail {
+    position: absolute;
+    left: 145px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
+}
+
+.kt-trip-tower-rail-fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    background: #10b981;
+    border-radius: 2px;
+    transition: height 0.4s ease;
+}
+
+/* Nodes Container */
+.kt-trip-tower-nodes {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 8px;
+    bottom: 8px;
+}
+
+/* Milestone Node Row: Labels on the LEFT, Dot on the rail */
+.kt-trip-tower-node {
+    position: absolute;
+    left: 0;
+    width: 152px;
+    transform: translateY(50%);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    pointer-events: none;
+}
+
+.kt-trip-tower-node-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    padding-right: 12px;
+    text-align: right;
+}
+
+.kt-trip-tower-node-pct {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    opacity: 0.55;
+    line-height: 1.2;
+    transition: color 0.3s ease, opacity 0.3s ease;
+}
+
+.kt-trip-tower-node.is-reached .kt-trip-tower-node-pct {
+    color: #10b981;
+    opacity: 1;
+}
+
+.kt-trip-tower-node-title {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    opacity: 0.5;
+    white-space: nowrap;
+    line-height: 1.2;
+    transition: color 0.3s ease, opacity 0.3s ease;
+}
+
+.kt-trip-tower-node.is-reached .kt-trip-tower-node-title {
+    color: var(--text-normal);
+    opacity: 0.9;
+}
+
+/* Dot on Rail */
+.kt-trip-tower-node-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--background-secondary);
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    box-sizing: border-box;
+    z-index: 2;
+    margin-right: -7px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+.kt-trip-tower-node.is-reached .kt-trip-tower-node-dot {
+    background: #10b981;
+    border-color: #10b981;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.45);
+}
+
+/* Current Progress Pill: Dedicated on the RIGHT side of the rail, pointing back at it! */
+.kt-trip-tower-curr-pill {
+    position: absolute;
+    left: 160px;
+    transform: translateY(50%);
+    background: rgba(16, 185, 129, 0.14);
+    border: 1px solid #10b981;
+    color: #10b981;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 14px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 5;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    transition: bottom 0.4s ease;
+}
+
+.kt-trip-tower-curr-pill::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: 50%;
+    transform: translateY(-50%);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-right: 5px solid #10b981;
+}
+
+/* Minimalist Action Button */
+.kt-trip-deposit-btn-minimal {
+    width: 100%;
+    background: #10b981 !important;
+    color: #042f2e !important;
+    font-weight: 600 !important;
+    font-size: 13.5px !important;
+    padding: 12px 16px !important;
+    border-radius: 8px !important;
+    border: none !important;
+    cursor: pointer !important;
+    text-align: center !important;
+    box-shadow: none !important;
+    margin-top: 14px;
+    transition: background 0.15s ease, transform 0.15s ease !important;
+}
+
+.kt-trip-deposit-btn-minimal:hover {
+    background: #059669 !important;
+    color: #ffffff !important;
+    transform: translateY(-1px);
+}
+
+/* Contributions History */
+.kt-trip-history-toggle {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-top: 12px;
+    text-align: center;
+    background: none;
+    border: none;
+    padding: 4px;
+}
+
+.kt-trip-history-toggle:hover {
+    color: var(--text-normal);
+}
+
+.kt-trip-history-list {
+    width: 100%;
+    max-height: 160px;
+    overflow-y: auto;
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-top: 1px solid var(--background-modifier-border);
+    padding-top: 8px;
+}
+
+.kt-trip-contrib-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-trip-contrib-note {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Left Column: Expenses Forecast */
+.kt-trip-expenses-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+}
+
+.kt-trip-expenses-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px;
+}
+
+.kt-trip-exp-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+    color: var(--text-normal);
+}
+
+.kt-trip-exp-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Category Cards List: Full-width stacked comfortably like before! */
+.kt-trip-cats-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+}
+
+/* Category Card */
+.kt-trip-cat-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.kt-trip-cat-hdr {
+    padding: 10px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.kt-trip-cat-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-trip-cat-icon {
+    font-size: 16px;
+}
+
+.kt-trip-cat-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-trip-cat-badge {
+    font-size: 10.5px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--background-primary);
+    color: var(--text-muted);
+}
+
+.kt-trip-cat-totals {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.kt-trip-cat-est-val {
+    color: var(--text-muted);
+}
+
+.kt-trip-progress-bar {
+    height: 3px;
+    background: rgba(0, 0, 0, 0.2);
+    width: 100%;
+}
+
+.kt-trip-progress-fill {
+    height: 100%;
+    background: #10b981;
+    transition: width 0.3s ease;
+}
+
+/* Category Items Table */
+.kt-trip-items-table {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kt-trip-item-empty {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    padding: 8px 4px;
+    font-style: italic;
+}
+
+.kt-trip-item-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid transparent;
+    font-size: 12.5px;
+    transition: background 0.15s ease;
+}
+
+.kt-trip-item-row:hover {
+    border-color: var(--background-modifier-border);
+}
+
+.kt-trip-item-row.is-paid {
+    background: rgba(16, 185, 129, 0.05);
+    border-color: rgba(16, 185, 129, 0.18);
+}
+
+.kt-trip-item-row.is-paid .kt-trip-item-name {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+.kt-trip-item-cb {
+    cursor: pointer;
+    width: 15px;
+    height: 15px;
+    margin: 0;
+}
+
+.kt-trip-item-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.kt-trip-item-name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-normal);
+}
+
+.kt-trip-item-note {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-trip-item-values {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+}
+
+.kt-trip-val-est {
+    color: var(--text-muted);
+}
+
+.kt-trip-badge-paid {
+    font-size: 10.5px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    font-weight: 600;
+}
+
+.kt-trip-item-actions {
+    display: flex;
+    gap: 2px;
+}
+
+.kt-trip-icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 3px 5px;
+    border-radius: 4px;
+    font-size: 11px;
+    opacity: 0.6;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.kt-trip-icon-btn:hover {
+    opacity: 1;
+    background: var(--background-modifier-hover);
+}
+
+/* Expenses Summary Bar */
+.kt-trip-summary-bar {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    margin-top: 4px;
+}
+
+.kt-trip-sum-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: center;
+}
+
+.kt-trip-sum-lbl {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kt-trip-sum-val {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-normal);
+}
+
 
 

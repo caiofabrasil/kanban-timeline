@@ -7895,6 +7895,505 @@ class FinanceConfirmModal extends obsidian.Modal {
 }
 
 // ================================================================
+// TRAVEL PLANNING (PLANEJAMENTO DE VIAGEM) MODALS & HELPERS
+// ================================================================
+
+function parseFinanceNumber(str) {
+    if (typeof str === 'number') return isNaN(str) ? 0 : str;
+    if (!str) return 0;
+    const clean = String(str).trim().replace(/[^\d.,-]/g, '');
+    if (clean.includes(',') && clean.includes('.')) {
+        return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+    } else if (clean.includes(',')) {
+        return parseFloat(clean.replace(',', '.')) || 0;
+    }
+    return parseFloat(clean) || 0;
+}
+
+function getDefaultTripCategories() {
+    return [
+        {
+            id: 'transporte',
+            name: 'Transporte',
+            icon: '✈️',
+            description: 'Passagens aéreas, transfer, aluguel de carro, combustível, pedágio',
+            items: []
+        },
+        {
+            id: 'hospedagem',
+            name: 'Hospedagem',
+            icon: '🏨',
+            description: 'Hotéis, Airbnb, resorts, pousadas, taxas de estadia',
+            items: []
+        },
+        {
+            id: 'alimentacao',
+            name: 'Alimentação',
+            icon: '🍽️',
+            description: 'Restaurantes, cafés, mercados locais, lanches, passeios gastronômicos',
+            items: []
+        },
+        {
+            id: 'passeios',
+            name: 'Passeios & Lazer',
+            icon: '🎟️',
+            description: 'Ingressos, parques, museus, tours guiados, atrações, experiências',
+            items: []
+        },
+        {
+            id: 'compras',
+            name: 'Compras & Souvenirs',
+            icon: '🛍️',
+            description: 'Lembrancinhas, roupas de viagem, presentes, eletrônicos',
+            items: []
+        },
+        {
+            id: 'seguro',
+            name: 'Seguro & Documentos',
+            icon: '🛡️',
+            description: 'Seguro viagem internacional, visto, passaporte, vacinas, chip/eSIM',
+            items: []
+        },
+        {
+            id: 'reserva',
+            name: 'Fundo de Reserva & Imprevistos',
+            icon: '🚨',
+            description: 'Margem de segurança para oscilações de câmbio ou emergências',
+            items: []
+        }
+    ];
+}
+
+class FinanceTripModal extends obsidian.Modal {
+    constructor(app, plugin, trip, onSave) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.trip = trip || null;
+        this.onSave = onSave;
+
+        this.titleVal = trip ? (trip.title || '') : '';
+        this.destVal = trip ? (trip.destination || '') : '';
+        this.startDateVal = trip ? (trip.startDate || '') : '';
+        this.endDateVal = trip ? (trip.endDate || '') : '';
+        this.targetBudgetVal = trip && trip.targetBudget ? (trip.targetBudget.toFixed(2).replace('.', ',')) : '';
+        this.currencyVal = trip ? (trip.currency || 'R$') : (plugin?.settings?.finances?.currency || 'R$');
+        this.statusVal = trip ? (trip.status || 'planning') : 'planning';
+        this.notesVal = trip ? (trip.notes || '') : '';
+    }
+
+    onOpen() {
+        const { contentEl, trip } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '520px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        const isEdit = !!trip;
+        contentEl.createEl('h2', { text: isEdit ? '✈️ Editar Planejamento de Viagem' : '✈️ Novo Planejamento de Viagem' });
+
+        new obsidian.Setting(contentEl)
+            .setName('Nome / Título da Viagem')
+            .setDesc('Ex: Férias no Nordeste 🏖️, Japão na Primavera 🌸, Chile na Neve ❄️')
+            .addText(t => {
+                t.setValue(this.titleVal).onChange(v => this.titleVal = v);
+                t.inputEl.style.width = '100%';
+                window.setTimeout(() => t.inputEl.focus(), 50);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Destino Principal')
+            .setDesc('Ex: Florianópolis - SC, Tóquio & Kyoto, Santiago')
+            .addText(t => {
+                t.setValue(this.destVal).onChange(v => this.destVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Data de Início (Ida)')
+            .addText(t => {
+                t.inputEl.type = 'date';
+                t.setValue(this.startDateVal).onChange(v => this.startDateVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Data de Retorno (Volta)')
+            .addText(t => {
+                t.inputEl.type = 'date';
+                t.setValue(this.endDateVal).onChange(v => this.endDateVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Moeda da Viagem')
+            .addDropdown(d => {
+                ['R$', 'US$', '€', '£', '¥', 'ARS'].forEach(c => d.addOption(c, c));
+                d.setValue(this.currencyVal).onChange(v => this.currencyVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Meta de Orçamento / Poupança (Opcional)')
+            .setDesc('Se deixar em branco, calcula automaticamente pela soma das previsões de despesas')
+            .addText(t => {
+                t.setPlaceholder('Ex: 8.000,00');
+                t.setValue(this.targetBudgetVal).onChange(v => this.targetBudgetVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Status da Viagem')
+            .addDropdown(d => {
+                d.addOption('planning', '🎒 Em Planejamento');
+                d.addOption('confirmed', '✈️ Confirmada / Passagens Compradas');
+                d.addOption('completed', '🏖️ Realizada / Concluída');
+                d.setValue(this.statusVal).onChange(v => this.statusVal = v);
+            });
+
+        const notesField = contentEl.createDiv('kt-form-field');
+        notesField.style.marginTop = '12px';
+        const notesLabel = notesField.createEl('div', { cls: 'setting-item-name', text: 'Anotações & Roteiro' });
+        notesLabel.style.fontWeight = '500';
+        notesLabel.style.marginBottom = '4px';
+        const notesDesc = notesField.createEl('div', { cls: 'setting-item-description', text: 'Links, dicas de lugares, horários de voo, checklists' });
+        notesDesc.style.fontSize = '12px';
+        notesDesc.style.color = 'var(--text-muted)';
+        notesDesc.style.marginBottom = '6px';
+        const notesInput = notesField.createEl('textarea');
+        notesInput.value = this.notesVal;
+        notesInput.rows = 3;
+        notesInput.style.width = '100%';
+        notesInput.style.borderRadius = '6px';
+        notesInput.style.padding = '8px';
+        notesInput.style.resize = 'vertical';
+        notesInput.oninput = () => this.notesVal = notesInput.value;
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '10px';
+        footer.style.marginTop = '20px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: isEdit ? 'Salvar Alterações' : 'Criar Viagem' });
+        saveBtn.onclick = () => {
+            if (!this.titleVal.trim()) {
+                new obsidian.Notice('Por favor, informe um nome para a viagem.');
+                return;
+            }
+            const cleanTarget = this.targetBudgetVal ? parseFinanceNumber(this.targetBudgetVal) : null;
+            const updatedTrip = Object.assign({}, trip || {}, {
+                id: trip ? trip.id : ('trip-' + Date.now()),
+                title: this.titleVal.trim(),
+                destination: this.destVal.trim(),
+                startDate: this.startDateVal || '',
+                endDate: this.endDateVal || '',
+                currency: this.currencyVal || 'R$',
+                targetBudget: cleanTarget,
+                status: this.statusVal || 'planning',
+                notes: this.notesVal.trim(),
+                categories: (trip && trip.categories && trip.categories.length > 0) ? trip.categories : getDefaultTripCategories(),
+                contributions: (trip && trip.contributions) ? trip.contributions : []
+            });
+            this.close();
+            this.onSave(updatedTrip);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceTripContributionModal extends obsidian.Modal {
+    constructor(app, plugin, trip, onSave) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.trip = trip;
+        this.onSave = onSave;
+
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        this.dateVal = `${yyyy}-${mm}-${dd}`;
+        this.amountVal = '';
+        this.noteVal = '';
+    }
+
+    onOpen() {
+        const { contentEl, trip } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '460px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: `💰 Guardar Dinheiro • ${trip.title}` });
+        const p = contentEl.createEl('p', { cls: 'kt-modal-desc' });
+        p.setText('Registre uma quantia economizada ou depositada na caixinha para encher a barra de poupança da viagem.');
+
+        new obsidian.Setting(contentEl)
+            .setName('Valor Guardado')
+            .setDesc(`Moeda: ${trip.currency || 'R$'}`)
+            .addText(t => {
+                t.setPlaceholder('Ex: 500,00');
+                t.setValue(this.amountVal).onChange(v => this.amountVal = v);
+                window.setTimeout(() => t.inputEl.focus(), 50);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Data do Depósito / Aporte')
+            .addText(t => {
+                t.inputEl.type = 'date';
+                t.setValue(this.dateVal).onChange(v => this.dateVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Origem / Descrição')
+            .setDesc('Ex: Economia do mês, Bônus, Venda de item, Sobra do salário')
+            .addText(t => {
+                t.setPlaceholder('Ex: Economia do salário de Setembro');
+                t.setValue(this.noteVal).onChange(v => this.noteVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '10px';
+        footer.style.marginTop = '20px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Confirmar Depósito' });
+        saveBtn.onclick = () => {
+            const num = parseFinanceNumber(this.amountVal);
+            if (num <= 0) {
+                new obsidian.Notice('Por favor, informe um valor positivo maior que zero.');
+                return;
+            }
+            const contrib = {
+                id: 'c-' + Date.now(),
+                date: this.dateVal,
+                amount: num,
+                note: this.noteVal.trim()
+            };
+            this.close();
+            this.onSave(contrib);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceTripItemModal extends obsidian.Modal {
+    constructor(app, plugin, trip, categoryId, item, onSave, onDelete) {
+        super(app);
+        this.app = app;
+        this.plugin = plugin;
+        this.trip = trip;
+        this.categoryId = categoryId;
+        this.item = item || null;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+
+        this.nameVal = item ? (item.name || '') : '';
+        this.catIdVal = categoryId || (trip.categories && trip.categories[0] ? trip.categories[0].id : 'transporte');
+        this.estimatedVal = item && item.estimated ? (item.estimated.toFixed(2).replace('.', ',')) : '';
+        this.paidVal = item ? !!item.paid : false;
+        this.actualVal = item && item.actual ? (item.actual.toFixed(2).replace('.', ',')) : '';
+        this.notesVal = item ? (item.notes || '') : '';
+    }
+
+    onOpen() {
+        const { contentEl, trip, item } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '480px';
+        this.modalEl.style.maxWidth = '94vw';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        const isEdit = !!item;
+        contentEl.createEl('h2', { text: isEdit ? 'Editar Item de Despesa' : 'Novo Item de Despesa na Viagem' });
+
+        new obsidian.Setting(contentEl)
+            .setName('Categoria da Despesa')
+            .addDropdown(d => {
+                (trip.categories || []).forEach(cat => {
+                    d.addOption(cat.id, `${cat.icon || '📁'} ${cat.name}`);
+                });
+                d.setValue(this.catIdVal).onChange(v => this.catIdVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Nome do Item / Despesa')
+            .setDesc('Ex: Passagens Aéreas Ida e Volta, Hotel 5 Noites, Almoços diários')
+            .addText(t => {
+                t.setValue(this.nameVal).onChange(v => this.nameVal = v);
+                t.inputEl.style.width = '100%';
+                window.setTimeout(() => t.inputEl.focus(), 50);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Valor Previsto / Orçado')
+            .setDesc(`Moeda: ${trip.currency || 'R$'}`)
+            .addText(t => {
+                t.setPlaceholder('Ex: 1.200,00');
+                t.setValue(this.estimatedVal).onChange(v => this.estimatedVal = v);
+            });
+
+        let actualSetting;
+
+        new obsidian.Setting(contentEl)
+            .setName('Já foi pago / reservado?')
+            .setDesc('Marque se já realizou o pagamento ou compra antecipada')
+            .addToggle(tg => {
+                tg.setValue(this.paidVal).onChange(v => {
+                    this.paidVal = v;
+                    if (actualSetting) {
+                        actualSetting.settingEl.style.display = v ? 'flex' : 'none';
+                    }
+                });
+            });
+
+        actualSetting = new obsidian.Setting(contentEl)
+            .setName('Valor Real Pago (Opcional)')
+            .setDesc('Preencha caso o valor final tenha sido diferente do previsto')
+            .addText(t => {
+                t.setPlaceholder('Ex: 1.150,00');
+                t.setValue(this.actualVal).onChange(v => this.actualVal = v);
+            });
+        actualSetting.settingEl.style.display = this.paidVal ? 'flex' : 'none';
+
+        new obsidian.Setting(contentEl)
+            .setName('Anotações / Código de Reserva')
+            .setDesc('Ex: Localizador LATAM, Link da reserva, etc.')
+            .addText(t => {
+                t.setValue(this.notesVal).onChange(v => this.notesVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+        footer.style.marginTop = '20px';
+
+        const leftFooter = footer.createDiv();
+        if (isEdit && this.onDelete) {
+            const delBtn = leftFooter.createEl('button', { cls: 'mod-warning', text: 'Excluir Item' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(item);
+            };
+        }
+
+        const rightFooter = footer.createDiv();
+        rightFooter.style.display = 'flex';
+        rightFooter.style.gap = '10px';
+
+        const cancelBtn = rightFooter.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightFooter.createEl('button', { cls: 'mod-cta', text: isEdit ? 'Salvar' : 'Adicionar Item' });
+        saveBtn.onclick = () => {
+            if (!this.nameVal.trim()) {
+                new obsidian.Notice('Por favor, informe a descrição do item.');
+                return;
+            }
+            const estNum = parseFinanceNumber(this.estimatedVal);
+            const actNum = this.actualVal ? parseFinanceNumber(this.actualVal) : null;
+            const updatedItem = {
+                id: item ? item.id : ('it-' + Date.now()),
+                name: this.nameVal.trim(),
+                estimated: estNum,
+                paid: this.paidVal,
+                actual: actNum != null ? actNum : (this.paidVal ? estNum : 0),
+                notes: this.notesVal.trim()
+            };
+            this.close();
+            this.onSave(this.catIdVal, updatedItem);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+class FinanceTripCategoryModal extends obsidian.Modal {
+    constructor(app, onSave) {
+        super(app);
+        this.app = app;
+        this.onSave = onSave;
+        this.nameVal = '';
+        this.iconVal = '🎒';
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '420px';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: 'Nova Categoria de Despesa' });
+
+        new obsidian.Setting(contentEl)
+            .setName('Ícone da Categoria')
+            .addDropdown(d => {
+                ['🎒', '🚗', '🎟️', '🍕', '☕', '🎁', '⛷️', '🏥', '🏖️', '🎪', '📸'].forEach(i => d.addOption(i, i));
+                d.setValue(this.iconVal).onChange(v => this.iconVal = v);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Nome da Categoria')
+            .setDesc('Ex: Roupas de Frio, Eventos & Shows, Fotos & Memórias')
+            .addText(t => {
+                t.setValue(this.nameVal).onChange(v => this.nameVal = v);
+                t.inputEl.style.width = '100%';
+                window.setTimeout(() => t.inputEl.focus(), 50);
+            });
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.gap = '10px';
+        footer.style.marginTop = '18px';
+
+        const cancelBtn = footer.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = footer.createEl('button', { cls: 'mod-cta', text: 'Criar Categoria' });
+        saveBtn.onclick = () => {
+            if (!this.nameVal.trim()) {
+                new obsidian.Notice('Por favor, informe o nome da categoria.');
+                return;
+            }
+            const cat = {
+                id: 'cat-' + Date.now(),
+                name: this.nameVal.trim(),
+                icon: this.iconVal,
+                description: '',
+                items: [],
+                isCustom: true
+            };
+            this.close();
+            this.onSave(cat);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+// ================================================================
 // HEALTH TRACKER CATALOG & MODALS
 // ================================================================
 
@@ -18513,7 +19012,8 @@ kanban-plugin: basic
         const mainSwitcher = finContainer.createDiv('kt-fin-main-switcher');
         const mainTabs = [
             { id: 'overview',  label: 'Lançamentos & Resumo' },
-            { id: 'analytics', label: 'Analise Financeira' }
+            { id: 'analytics', label: 'Analise Financeira' },
+            { id: 'trips',     label: '✈️ Planejamento de Viagem' }
         ];
 
         mainTabs.forEach(mt => {
@@ -18537,6 +19037,11 @@ kanban-plugin: basic
 
         if (this.financesMainViewTab === 'analytics') {
             this.renderFinancesAnalyticsView(finContainer, selYear, selMonth, monthData, curr);
+            return;
+        }
+
+        if (this.financesMainViewTab === 'trips') {
+            this.renderFinancesTripsView(finContainer, curr);
             return;
         }
 
@@ -18729,49 +19234,54 @@ kanban-plugin: basic
         const header = parent.createDiv('kt-fin-header-bar');
 
         // Year Selector Group
-        const yearGroup = header.createDiv('kt-fin-year-group');
-        
-        const prevYearBtn = yearGroup.createEl('button', { cls: 'kt-fin-nav-btn', text: '‹' });
-        prevYearBtn.title = 'Ano anterior';
-        prevYearBtn.onclick = async () => {
-            fin.selectedYear = year - 1;
-            await this.plugin.saveSettings();
-            this.render();
-        };
-
-        const yearLabel = yearGroup.createSpan({ cls: 'kt-fin-year-label', text: String(year) });
-
-        const nextYearBtn = yearGroup.createEl('button', { cls: 'kt-fin-nav-btn', text: '›' });
-        nextYearBtn.title = 'Próximo ano';
-        nextYearBtn.onclick = async () => {
-            fin.selectedYear = year + 1;
-            await this.plugin.saveSettings();
-            this.render();
-        };
-
-        // Month Selector Bar (Jan .. Dez)
-        const monthBar = header.createDiv('kt-fin-month-bar');
-        const monthAbbrs = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-        const now = new Date();
-
-        monthAbbrs.forEach((abbr, idx) => {
-            const mNum = idx + 1;
-            const isCurrentMonth = (mNum === (now.getMonth() + 1) && year === now.getFullYear());
-            const isSelected = (mNum === month);
-
-            const mBtn = monthBar.createEl('button', {
-                cls: `kt-fin-month-btn ${isSelected ? 'is-selected' : ''} ${isCurrentMonth ? 'is-current' : ''}`,
-                text: isCurrentMonth ? `${abbr} •` : abbr
-            });
-
-            mBtn.onclick = async () => {
-                if (fin.selectedMonth !== mNum) {
-                    fin.selectedMonth = mNum;
-                    await this.plugin.saveSettings();
-                    this.render();
-                }
+        if (this.financesMainViewTab === 'trips') {
+            const tripTitleGroup = header.createDiv('kt-fin-year-group');
+            tripTitleGroup.createSpan({ cls: 'kt-fin-year-label', text: '✈️ Roteiros & Viagens' });
+        } else {
+            const yearGroup = header.createDiv('kt-fin-year-group');
+            
+            const prevYearBtn = yearGroup.createEl('button', { cls: 'kt-fin-nav-btn', text: '‹' });
+            prevYearBtn.title = 'Ano anterior';
+            prevYearBtn.onclick = async () => {
+                fin.selectedYear = year - 1;
+                await this.plugin.saveSettings();
+                this.render();
             };
-        });
+
+            const yearLabel = yearGroup.createSpan({ cls: 'kt-fin-year-label', text: String(year) });
+
+            const nextYearBtn = yearGroup.createEl('button', { cls: 'kt-fin-nav-btn', text: '›' });
+            nextYearBtn.title = 'Próximo ano';
+            nextYearBtn.onclick = async () => {
+                fin.selectedYear = year + 1;
+                await this.plugin.saveSettings();
+                this.render();
+            };
+
+            // Month Selector Bar (Jan .. Dez)
+            const monthBar = header.createDiv('kt-fin-month-bar');
+            const monthAbbrs = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+            const now = new Date();
+
+            monthAbbrs.forEach((abbr, idx) => {
+                const mNum = idx + 1;
+                const isCurrentMonth = (mNum === (now.getMonth() + 1) && year === now.getFullYear());
+                const isSelected = (mNum === month);
+
+                const mBtn = monthBar.createEl('button', {
+                    cls: `kt-fin-month-btn ${isSelected ? 'is-selected' : ''} ${isCurrentMonth ? 'is-current' : ''}`,
+                    text: isCurrentMonth ? `${abbr} •` : abbr
+                });
+
+                mBtn.onclick = async () => {
+                    if (fin.selectedMonth !== mNum) {
+                        fin.selectedMonth = mNum;
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }
+                };
+            });
+        }
 
         // Actions Group
         const actionsGroup = header.createDiv('kt-fin-actions-group');
@@ -18794,18 +19304,20 @@ kanban-plugin: basic
             new obsidian.Notice(fin.hideValues ? '🙈 Valores financeiros ocultados (Modo Privacidade)' : '👁️ Valores financeiros visíveis');
         };
 
-        // Import Button
-        const importBtn = actionsGroup.createEl('button', {
-            cls: 'kt-fin-act-btn mod-cta',
-            text: '📥 Importar Planilha'
-        });
-        importBtn.title = 'Colar dados do Google Sheets ou carregar arquivos CSV';
-        importBtn.onclick = () => {
-            new FinanceImportModal(this.app, this.plugin, year, month, (res) => {
-                this.showUndoImportToast(res);
-                this.render();
-            }).open();
-        };
+        // Import Button (only for monthly overview/analytics)
+        if (this.financesMainViewTab !== 'trips') {
+            const importBtn = actionsGroup.createEl('button', {
+                cls: 'kt-fin-act-btn mod-cta',
+                text: '📥 Importar Planilha'
+            });
+            importBtn.title = 'Colar dados do Google Sheets ou carregar arquivos CSV';
+            importBtn.onclick = () => {
+                new FinanceImportModal(this.app, this.plugin, year, month, (res) => {
+                    this.showUndoImportToast(res);
+                    this.render();
+                }).open();
+            };
+        }
 
         // 3-Dots More Options Menu Button (⋯)
         const moreBtn = actionsGroup.createEl('button', {
@@ -21181,6 +21693,543 @@ kanban-plugin: basic
         const midGrid = viewWrap.createDiv('kt-fin-analytics-mid-grid');
         this.renderRecurringExpensesIntelligence(midGrid, year, month, curr);
         this.renderFutureInstallmentsTimeline(midGrid, year, month, curr);
+    }
+
+    renderFinancesTripsView(container, curr) {
+        const fin = this.plugin.settings.finances;
+        if (!fin) return;
+        if (!Array.isArray(fin.trips)) fin.trips = [];
+
+        const viewWrap = container.createDiv('kt-trip-view-wrapper');
+
+        // Scroll preservation for Trips View
+        if (this.savedFinancesTripsScrollTop) {
+            viewWrap.scrollTop = this.savedFinancesTripsScrollTop;
+        }
+        viewWrap.addEventListener('scroll', () => {
+            this.savedFinancesTripsScrollTop = viewWrap.scrollTop;
+        });
+
+        // 1. Empty State (No trips created yet)
+        if (fin.trips.length === 0) {
+            const empty = viewWrap.createDiv('kt-trip-empty-state');
+            empty.createDiv({ cls: 'kt-trip-empty-icon', text: '✈️ 🗺️ 🏖️' });
+            empty.createEl('h2', { cls: 'kt-trip-empty-title', text: 'Planejamento de Viagem' });
+            empty.createEl('p', {
+                cls: 'kt-trip-empty-desc',
+                text: 'Crie seu roteiro dos sonhos! Defina o destino, monte a previsão de despesas com transporte, hospedagem, alimentação e passeios, e acompanhe o dinheiro guardado através do termômetro vertical motivacional.'
+            });
+
+            const createFirstBtn = empty.createEl('button', {
+                cls: 'mod-cta kt-trip-empty-btn',
+                text: '✨ Criar Meu Primeiro Planejamento de Viagem'
+            });
+            createFirstBtn.onclick = () => {
+                new FinanceTripModal(this.app, this.plugin, null, async (newTrip) => {
+                    fin.trips.push(newTrip);
+                    fin.selectedTripId = newTrip.id;
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`🎉 Viagem "${newTrip.title}" criada com sucesso!`);
+                }).open();
+            };
+            return;
+        }
+
+        // 2. Identify Active Trip
+        let activeTrip = fin.trips.find(t => t.id === fin.selectedTripId);
+        if (!activeTrip) {
+            activeTrip = fin.trips[0];
+            fin.selectedTripId = activeTrip.id;
+        }
+
+        // Ensure trip structure
+        if (!Array.isArray(activeTrip.categories) || activeTrip.categories.length === 0) {
+            activeTrip.categories = getDefaultTripCategories();
+        }
+        if (!Array.isArray(activeTrip.contributions)) {
+            activeTrip.contributions = [];
+        }
+
+        const tripCurr = activeTrip.currency || curr || 'R$';
+
+        // 3. Metric Calculations
+        const totalEstimated = activeTrip.categories.reduce((acc, cat) => {
+            return acc + (cat.items || []).reduce((cAcc, it) => cAcc + (Number(it.estimated) || 0), 0);
+        }, 0);
+
+        const totalPaid = activeTrip.categories.reduce((acc, cat) => {
+            return acc + (cat.items || []).reduce((cAcc, it) => {
+                if (!it.paid) return cAcc;
+                const val = (it.actual != null && it.actual > 0) ? Number(it.actual) : (Number(it.estimated) || 0);
+                return cAcc + val;
+            }, 0);
+        }, 0);
+
+        const totalContributions = (activeTrip.contributions || []).reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
+        const totalSaved = totalContributions + (Number(activeTrip.savedAmount) || 0);
+
+        const targetBudget = (activeTrip.targetBudget && Number(activeTrip.targetBudget) > 0)
+            ? Number(activeTrip.targetBudget)
+            : (totalEstimated > 0 ? totalEstimated : 0);
+
+        const remainingToSave = Math.max(0, targetBudget - totalSaved);
+        const progressPct = targetBudget > 0 ? Math.min(100, Math.max(0, (totalSaved / targetBudget) * 100)) : 0;
+        const exactPct = targetBudget > 0 ? ((totalSaved / targetBudget) * 100).toFixed(1) : '0';
+
+        // Countdown & suggested savings
+        let daysLeft = null;
+        let countdownText = '';
+        if (activeTrip.startDate) {
+            const startD = new Date(activeTrip.startDate + 'T00:00:00');
+            const todayD = new Date();
+            todayD.setHours(0, 0, 0, 0);
+            const diffMs = startD.getTime() - todayD.getTime();
+            daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+            if (daysLeft > 1) countdownText = `⏳ Faltam ${daysLeft} dias!`;
+            else if (daysLeft === 1) countdownText = `⏳ É amanhã!`;
+            else if (daysLeft === 0) countdownText = `✈️ É hoje! Boa viagem!`;
+            else countdownText = `🏖️ Viagem em andamento / concluída`;
+        }
+
+        let monthlySuggested = 0;
+        if (daysLeft && daysLeft > 0 && remainingToSave > 0) {
+            const monthsLeft = Math.max(1, Math.round(daysLeft / 30));
+            monthlySuggested = remainingToSave / monthsLeft;
+        }
+
+        // 4. Trip Selection & Header Bar
+        const topBar = viewWrap.createDiv('kt-trip-top-bar');
+
+        const topBarLeft = topBar.createDiv('kt-trip-selector-wrap');
+
+        // Trip Selector Dropdown
+        const tripSelect = topBarLeft.createEl('select', { cls: 'kt-trip-select' });
+        fin.trips.forEach(t => {
+            const opt = tripSelect.createEl('option', {
+                value: t.id,
+                text: `${t.title} ${t.destination ? `(${t.destination})` : ''}`
+            });
+            if (t.id === activeTrip.id) opt.selected = true;
+        });
+        tripSelect.onchange = async () => {
+            fin.selectedTripId = tripSelect.value;
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        // Status pill
+        const statusMap = {
+            planning: { label: '🎒 Em Planejamento', cls: 'status-planning' },
+            confirmed: { label: '✈️ Confirmada', cls: 'status-confirmed' },
+            completed: { label: '🏖️ Concluída', cls: 'status-completed' }
+        };
+        const statusInfo = statusMap[activeTrip.status || 'planning'] || statusMap.planning;
+        const statusPill = topBarLeft.createDiv({ cls: `kt-trip-status-pill ${statusInfo.cls}`, text: statusInfo.label });
+        statusPill.title = 'Clique para alternar status da viagem';
+        statusPill.style.cursor = 'pointer';
+        statusPill.onclick = async () => {
+            const nextMap = { planning: 'confirmed', confirmed: 'completed', completed: 'planning' };
+            activeTrip.status = nextMap[activeTrip.status || 'planning'] || 'planning';
+            await this.plugin.saveSettings();
+            this.render();
+        };
+
+        // Destination & Date chips
+        if (activeTrip.destination) {
+            topBarLeft.createDiv({ cls: 'kt-trip-chip', text: `📍 ${activeTrip.destination}` });
+        }
+        if (activeTrip.startDate || activeTrip.endDate) {
+            const dateStr = [activeTrip.startDate, activeTrip.endDate].filter(Boolean).join(' → ');
+            topBarLeft.createDiv({ cls: 'kt-trip-chip', text: `📅 ${dateStr}` });
+        }
+        if (countdownText) {
+            topBarLeft.createDiv({ cls: 'kt-trip-countdown-pill', text: countdownText });
+        }
+
+        // Top Bar Right Actions
+        const topBarRight = topBar.createDiv('kt-trip-actions-wrap');
+
+        const newTripBtn = topBarRight.createEl('button', { cls: 'kt-fin-act-btn mod-cta', text: '+ Nova Viagem' });
+        newTripBtn.onclick = () => {
+            new FinanceTripModal(this.app, this.plugin, null, async (newT) => {
+                fin.trips.push(newT);
+                fin.selectedTripId = newT.id;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`Viagem "${newT.title}" criada!`);
+            }).open();
+        };
+
+        const editTripBtn = topBarRight.createEl('button', { cls: 'kt-fin-act-btn', text: '✏️ Editar Viagem' });
+        editTripBtn.onclick = () => {
+            new FinanceTripModal(this.app, this.plugin, activeTrip, async (updatedT) => {
+                const idx = fin.trips.findIndex(t => t.id === activeTrip.id);
+                if (idx !== -1) fin.trips[idx] = updatedT;
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice('Viagem atualizada com sucesso!');
+            }).open();
+        };
+
+        const delTripBtn = topBarRight.createEl('button', { cls: 'kt-fin-act-btn mod-warning', text: '🗑️ Excluir' });
+        delTripBtn.title = 'Excluir esta viagem';
+        delTripBtn.onclick = () => {
+            new FinanceConfirmModal(
+                this.app,
+                'Excluir Planejamento de Viagem',
+                `Tem certeza que deseja excluir permanentemente o planejamento da viagem "${activeTrip.title}"? Todos os itens de despesa e registros de poupança serão apagados.`,
+                async () => {
+                    fin.trips = fin.trips.filter(t => t.id !== activeTrip.id);
+                    fin.selectedTripId = fin.trips.length > 0 ? fin.trips[0].id : null;
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice('Viagem excluída.');
+                }
+            ).open();
+        };
+
+        // 5. Top KPI Cards (Clean, Executive & Minimalist with Progress Rings)
+        const kpisBar = viewWrap.createDiv('kt-trip-kpis-bar');
+
+        // KPI 1: Meta Total
+        const kpi1 = kpisBar.createDiv('kt-trip-kpi-card');
+        const kpi1Content = kpi1.createDiv('kt-trip-kpi-content');
+        kpi1Content.createDiv({ cls: 'kt-trip-kpi-lbl', text: 'Meta Total' });
+        kpi1Content.createDiv({ cls: 'kt-trip-kpi-val', text: this.formatFinCurrency(targetBudget, tripCurr) });
+        kpi1Content.createDiv({
+            cls: 'kt-trip-kpi-sub',
+            text: activeTrip.targetBudget ? 'Meta fixa definida' : `${activeTrip.categories.length} categorias orçadas`
+        });
+        this.renderKpiRing(kpi1, 100);
+
+        // KPI 2: Já Guardado
+        const kpi2 = kpisBar.createDiv('kt-trip-kpi-card');
+        const kpi2Content = kpi2.createDiv('kt-trip-kpi-content');
+        kpi2Content.createDiv({ cls: 'kt-trip-kpi-lbl', text: 'Já Guardado' });
+        const kpi2Val = kpi2Content.createDiv({ cls: 'kt-trip-kpi-val', text: `${this.formatFinCurrency(totalSaved, tripCurr)} (${exactPct}%)` });
+        kpi2Val.style.color = '#10b981';
+        kpi2Content.createDiv({
+            cls: 'kt-trip-kpi-sub',
+            text: `${exactPct}% da meta batida`
+        });
+        this.renderKpiRing(kpi2, progressPct);
+
+        // KPI 3: Já Pago
+        const kpi3 = kpisBar.createDiv('kt-trip-kpi-card');
+        const kpi3Content = kpi3.createDiv('kt-trip-kpi-content');
+        kpi3Content.createDiv({ cls: 'kt-trip-kpi-lbl', text: 'Já Pago' });
+        kpi3Content.createDiv({ cls: 'kt-trip-kpi-val', text: this.formatFinCurrency(totalPaid, tripCurr) });
+        const paidPct = targetBudget > 0 ? ((totalPaid / targetBudget) * 100).toFixed(1) : '0';
+        kpi3Content.createDiv({
+            cls: 'kt-trip-kpi-sub',
+            text: `${paidPct}% dos custos quitados`
+        });
+        this.renderKpiRing(kpi3, Math.min(100, Math.round(Number(paidPct))));
+
+        // KPI 4: Faltam Guardar
+        const kpi4 = kpisBar.createDiv('kt-trip-kpi-card');
+        const kpi4Content = kpi4.createDiv('kt-trip-kpi-content');
+        kpi4Content.createDiv({ cls: 'kt-trip-kpi-lbl', text: 'Faltam Guardar' });
+        const kpi4Val = kpi4Content.createDiv({ cls: 'kt-trip-kpi-val', text: this.formatFinCurrency(remainingToSave, tripCurr) });
+        const remainPct = targetBudget > 0 ? Math.max(0, 100 - progressPct) : 0;
+        kpi4Content.createDiv({ cls: 'kt-trip-kpi-sub', text: `${remainPct.toFixed(1)}% restante` });
+        this.renderKpiRing(kpi4, remainPct);
+
+        // KPI 5: Sugestão Mensal
+        const kpi5 = kpisBar.createDiv('kt-trip-kpi-card');
+        const kpi5Content = kpi5.createDiv('kt-trip-kpi-content');
+        kpi5Content.createDiv({ cls: 'kt-trip-kpi-lbl', text: 'Sugestão Mensal' });
+        if (monthlySuggested > 0) {
+            kpi5Content.createDiv({ cls: 'kt-trip-kpi-val', text: `${this.formatFinCurrency(monthlySuggested, tripCurr)}/mês` });
+            kpi5Content.createDiv({ cls: 'kt-trip-kpi-sub', text: 'até a viagem' });
+        } else if (remainingToSave === 0 && targetBudget > 0) {
+            kpi5Content.createDiv({ cls: 'kt-trip-kpi-val', text: 'Quitado' });
+            kpi5Content.createDiv({ cls: 'kt-trip-kpi-sub', text: 'Meta alcançada' });
+        } else {
+            kpi5Content.createDiv({ cls: 'kt-trip-kpi-val', text: daysLeft ? `${daysLeft} dias` : '—' });
+            kpi5Content.createDiv({ cls: 'kt-trip-kpi-sub', text: daysLeft ? 'para o embarque' : 'Defina data' });
+        }
+        this.renderKpiRing(kpi5, progressPct);
+
+        // 6. Split Dashboard: Left Column (Expenses) + Right Column (Minimalist Savings Tower)
+        const mainGrid = viewWrap.createDiv('kt-trip-main-grid');
+
+        // Render Left (Expenses) & Right (Minimalist Savings Tower) Columns
+        this.renderTripExpensesCol(mainGrid, activeTrip, tripCurr, totalEstimated, totalPaid);
+        this.renderTripThermometerCol(mainGrid, activeTrip, targetBudget, totalSaved, remainingToSave, progressPct, exactPct, tripCurr);
+    }
+
+    renderKpiRing(container, pct) {
+        const clampPct = Math.max(0, Math.min(100, Math.round(pct || 0)));
+        const ringWrap = container.createDiv('kt-trip-kpi-ring-wrap');
+        ringWrap.innerHTML = `
+            <svg class="kt-trip-kpi-ring" viewBox="0 0 36 36">
+                <path class="kt-trip-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path class="kt-trip-ring-val" stroke-dasharray="${clampPct}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            </svg>
+        `;
+    }
+
+    renderTripThermometerCol(container, trip, targetBudget, totalSaved, remainingToSave, progressPct, exactPct, tripCurr) {
+        const rightCol = container.createDiv('kt-trip-right-column');
+        const towerCard = rightCol.createDiv('kt-trip-tower-card kt-trip-thermometer-card');
+
+        // Header: Minimalist Title (Zero emojis, serious typography)
+        const hdr = towerCard.createDiv('kt-trip-tower-header');
+        hdr.createDiv({ cls: 'kt-trip-tower-title', text: 'Torre de Poupança' });
+
+        // Minimalist Vertical Milestone Track
+        const trackWrap = towerCard.createDiv('kt-trip-tower-track-wrap');
+
+        // Vertical Rail (Continuous background line & Emerald active fill)
+        const rail = trackWrap.createDiv('kt-trip-tower-rail');
+        const railFill = rail.createDiv('kt-trip-tower-rail-fill kt-trip-thermometer-fill');
+        railFill.style.height = `${progressPct}%`;
+
+        // Nodes Container (100% to 0%)
+        const nodesContainer = trackWrap.createDiv('kt-trip-tower-nodes kt-trip-calibrated-track');
+
+        // Milestones: Clean, Serious, Minimalist (No emojis)
+        const milestones = [
+            { pct: 100, label: '100%', title: 'Viagem Pronta' },
+            { pct: 75,  label: '75%',  title: 'Passagens & Hotel' },
+            { pct: 50,  label: '50%',  title: 'Metade da Meta' },
+            { pct: 25,  label: '25%',  title: 'Decolando' },
+            { pct: 0,   label: '0%',   title: 'Ponto de Partida' }
+        ];
+
+        milestones.forEach(m => {
+            const isReached = progressPct >= m.pct;
+            const nodeEl = nodesContainer.createDiv(`kt-trip-tower-node ${isReached ? 'is-reached' : ''}`);
+            nodeEl.style.bottom = `${m.pct}%`;
+
+            const metaWrap = nodeEl.createDiv('kt-trip-tower-node-meta');
+            metaWrap.createDiv({ cls: 'kt-trip-tower-node-pct', text: m.label });
+            metaWrap.createDiv({ cls: 'kt-trip-tower-node-title', text: m.title });
+
+            nodeEl.createDiv('kt-trip-tower-node-dot');
+        });
+
+        // Current Progress Pill (Placed on the right side of the active level, pointing directly at the rail)
+        const currPill = nodesContainer.createDiv('kt-trip-tower-curr-pill kt-trip-marker-pin');
+        currPill.style.bottom = `${progressPct}%`;
+        currPill.innerHTML = `<span>${exactPct}% — ${this.formatFinCurrency(totalSaved, tripCurr)}</span>`;
+
+        // Action Button: Minimalist Green Button (+ Guardar Dinheiro / Aporte)
+        const depositBtn = towerCard.createEl('button', {
+            cls: 'kt-trip-deposit-btn-minimal kt-trip-deposit-btn',
+            text: '+ Guardar Dinheiro / Aporte'
+        });
+        depositBtn.onclick = () => {
+            new FinanceTripContributionModal(this.app, this.plugin, trip, async (contrib) => {
+                if (!trip.contributions) trip.contributions = [];
+                trip.contributions.unshift(contrib);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`Aporte de ${this.formatFinCurrency(contrib.amount, tripCurr)} registrado na viagem.`);
+            }).open();
+        };
+
+        // Collapsible Contributions History (Minimalist, Zero Emojis)
+        const contribs = trip.contributions || [];
+        if (contribs.length > 0) {
+            const historyToggle = towerCard.createEl('button', {
+                cls: 'kt-trip-history-toggle',
+                text: `Histórico de Aportes (${contribs.length}) ${this.showTripContribHistory ? '▲' : '▼'}`
+            });
+            historyToggle.onclick = () => {
+                this.showTripContribHistory = !this.showTripContribHistory;
+                this.render();
+            };
+
+            if (this.showTripContribHistory) {
+                const historyList = towerCard.createDiv('kt-trip-history-list');
+                contribs.forEach((c, idx) => {
+                    const row = historyList.createDiv('kt-trip-contrib-item');
+                    const left = row.createDiv();
+                    left.innerHTML = `<strong>+ ${this.formatFinCurrency(c.amount, tripCurr)}</strong> <span style="opacity: 0.6; font-size: 10px; margin-left: 6px;">${c.date || ''}</span>`;
+                    if (c.note) {
+                        left.createDiv({ cls: 'kt-trip-contrib-note', text: c.note });
+                    }
+
+                    const delBtn = row.createEl('button', { cls: 'kt-trip-icon-btn', text: '✕' });
+                    delBtn.title = 'Remover este aporte';
+                    delBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        trip.contributions.splice(idx, 1);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    };
+                });
+            }
+        }
+    }
+
+    renderTripExpensesCol(container, trip, tripCurr, totalEstimated, totalPaid) {
+        const leftCol = container.createDiv('kt-trip-expenses-col');
+
+        // Header (Clean, minimalist, no emojis)
+        const hdr = leftCol.createDiv('kt-trip-expenses-hdr');
+        const hdrLeft = hdr.createDiv();
+        hdrLeft.createEl('h3', { cls: 'kt-trip-exp-title', text: 'Previsão & Divisão de Despesas' });
+        hdrLeft.createDiv({ cls: 'kt-trip-exp-sub', text: 'Estimativas por categoria e acompanhamento de itens já pagos' });
+
+        const addCatBtn = hdr.createEl('button', { cls: 'kt-fin-act-btn', text: '+ Nova Categoria' });
+        addCatBtn.onclick = () => {
+            new FinanceTripCategoryModal(this.app, async (newCat) => {
+                trip.categories.push(newCat);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`Categoria "${newCat.name}" adicionada.`);
+            }).open();
+        };
+
+        // Category Cards List - stacked vertically one under another, full width, spacious and not squished!
+        const catsList = leftCol.createDiv('kt-trip-cats-list');
+        trip.categories.forEach((cat, catIdx) => {
+            const card = catsList.createDiv('kt-trip-cat-card');
+
+            const catItems = cat.items || [];
+            const catEst = catItems.reduce((sum, it) => sum + (Number(it.estimated) || 0), 0);
+            const catPaid = catItems.reduce((sum, it) => {
+                if (!it.paid) return sum;
+                return sum + ((it.actual != null && it.actual > 0) ? Number(it.actual) : (Number(it.estimated) || 0));
+            }, 0);
+            const catPaidPct = catEst > 0 ? Math.min(100, Math.round((catPaid / catEst) * 100)) : 0;
+
+            // Category Card Header
+            const catHdr = card.createDiv('kt-trip-cat-hdr');
+
+            const catInfo = catHdr.createDiv('kt-trip-cat-info');
+            catInfo.createSpan({ cls: 'kt-trip-cat-icon', text: cat.icon || '📁' });
+            catInfo.createSpan({ cls: 'kt-trip-cat-title', text: cat.name });
+            catInfo.createSpan({ cls: 'kt-trip-cat-badge', text: `${catItems.length} ${catItems.length === 1 ? 'item' : 'itens'}` });
+
+            const catTotals = catHdr.createDiv('kt-trip-cat-totals');
+            catTotals.createSpan({ cls: 'kt-trip-cat-est-val', text: `Previsto: ${this.formatFinCurrency(catEst, tripCurr)}` });
+            if (catPaid > 0) {
+                const paidSpan = catTotals.createSpan({ cls: 'kt-trip-cat-paid-val', text: `Pago: ${this.formatFinCurrency(catPaid, tripCurr)} (${catPaidPct}%)` });
+                paidSpan.style.color = '#10b981';
+            }
+
+            const addItemBtn = catTotals.createEl('button', { cls: 'kt-fin-act-btn mod-cta', text: '+ Item' });
+            addItemBtn.title = `Adicionar despesa prevista em ${cat.name}`;
+            addItemBtn.onclick = () => {
+                new FinanceTripItemModal(this.app, this.plugin, trip, cat.id, null, async (targetCatId, newItem) => {
+                    const targetCat = trip.categories.find(c => c.id === targetCatId) || cat;
+                    if (!targetCat.items) targetCat.items = [];
+                    targetCat.items.push(newItem);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+
+            if (cat.isCustom && catItems.length === 0) {
+                const delCatBtn = catTotals.createEl('button', { cls: 'kt-trip-icon-btn', text: '🗑️' });
+                delCatBtn.title = 'Excluir esta categoria personalizada';
+                delCatBtn.onclick = async () => {
+                    trip.categories.splice(catIdx, 1);
+                    await this.plugin.saveSettings();
+                    this.render();
+                };
+            }
+
+            // Progress bar
+            const progWrap = card.createDiv('kt-trip-progress-bar');
+            const progFill = progWrap.createDiv('kt-trip-progress-fill');
+            progFill.style.width = `${catPaidPct}%`;
+
+            // Items List
+            const itemsTable = card.createDiv('kt-trip-items-table');
+
+            if (catItems.length === 0) {
+                const emptyHint = itemsTable.createDiv('kt-trip-item-empty');
+                emptyHint.setText(cat.description ? `${cat.description}. Clique em "+ Item" para orçar.` : 'Nenhum item nesta categoria. Clique em "+ Item" para adicionar.');
+            } else {
+                catItems.forEach((it, itIdx) => {
+                    const row = itemsTable.createDiv(`kt-trip-item-row ${it.paid ? 'is-paid' : ''}`);
+
+                    // Checkbox Já Pago?
+                    const cb = row.createEl('input', { cls: 'kt-trip-item-cb', type: 'checkbox' });
+                    cb.checked = !!it.paid;
+                    cb.title = it.paid ? 'Marcado como pago/reservado (clique para desmarcar)' : 'Marcar como pago/reservado';
+                    cb.onchange = async () => {
+                        it.paid = cb.checked;
+                        if (it.paid && (!it.actual || it.actual === 0)) {
+                            it.actual = it.estimated;
+                        }
+                        await this.plugin.saveSettings();
+                        this.render();
+                    };
+
+                    // Item info
+                    const mainInfo = row.createDiv('kt-trip-item-main');
+                    mainInfo.createDiv({ cls: 'kt-trip-item-name', text: it.name });
+                    if (it.notes) {
+                        mainInfo.createDiv({ cls: 'kt-trip-item-note', text: it.notes });
+                    }
+
+                    // Values
+                    const valWrap = row.createDiv('kt-trip-item-values');
+                    valWrap.createSpan({ cls: 'kt-trip-val-est', text: `Previsto: ${this.formatFinCurrency(it.estimated, tripCurr)}` });
+
+                    if (it.paid) {
+                        const paidVal = (it.actual != null && it.actual > 0) ? it.actual : it.estimated;
+                        valWrap.createSpan({ cls: 'kt-trip-badge-paid', text: `✓ Pago: ${this.formatFinCurrency(paidVal, tripCurr)}` });
+                    }
+
+                    // Actions
+                    const actions = row.createDiv('kt-trip-item-actions');
+
+                    const editBtn = actions.createEl('button', { cls: 'kt-trip-icon-btn', text: '✏️' });
+                    editBtn.title = 'Editar item';
+                    editBtn.onclick = () => {
+                        new FinanceTripItemModal(this.app, this.plugin, trip, cat.id, it, async (targetCatId, updatedIt) => {
+                            if (targetCatId !== cat.id) {
+                                cat.items.splice(itIdx, 1);
+                                const newCat = trip.categories.find(c => c.id === targetCatId) || cat;
+                                if (!newCat.items) newCat.items = [];
+                                newCat.items.push(updatedIt);
+                            } else {
+                                cat.items[itIdx] = updatedIt;
+                            }
+                            await this.plugin.saveSettings();
+                            this.render();
+                        }, async () => {
+                            cat.items.splice(itIdx, 1);
+                            await this.plugin.saveSettings();
+                            this.render();
+                        }).open();
+                    };
+
+                    const delBtn = actions.createEl('button', { cls: 'kt-trip-icon-btn', text: '🗑️' });
+                    delBtn.title = 'Excluir item';
+                    delBtn.onclick = async () => {
+                        cat.items.splice(itIdx, 1);
+                        await this.plugin.saveSettings();
+                        this.render();
+                    };
+                });
+            }
+        });
+
+        // Total Summary Card
+        const summaryCard = leftCol.createDiv('kt-trip-summary-bar');
+        summaryCard.innerHTML = `
+            <div class="kt-trip-sum-item">
+                <span class="kt-trip-sum-lbl">Total Previsto:</span>
+                <span class="kt-trip-sum-val">${this.formatFinCurrency(totalEstimated, tripCurr)}</span>
+            </div>
+            <div class="kt-trip-sum-item">
+                <span class="kt-trip-sum-lbl">Total Já Quitado:</span>
+                <span class="kt-trip-sum-val" style="color: #10b981;">${this.formatFinCurrency(totalPaid, tripCurr)}</span>
+            </div>
+            <div class="kt-trip-sum-item">
+                <span class="kt-trip-sum-lbl">Saldo a Pagar na Viagem:</span>
+                <span class="kt-trip-sum-val" style="color: #38bdf8;">${this.formatFinCurrency(Math.max(0, totalEstimated - totalPaid), tripCurr)}</span>
+            </div>
+        `;
     }
 
     renderFinancesBudgetSummary(parent, year, month, monthData, curr, initialBal, finalBal, monthSavings, savingsPct, totalExpReal, totalIncReal) {
@@ -27931,7 +28980,9 @@ const DEFAULT_SETTINGS = {
             'Juros',
             'Outros'
         ],
-        months: {}
+        months: {},
+        trips: [],
+        selectedTripId: null
     },
     health: {
         selectedProfileId: 'profile-me',
@@ -28423,6 +29474,9 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
         }
         if (!this.settings.finances.incomeCategories || this.settings.finances.incomeCategories.length === 0) {
             this.settings.finances.incomeCategories = DEFAULT_SETTINGS.finances.incomeCategories.slice();
+        }
+        if (!Array.isArray(this.settings.finances.trips)) {
+            this.settings.finances.trips = [];
         }
         if (!this.settings.health) {
             this.settings.health = Object.assign({}, DEFAULT_SETTINGS.health);
