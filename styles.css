@@ -978,57 +978,174 @@ body.kt-is-resizing * {
     word-break: break-word;
 }
 
-/* Subtasks in Kanban Card */
-.kt-card-subtasks {
-    margin: 3px 0 2px;
+/* Subtasks in Kanban Card - Jira Style */
+.kt-card-subtasks,
+.kt-jira-subtasks {
+    margin: 6px 0 4px;
+    padding-top: 5px;
+    border-top: 1px dashed var(--background-modifier-border);
     display: flex;
     flex-direction: column;
-    gap: 2.5px;
+    gap: 4px;
+}
+
+.kt-subtask-prog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2px;
 }
 
 .kt-subtask-progress {
     font-size: 10px;
-    color: var(--text-faint);
-    font-weight: 500;
-    margin-bottom: 1px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 0;
+}
+
+.kt-subtask-progressbar {
+    height: 4px;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.kt-subtask-progress-fill {
+    height: 100%;
+    background: var(--interactive-accent, #6366f1);
+    border-radius: 2px;
+    transition: width 0.25s ease-out, background-color 0.25s ease-out;
+}
+
+.kt-subtask-progress-fill.is-all-done {
+    background: #10b981 !important;
 }
 
 .kt-subtask-items {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 3px;
     padding-left: 1px;
 }
 
 .kt-subtask-item {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 6px;
     font-size: 11.5px;
     color: var(--text-muted);
     line-height: 1.35;
+    padding: 1px 0;
+}
+
+.kt-subtask-item.is-completed .kt-subtask-label {
+    text-decoration: line-through;
+    color: var(--text-faint);
+    opacity: 0.65;
+}
+
+.kt-subtask-item.is-completed .kt-subtask-chk {
+    color: #10b981;
+    font-weight: 700;
 }
 
 .kt-subtask-chk {
     cursor: pointer;
     font-size: 11px;
-    line-height: 1.3;
+    line-height: 1;
     color: var(--text-faint);
-    transition: color 0.12s;
+    transition: all 0.12s ease;
     user-select: none;
+    flex-shrink: 0;
 }
+
 .kt-subtask-chk:hover {
     color: var(--interactive-accent);
+    transform: scale(1.15);
 }
 
 .kt-subtask-label {
     flex: 1;
+    min-width: 0;
+    word-break: break-word;
 }
 
 .kt-subtask-label.is-completed {
     text-decoration: line-through;
     color: var(--text-faint);
-    opacity: 0.6;
+    opacity: 0.65;
+}
+
+/* Badges for Subtasks in Kanban Card */
+.kt-subtask-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.kt-subtask-date-badge,
+.kt-subtask-est-badge {
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.kt-subtask-date-badge {
+    color: #60a5fa;
+    background: rgba(96, 165, 250, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+}
+
+.kt-subtask-est-badge {
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.12);
+    border: 1px solid rgba(167, 139, 250, 0.25);
+}
+
+/* Inline Quick Adder */
+.kt-subtask-quick-add {
+    margin-top: 3px;
+    display: flex;
+    align-items: center;
+}
+
+.kt-subtask-add-btn {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-faint);
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    transition: color 0.12s ease, background 0.12s ease;
+    user-select: none;
+}
+
+.kt-subtask-add-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-subtask-quick-input {
+    width: 100%;
+    font-size: 11px !important;
+    padding: 2px 6px !important;
+    height: 24px !important;
+    border-radius: 4px !important;
+    background: var(--background-primary) !important;
+    border: 1px solid var(--interactive-accent) !important;
+    color: var(--text-normal) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 1px var(--interactive-accent) !important;
 }
 
 /* Bullet Points in Kanban Card (Distinct from checkboxes) */
@@ -1861,6 +1978,161 @@ body.kt-is-card-dragging .kt-gantt-section {
     margin-bottom: 12px;
 }
 
+/* ================================================================
+   TIMEBLOCKING SIDEBAR NESTED SUBTASKS
+   ================================================================ */
+
+.kt-sb-subtasks-group {
+    margin-top: 5px;
+    padding-top: 4px;
+    border-top: 1px dashed var(--background-modifier-border);
+}
+
+.kt-sb-subtasks-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-faint);
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: color 0.12s ease, background 0.12s ease;
+}
+
+.kt-sb-subtasks-toggle:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-sb-subtasks-arrow,
+.kt-sb-subtask-arrow {
+    font-size: 8.5px;
+    width: 10px;
+    display: inline-block;
+    color: var(--text-muted);
+}
+
+.kt-sb-subtasks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 4px;
+    padding-left: 6px;
+    border-left: 2px solid var(--background-modifier-border);
+}
+
+.kt-sb-subtask-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 6px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    cursor: grab;
+    transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+    user-select: none;
+}
+
+.kt-sb-subtask-item:active {
+    cursor: grabbing;
+}
+
+.kt-sb-subtask-item:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+    transform: translateX(2px);
+}
+
+.kt-sb-subtask-item.is-completed {
+    opacity: 0.6;
+}
+
+.kt-sb-subtask-item.is-completed .kt-sb-subtask-title {
+    text-decoration: line-through;
+    color: var(--text-faint);
+}
+
+.kt-sb-subtask-item.is-completed .kt-sb-subtask-chk {
+    color: #10b981;
+    font-weight: 700;
+}
+
+.kt-sb-subtask-chk {
+    cursor: pointer;
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--text-muted);
+    transition: all 0.12s ease;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.kt-sb-subtask-chk:hover {
+    color: var(--interactive-accent);
+    transform: scale(1.15);
+}
+
+.kt-sb-subtask-title {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-normal);
+    line-height: 1.25;
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-sb-subtask-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.kt-sb-subtask-time-badge,
+.kt-sb-subtask-date-badge,
+.kt-sb-subtask-unalloc-badge,
+.kt-sb-subtask-est-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 0.5px 4px;
+    border-radius: 3px;
+    line-height: 1.2;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.kt-sb-subtask-time-badge {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.kt-sb-subtask-date-badge {
+    color: #60a5fa;
+    background: rgba(96, 165, 250, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+}
+
+.kt-sb-subtask-unalloc-badge {
+    color: var(--text-faint);
+    background: var(--background-secondary-alt);
+    border: 1px dashed var(--background-modifier-border);
+}
+
+.kt-sb-subtask-est-badge {
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.12);
+    border: 1px solid rgba(167, 139, 250, 0.25);
+}
+
 
 /* Day grid (main area) */
 .kt-tb-main {
@@ -2289,6 +2561,32 @@ body.kt-is-card-dragging .kt-gantt-section {
     text-decoration: line-through;
     color: var(--text-faint);
     opacity: 0.65;
+}
+
+/* Subtask Card in Timeblocking Grid */
+.kt-tb-card.kt-tb-subtask-card {
+    border-left-style: double !important;
+    border-left-width: 4px !important;
+}
+
+.kt-tb-parent-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--background-modifier-hover);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    padding: 0.5px 5px;
+    margin-bottom: 3px;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
 }
 
 /* ================================================================
@@ -3552,6 +3850,90 @@ body.kt-is-tb-resizing * {
 .kt-proj-task-item.is-excluded .kt-proj-task-time {
     text-decoration: line-through;
     opacity: 0.6;
+}
+
+.kt-proj-task-item.is-deleted {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 6px;
+    padding: 3px 6px;
+    margin-bottom: 3px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.kt-proj-task-item.is-deleted:hover {
+    background: rgba(239, 68, 68, 0.14);
+    border-color: rgba(239, 68, 68, 0.6);
+}
+
+.kt-proj-task-item.is-deleted .kt-proj-task-title {
+    color: #ef4444;
+    font-weight: 500;
+}
+
+.kt-proj-task-deleted-badge {
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    padding: 1px 5px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.kt-proj-task-remove-btn {
+    background: transparent;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+    border-radius: 3px;
+    font-size: 11px;
+    padding: 1px 5px;
+    cursor: pointer;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+}
+
+.kt-proj-task-remove-btn:hover {
+    background: #ef4444;
+    color: #ffffff;
+    border-color: #ef4444;
+    transform: scale(1.1);
+}
+
+.kt-report-item-deleted-tag {
+    font-size: 10px;
+    font-weight: 600;
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    padding: 0 4px;
+    border-radius: 3px;
+    margin-left: 6px;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.kt-btn-snap-worked {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    font-size: 11.5px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+    font-weight: 500;
+    transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+.kt-btn-snap-worked:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
 }
 
 .kt-proj-empty {
@@ -7131,6 +7513,169 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
 }
 
 .kt-tb-week-hd-cell.kt-is-weekend {
+    color: var(--text-faint);
+}
+
+/* All-Day / Lembretes & Eventos Row in Week Timeblocking */
+.kt-tb-week-allday-row {
+    display: flex;
+    border-bottom: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    z-index: 9;
+    flex-shrink: 0;
+    min-height: 32px;
+}
+
+.kt-tb-allday-spacer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.kt-tb-allday-spacer-lbl {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+.kt-tb-week-allday-wrap {
+    display: grid;
+    flex: 1;
+}
+
+.kt-tb-week-allday-cell {
+    border-right: 1px solid var(--background-modifier-border);
+    padding: 4px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 30px;
+    max-height: 96px;
+    overflow-y: auto;
+    transition: background 0.12s ease;
+}
+
+.kt-tb-week-allday-cell:last-child {
+    border-right: none;
+}
+
+.kt-tb-week-allday-cell.kt-is-today {
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.04);
+}
+
+.kt-tb-week-allday-cell.kt-selected {
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.08);
+}
+
+.kt-tb-week-allday-cell.kt-is-empty:hover {
+    background: var(--background-modifier-hover);
+    cursor: pointer;
+}
+
+/* Individual All-Day Chip */
+.kt-tb-allday-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text-normal);
+    background: rgba(255, 255, 255, 0.06);
+    border-left: 3px solid var(--interactive-accent);
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.1s ease, filter 0.1s ease;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.kt-tb-allday-chip:hover {
+    filter: brightness(1.15);
+    transform: translateY(-1px);
+}
+
+.kt-tb-chip-icon {
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.kt-tb-chip-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kt-tb-cal-evt-chip {
+    background: rgba(236, 72, 153, 0.12);
+}
+
+.kt-tb-remote-evt-chip {
+    background: rgba(14, 165, 233, 0.12);
+    border-left: 3px solid #0ea5e9;
+}
+
+.kt-tb-card-chip {
+    background: rgba(var(--interactive-accent-rgb, 99, 102, 241), 0.12);
+}
+
+/* Single Day All-Day Banner */
+.kt-tb-single-allday-banner {
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding: 8px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.kt-tb-single-allday-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.kt-tb-single-allday-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+.kt-tb-add-allday-btn {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: transparent;
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.kt-tb-add-allday-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+    border-color: var(--interactive-accent);
+}
+
+.kt-tb-single-allday-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.kt-tb-allday-empty-hint {
+    font-size: 12px;
+    font-style: italic;
     color: var(--text-faint);
 }
 
@@ -13011,5 +13556,1445 @@ body.kt-is-dock-dragging .kt-dock-drop-overlay {
     color: var(--text-normal);
 }
 
+/* ================================================================
+   TRIP PLANNING: SUBTABS & INTERACTIVE WORLD MAP & ITINERARY
+   ================================================================ */
+
+/* Subtabs bar */
+.kt-trip-subtabs-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 8px;
+}
+
+.kt-trip-subtab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.kt-trip-subtab-btn:hover {
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-trip-subtab-btn.is-active {
+    color: var(--text-normal);
+    background: var(--background-primary);
+    border-color: #10b981;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+    font-weight: 700;
+}
+
+/* Map & Itinerary Layout */
+.kt-trip-map-layout {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    margin-top: 4px;
+    align-items: stretch;
+}
+
+.kt-trip-map-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Map Toolbar */
+.kt-trip-map-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.kt-trip-map-search-wrap {
+    position: relative;
+    flex: 1;
+    max-width: 520px;
+}
+
+.kt-trip-map-search-input {
+    width: 100%;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 13px;
+    color: var(--text-normal);
+    outline: none;
+    transition: all 0.15s ease;
+}
+
+.kt-trip-map-search-input:focus {
+    border-color: #10b981;
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+}
+
+.kt-trip-map-search-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 1050;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.kt-trip-search-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--background-modifier-border);
+    transition: background 0.15s ease;
+}
+
+.kt-trip-search-item:last-child {
+    border-bottom: none;
+}
+
+.kt-trip-search-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-trip-search-item.is-loading,
+.kt-trip-search-item.is-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+    cursor: default;
+}
+
+.kt-trip-search-item-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.kt-trip-search-item-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-trip-map-toolbar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.kt-trip-map-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-trip-map-btn:hover {
+    background: var(--background-modifier-hover);
+}
+
+.kt-trip-map-btn.mod-cta {
+    background: #10b981;
+    color: #ffffff;
+    border-color: #059669;
+}
+
+.kt-trip-map-btn.mod-cta:hover {
+    background: #059669;
+}
+
+.kt-trip-map-select {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    cursor: pointer;
+    outline: none;
+    transition: all 0.15s ease;
+}
+
+.kt-trip-map-select:hover,
+.kt-trip-map-select:focus {
+    border-color: #10b981;
+    background: var(--background-modifier-hover);
+}
+
+/* ================================================================
+   OFFICIAL LEAFLET.JS CORE STYLES
+   ================================================================ */
+
+/* required styles */
+
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	}
+.leaflet-container {
+	overflow: hidden;
+	}
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	-webkit-user-select: none;
+	   -moz-user-select: none;
+	        user-select: none;
+	  -webkit-user-drag: none;
+	}
+/* Prevents IE11 from highlighting tiles in blue */
+.leaflet-tile::selection {
+	background: transparent;
+}
+/* Safari renders non-retina tile on retina better with this, but Chrome is worse */
+.leaflet-safari .leaflet-tile {
+	image-rendering: -webkit-optimize-contrast;
+	}
+/* hack that prevents hw layers "stretching" when loading new tiles */
+.leaflet-safari .leaflet-tile-container {
+	width: 1600px;
+	height: 1600px;
+	-webkit-transform-origin: 0 0;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	display: block;
+	}
+/* .leaflet-container svg: reset svg max-width decleration shipped in Joomla! (joomla.org) 3.x */
+/* .leaflet-container img: map is broken in FF if you have max-width: 100% on tiles */
+.leaflet-container .leaflet-overlay-pane svg {
+	max-width: none !important;
+	max-height: none !important;
+	}
+.leaflet-container .leaflet-marker-pane img,
+.leaflet-container .leaflet-shadow-pane img,
+.leaflet-container .leaflet-tile-pane img,
+.leaflet-container img.leaflet-image-layer,
+.leaflet-container .leaflet-tile {
+	max-width: none !important;
+	max-height: none !important;
+	width: auto;
+	padding: 0;
+	}
+
+.leaflet-container img.leaflet-tile {
+	/* See: https://bugs.chromium.org/p/chromium/issues/detail?id=600120 */
+	mix-blend-mode: plus-lighter;
+}
+
+.leaflet-container.leaflet-touch-zoom {
+	-ms-touch-action: pan-x pan-y;
+	touch-action: pan-x pan-y;
+	}
+.leaflet-container.leaflet-touch-drag {
+	-ms-touch-action: pinch-zoom;
+	/* Fallback for FF which doesn't support pinch-zoom */
+	touch-action: none;
+	touch-action: pinch-zoom;
+}
+.leaflet-container.leaflet-touch-drag.leaflet-touch-zoom {
+	-ms-touch-action: none;
+	touch-action: none;
+}
+.leaflet-container {
+	-webkit-tap-highlight-color: transparent;
+}
+.leaflet-container a {
+	-webkit-tap-highlight-color: rgba(51, 181, 229, 0.4);
+}
+.leaflet-tile {
+	filter: inherit;
+	visibility: hidden;
+	}
+.leaflet-tile-loaded {
+	visibility: inherit;
+	}
+.leaflet-zoom-box {
+	width: 0;
+	height: 0;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	z-index: 800;
+	}
+/* workaround for https://bugzilla.mozilla.org/show_bug.cgi?id=888319 */
+.leaflet-overlay-pane svg {
+	-moz-user-select: none;
+	}
+
+.leaflet-pane         { z-index: 400; }
+
+.leaflet-tile-pane    { z-index: 200; }
+.leaflet-overlay-pane { z-index: 400; }
+.leaflet-shadow-pane  { z-index: 500; }
+.leaflet-marker-pane  { z-index: 600; }
+.leaflet-tooltip-pane   { z-index: 650; }
+.leaflet-popup-pane   { z-index: 700; }
+
+.leaflet-map-pane canvas { z-index: 100; }
+.leaflet-map-pane svg    { z-index: 200; }
+
+.leaflet-vml-shape {
+	width: 1px;
+	height: 1px;
+	}
+.lvml {
+	behavior: url(#default#VML);
+	display: inline-block;
+	position: absolute;
+	}
 
 
+/* control positioning */
+
+.leaflet-control {
+	position: relative;
+	z-index: 800;
+	pointer-events: visiblePainted; /* IE 9-10 doesn't have auto */
+	pointer-events: auto;
+	}
+.leaflet-top,
+.leaflet-bottom {
+	position: absolute;
+	z-index: 1000;
+	pointer-events: none;
+	}
+.leaflet-top {
+	top: 0;
+	}
+.leaflet-right {
+	right: 0;
+	}
+.leaflet-bottom {
+	bottom: 0;
+	}
+.leaflet-left {
+	left: 0;
+	}
+.leaflet-control {
+	float: left;
+	clear: both;
+	}
+.leaflet-right .leaflet-control {
+	float: right;
+	}
+.leaflet-top .leaflet-control {
+	margin-top: 10px;
+	}
+.leaflet-bottom .leaflet-control {
+	margin-bottom: 10px;
+	}
+.leaflet-left .leaflet-control {
+	margin-left: 10px;
+	}
+.leaflet-right .leaflet-control {
+	margin-right: 10px;
+	}
+
+
+/* zoom and fade animations */
+
+.leaflet-fade-anim .leaflet-popup {
+	opacity: 0;
+	-webkit-transition: opacity 0.2s linear;
+	   -moz-transition: opacity 0.2s linear;
+	        transition: opacity 0.2s linear;
+	}
+.leaflet-fade-anim .leaflet-map-pane .leaflet-popup {
+	opacity: 1;
+	}
+.leaflet-zoom-animated {
+	-webkit-transform-origin: 0 0;
+	    -ms-transform-origin: 0 0;
+	        transform-origin: 0 0;
+	}
+svg.leaflet-zoom-animated {
+	will-change: transform;
+}
+
+.leaflet-zoom-anim .leaflet-zoom-animated {
+	-webkit-transition: -webkit-transform 0.25s cubic-bezier(0,0,0.25,1);
+	   -moz-transition:    -moz-transform 0.25s cubic-bezier(0,0,0.25,1);
+	        transition:         transform 0.25s cubic-bezier(0,0,0.25,1);
+	}
+.leaflet-zoom-anim .leaflet-tile,
+.leaflet-pan-anim .leaflet-tile {
+	-webkit-transition: none;
+	   -moz-transition: none;
+	        transition: none;
+	}
+
+.leaflet-zoom-anim .leaflet-zoom-hide {
+	visibility: hidden;
+	}
+
+
+/* cursors */
+
+.leaflet-interactive {
+	cursor: pointer;
+	}
+.leaflet-grab {
+	cursor: -webkit-grab;
+	cursor:    -moz-grab;
+	cursor:         grab;
+	}
+.leaflet-crosshair,
+.leaflet-crosshair .leaflet-interactive {
+	cursor: crosshair;
+	}
+.leaflet-popup-pane,
+.leaflet-control {
+	cursor: auto;
+	}
+.leaflet-dragging .leaflet-grab,
+.leaflet-dragging .leaflet-grab .leaflet-interactive,
+.leaflet-dragging .leaflet-marker-draggable {
+	cursor: move;
+	cursor: -webkit-grabbing;
+	cursor:    -moz-grabbing;
+	cursor:         grabbing;
+	}
+
+/* marker & overlays interactivity */
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-image-layer,
+.leaflet-pane > svg path,
+.leaflet-tile-container {
+	pointer-events: none;
+	}
+
+.leaflet-marker-icon.leaflet-interactive,
+.leaflet-image-layer.leaflet-interactive,
+.leaflet-pane > svg path.leaflet-interactive,
+svg.leaflet-image-layer.leaflet-interactive path {
+	pointer-events: visiblePainted; /* IE 9-10 doesn't have auto */
+	pointer-events: auto;
+	}
+
+/* visual tweaks */
+
+.leaflet-container {
+	background: #ddd;
+	outline-offset: 1px;
+	}
+.leaflet-container a {
+	color: #0078A8;
+	}
+.leaflet-zoom-box {
+	border: 2px dotted #38f;
+	background: rgba(255,255,255,0.5);
+	}
+
+
+/* general typography */
+.leaflet-container {
+	font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+	font-size: 12px;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	}
+
+
+/* general toolbar styles */
+
+.leaflet-bar {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.65);
+	border-radius: 4px;
+	}
+.leaflet-bar a {
+	background-color: #fff;
+	border-bottom: 1px solid #ccc;
+	width: 26px;
+	height: 26px;
+	line-height: 26px;
+	display: block;
+	text-align: center;
+	text-decoration: none;
+	color: black;
+	}
+.leaflet-bar a,
+.leaflet-control-layers-toggle {
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	display: block;
+	}
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+	background-color: #f4f4f4;
+	}
+.leaflet-bar a:first-child {
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+	}
+.leaflet-bar a:last-child {
+	border-bottom-left-radius: 4px;
+	border-bottom-right-radius: 4px;
+	border-bottom: none;
+	}
+.leaflet-bar a.leaflet-disabled {
+	cursor: default;
+	background-color: #f4f4f4;
+	color: #bbb;
+	}
+
+.leaflet-touch .leaflet-bar a {
+	width: 30px;
+	height: 30px;
+	line-height: 30px;
+	}
+.leaflet-touch .leaflet-bar a:first-child {
+	border-top-left-radius: 2px;
+	border-top-right-radius: 2px;
+	}
+.leaflet-touch .leaflet-bar a:last-child {
+	border-bottom-left-radius: 2px;
+	border-bottom-right-radius: 2px;
+	}
+
+/* zoom control */
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+	font: bold 18px 'Lucida Console', Monaco, monospace;
+	text-indent: 1px;
+	}
+
+.leaflet-touch .leaflet-control-zoom-in, .leaflet-touch .leaflet-control-zoom-out  {
+	font-size: 22px;
+	}
+
+
+/* layers control */
+
+.leaflet-control-layers {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+	background: #fff;
+	border-radius: 5px;
+	}
+.leaflet-control-layers-toggle {
+	background-image: none;
+	width: 36px;
+	height: 36px;
+	}
+.leaflet-retina .leaflet-control-layers-toggle {
+	background-image: none;
+	background-size: 26px 26px;
+	}
+.leaflet-touch .leaflet-control-layers-toggle {
+	width: 44px;
+	height: 44px;
+	}
+.leaflet-control-layers .leaflet-control-layers-list,
+.leaflet-control-layers-expanded .leaflet-control-layers-toggle {
+	display: none;
+	}
+.leaflet-control-layers-expanded .leaflet-control-layers-list {
+	display: block;
+	position: relative;
+	}
+.leaflet-control-layers-expanded {
+	padding: 6px 10px 6px 6px;
+	color: #333;
+	background: #fff;
+	}
+.leaflet-control-layers-scrollbar {
+	overflow-y: scroll;
+	overflow-x: hidden;
+	padding-right: 5px;
+	}
+.leaflet-control-layers-selector {
+	margin-top: 2px;
+	position: relative;
+	top: 1px;
+	}
+.leaflet-control-layers label {
+	display: block;
+	font-size: 13px;
+	font-size: 1.08333em;
+	}
+.leaflet-control-layers-separator {
+	height: 0;
+	border-top: 1px solid #ddd;
+	margin: 5px -10px 5px -6px;
+	}
+
+/* Default icon URLs */
+.leaflet-default-icon-path { /* used only in path-guessing heuristic, see L.Icon.Default */
+	background-image: none;
+	}
+
+
+/* attribution and scale controls */
+
+.leaflet-container .leaflet-control-attribution {
+	background: #fff;
+	background: rgba(255, 255, 255, 0.8);
+	margin: 0;
+	}
+.leaflet-control-attribution,
+.leaflet-control-scale-line {
+	padding: 0 5px;
+	color: #333;
+	line-height: 1.4;
+	}
+.leaflet-control-attribution a {
+	text-decoration: none;
+	}
+.leaflet-control-attribution a:hover,
+.leaflet-control-attribution a:focus {
+	text-decoration: underline;
+	}
+.leaflet-attribution-flag {
+	display: inline !important;
+	vertical-align: baseline !important;
+	width: 1em;
+	height: 0.6669em;
+	}
+.leaflet-left .leaflet-control-scale {
+	margin-left: 5px;
+	}
+.leaflet-bottom .leaflet-control-scale {
+	margin-bottom: 5px;
+	}
+.leaflet-control-scale-line {
+	border: 2px solid #777;
+	border-top: none;
+	line-height: 1.1;
+	padding: 2px 5px 1px;
+	white-space: nowrap;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	background: rgba(255, 255, 255, 0.8);
+	text-shadow: 1px 1px #fff;
+	}
+.leaflet-control-scale-line:not(:first-child) {
+	border-top: 2px solid #777;
+	border-bottom: none;
+	margin-top: -2px;
+	}
+.leaflet-control-scale-line:not(:first-child):not(:last-child) {
+	border-bottom: 2px solid #777;
+	}
+
+.leaflet-touch .leaflet-control-attribution,
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	box-shadow: none;
+	}
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	border: 2px solid rgba(0,0,0,0.2);
+	background-clip: padding-box;
+	}
+
+
+/* popup */
+
+.leaflet-popup {
+	position: absolute;
+	text-align: center;
+	margin-bottom: 20px;
+	}
+.leaflet-popup-content-wrapper {
+	padding: 1px;
+	text-align: left;
+	border-radius: 12px;
+	}
+.leaflet-popup-content {
+	margin: 13px 24px 13px 20px;
+	line-height: 1.3;
+	font-size: 13px;
+	font-size: 1.08333em;
+	min-height: 1px;
+	}
+.leaflet-popup-content p {
+	margin: 17px 0;
+	margin: 1.3em 0;
+	}
+.leaflet-popup-tip-container {
+	width: 40px;
+	height: 20px;
+	position: absolute;
+	left: 50%;
+	margin-top: -1px;
+	margin-left: -20px;
+	overflow: hidden;
+	pointer-events: none;
+	}
+.leaflet-popup-tip {
+	width: 17px;
+	height: 17px;
+	padding: 1px;
+
+	margin: -10px auto 0;
+	pointer-events: auto;
+
+	-webkit-transform: rotate(45deg);
+	   -moz-transform: rotate(45deg);
+	    -ms-transform: rotate(45deg);
+	        transform: rotate(45deg);
+	}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+	background: white;
+	color: #333;
+	box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+	}
+.leaflet-container a.leaflet-popup-close-button {
+	position: absolute;
+	top: 0;
+	right: 0;
+	border: none;
+	text-align: center;
+	width: 24px;
+	height: 24px;
+	font: 16px/24px Tahoma, Verdana, sans-serif;
+	color: #757575;
+	text-decoration: none;
+	background: transparent;
+	}
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+	color: #585858;
+	}
+.leaflet-popup-scrolled {
+	overflow: auto;
+	}
+
+.leaflet-oldie .leaflet-popup-content-wrapper {
+	-ms-zoom: 1;
+	}
+.leaflet-oldie .leaflet-popup-tip {
+	width: 24px;
+	margin: 0 auto;
+
+	-ms-filter: "progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678)";
+	filter: progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678);
+	}
+
+.leaflet-oldie .leaflet-control-zoom,
+.leaflet-oldie .leaflet-control-layers,
+.leaflet-oldie .leaflet-popup-content-wrapper,
+.leaflet-oldie .leaflet-popup-tip {
+	border: 1px solid #999;
+	}
+
+
+/* div icon */
+
+.leaflet-div-icon {
+	background: #fff;
+	border: 1px solid #666;
+	}
+
+
+/* Tooltip */
+/* Base styles for the element that has a tooltip */
+.leaflet-tooltip {
+	position: absolute;
+	padding: 6px;
+	background-color: #fff;
+	border: 1px solid #fff;
+	border-radius: 3px;
+	color: #222;
+	white-space: nowrap;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	pointer-events: none;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+	}
+.leaflet-tooltip.leaflet-interactive {
+	cursor: pointer;
+	pointer-events: auto;
+	}
+.leaflet-tooltip-top:before,
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	position: absolute;
+	pointer-events: none;
+	border: 6px solid transparent;
+	background: transparent;
+	content: "";
+	}
+
+/* Directions */
+
+.leaflet-tooltip-bottom {
+	margin-top: 6px;
+}
+.leaflet-tooltip-top {
+	margin-top: -6px;
+}
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-top:before {
+	left: 50%;
+	margin-left: -6px;
+	}
+.leaflet-tooltip-top:before {
+	bottom: 0;
+	margin-bottom: -12px;
+	border-top-color: #fff;
+	}
+.leaflet-tooltip-bottom:before {
+	top: 0;
+	margin-top: -12px;
+	margin-left: -6px;
+	border-bottom-color: #fff;
+	}
+.leaflet-tooltip-left {
+	margin-left: -6px;
+}
+.leaflet-tooltip-right {
+	margin-left: 6px;
+}
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	top: 50%;
+	margin-top: -6px;
+	}
+.leaflet-tooltip-left:before {
+	right: 0;
+	margin-right: -12px;
+	border-left-color: #fff;
+	}
+.leaflet-tooltip-right:before {
+	left: 0;
+	margin-left: -12px;
+	border-right-color: #fff;
+	}
+
+/* Printing */
+
+@media print {
+	/* Prevent printers from removing background-images of controls. */
+	.leaflet-control {
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+		}
+	}
+
+
+
+/* Map Canvas Container */
+.kt-trip-map-canvas {
+    height: 580px;
+    width: 100%;
+    min-width: 0;
+    border-radius: 10px;
+    border: 1px solid var(--background-modifier-border);
+    background: #0f172a;
+    overflow: hidden;
+    position: relative;
+    box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* Midnight Ocean Colorful Dark Theme Filter */
+.kt-map-midnight-tiles .leaflet-tile-pane {
+    filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(108%) saturate(125%);
+}
+
+/* OpenStreetMap Minimalist Midnight Dark Theme Filter */
+.kt-map-dark-tiles .leaflet-tile-pane {
+    filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(90%);
+}
+
+/* Leaflet Dark Theme Overrides */
+.kt-trip-map-canvas .leaflet-container {
+    background: #0f172a !important;
+    font-family: inherit;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Fullscreen Trip Map Layout Rules */
+.kt-finances-container.kt-fin-fullscreen-map {
+    overflow: hidden !important;
+    height: 100%;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    padding: 0 16px 10px 16px;
+    overflow: hidden;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-top-bar,
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-subtabs-bar {
+    flex-shrink: 0;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-map-layout {
+    flex: 1;
+    min-height: 0;
+    height: calc(100vh - 215px);
+    margin-top: 6px;
+    align-items: stretch;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-map-main {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-map-toolbar {
+    flex-shrink: 0;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-map-canvas {
+    flex: 1;
+    min-height: 380px;
+    height: 100% !important;
+    background: #0f172a;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-itinerary-sidebar {
+    height: 100%;
+    max-height: 100%;
+}
+
+.kt-trip-view-wrapper.kt-trip-map-mode .kt-trip-itin-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.kt-trip-map-canvas .leaflet-bar a {
+    background-color: var(--background-secondary) !important;
+    color: var(--text-normal) !important;
+    border-color: var(--background-modifier-border) !important;
+}
+
+.kt-trip-map-canvas .leaflet-bar a:hover {
+    background-color: var(--background-modifier-hover) !important;
+    color: #10b981 !important;
+}
+
+.kt-trip-map-canvas .leaflet-control-attribution {
+    background: rgba(11, 15, 25, 0.8) !important;
+    color: var(--text-muted) !important;
+    font-size: 10px;
+}
+
+.kt-trip-map-canvas .leaflet-control-attribution a {
+    color: var(--text-muted) !important;
+}
+
+/* Minimalist Glowing Emerald Marker */
+.kt-map-marker-container {
+    background: transparent !important;
+    border: none !important;
+}
+
+.kt-map-marker-pin {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #064e3b;
+    border: 2px solid #10b981;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.7);
+    position: relative;
+    user-select: none;
+}
+
+.kt-map-marker-num {
+    z-index: 2;
+}
+
+.kt-map-marker-pulse {
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    right: -4px;
+    bottom: -4px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(16, 185, 129, 0.8);
+    animation: kt-marker-pulse 2.2s infinite ease-out;
+    pointer-events: none;
+}
+
+@keyframes kt-marker-pulse {
+    0% {
+        transform: scale(0.9);
+        opacity: 0.9;
+    }
+    70% {
+        transform: scale(1.6);
+        opacity: 0;
+    }
+    100% {
+        transform: scale(1.8);
+        opacity: 0;
+    }
+}
+
+/* Custom Dark Leaflet Popup */
+.kt-map-custom-popup .leaflet-popup-content-wrapper {
+    background: #0f172a !important;
+    color: #f1f5f9 !important;
+    border: 1px solid #334155 !important;
+    border-radius: 10px !important;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6) !important;
+    padding: 0 !important;
+}
+
+.kt-map-custom-popup .leaflet-popup-content {
+    margin: 12px 14px !important;
+    line-height: 1.4;
+}
+
+.kt-map-custom-popup .leaflet-popup-tip {
+    background: #0f172a !important;
+    border-left: 1px solid #334155;
+    border-top: 1px solid #334155;
+}
+
+.kt-map-popup-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 190px;
+}
+
+.kt-map-popup-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kt-map-popup-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+    text-transform: uppercase;
+}
+
+.kt-map-popup-name {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+.kt-map-popup-dates {
+    font-size: 11.5px;
+    color: #94a3b8;
+}
+
+.kt-map-popup-notes {
+    font-size: 11.5px;
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
+.kt-map-popup-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #334155;
+}
+
+.kt-map-popup-act-btn {
+    flex: 1;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    border: 1px solid #475569;
+    background: #1e293b;
+    color: #e2e8f0;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s ease;
+}
+
+.kt-map-popup-act-btn:hover {
+    background: #334155;
+}
+
+.kt-map-popup-act-btn.mod-warning {
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.kt-map-popup-act-btn.mod-warning:hover {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+/* Map Error State */
+.kt-trip-map-error {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+}
+
+.kt-trip-map-error-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-normal);
+    margin-bottom: 8px;
+}
+
+.kt-trip-map-error-desc {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    max-width: 420px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+}
+
+/* Itinerary Sidebar */
+.kt-trip-itinerary-sidebar {
+    width: 360px;
+    flex-shrink: 0;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    max-height: 640px;
+}
+
+.kt-trip-itin-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    margin-bottom: 12px;
+}
+
+.kt-trip-itin-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.kt-trip-itin-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0;
+    color: var(--text-normal);
+}
+
+.kt-trip-itin-badge-count {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+}
+
+.kt-trip-itin-distance-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.kt-trip-itin-dist-val {
+    font-weight: 700;
+    color: #10b981;
+}
+
+/* Itinerary List */
+.kt-trip-itin-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 4px;
+}
+
+.kt-trip-itin-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 40px 16px;
+    color: var(--text-muted);
+}
+
+.kt-trip-itin-empty-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+}
+
+.kt-trip-itin-empty-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin-bottom: 4px;
+}
+
+.kt-trip-itin-empty-sub {
+    font-size: 11.5px;
+    line-height: 1.4;
+}
+
+/* Itinerary Item Card */
+.kt-trip-itin-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    transition: all 0.15s ease;
+}
+
+.kt-trip-itin-item:hover {
+    border-color: #10b981;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.kt-trip-itin-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #10b981;
+    color: #064e3b;
+    font-size: 11.5px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.kt-trip-itin-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.kt-trip-itin-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-trip-itin-dates {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.kt-trip-itin-notes {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kt-trip-itin-actions {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+}
+
+.kt-trip-itin-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.7;
+    transition: all 0.15s ease;
+}
+
+.kt-trip-itin-btn:hover:not(:disabled) {
+    opacity: 1;
+    color: var(--text-normal);
+    background: var(--background-modifier-hover);
+}
+
+.kt-trip-itin-btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+}
+
+.kt-trip-itin-btn.mod-warning:hover:not(:disabled) {
+    color: #ef4444;
+}
+
+/* ================================================================
+   MULTI-BLOCK SCHEDULE MODAL (CRONOGRAMA DESCONECTADO)
+   ================================================================ */
+
+.kt-sched-modal-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    line-height: 1.45;
+}
+
+.kt-sched-blocks-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.kt-sched-block-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--background-secondary);
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.kt-sched-block-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-accent);
+    background: var(--background-modifier-hover);
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.kt-sched-input {
+    flex: 1;
+    min-width: 105px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-size: 13px;
+    text-align: center;
+}
+
+.kt-sched-sep {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+    user-select: none;
+}
+
+.kt-sched-block-remove-btn {
+    padding: 3px 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+}
+
+.kt-sched-block-remove-btn:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.kt-sched-block-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.kt-btn-add-sched-block {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    background: var(--background-secondary);
+    border: 1px dashed var(--interactive-accent);
+    color: var(--interactive-accent);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kt-btn-add-sched-block:hover {
+    background: var(--background-modifier-hover);
+    border-style: solid;
+}

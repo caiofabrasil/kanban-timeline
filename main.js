@@ -85,6 +85,30 @@ function sameDay(a, b) {
            a.getDate()     === b.getDate();
 }
 
+function formatLeanDate(startDateOrRanges, endDate = null, dateRanges = null) {
+    if (Array.isArray(startDateOrRanges)) {
+        if (startDateOrRanges.length === 0) return '';
+        return startDateOrRanges.map(r => formatLeanDate(r.start, r.end)).join(', ');
+    }
+    if (dateRanges && dateRanges.length > 1) {
+        return dateRanges.map(r => formatLeanDate(r.start, r.end)).join(', ');
+    }
+    const s = typeof startDateOrRanges === 'string' ? parseDate(startDateOrRanges) : startDateOrRanges;
+    const e = typeof endDate === 'string' ? parseDate(endDate) : endDate;
+    if (!s || !(s instanceof Date) || isNaN(s.getTime())) return '';
+    const startDay = s.getDate();
+    if (!e || !(e instanceof Date) || isNaN(e.getTime()) || sameDay(s, e)) {
+        return `${startDay}`;
+    }
+    const endDay = e.getDate();
+    if (s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+        return `${startDay}..${endDay}`;
+    }
+    const startMonth = s.getMonth() + 1;
+    const endMonth = e.getMonth() + 1;
+    return `${startDay}/${startMonth}..${endDay}/${endMonth}`;
+}
+
 function startOfDay(date) {
     const d = new Date(date);
     d.setHours(0, 0, 0, 0);
@@ -583,22 +607,33 @@ function getTimeForDay(card, date) {
 }
 
 function getCardTimeblockStatus(card) {
-    if (!card || !card.startDate) return { totalDays: 0, timeblockedDays: 0, isFullyTimeblocked: false };
+    if (!card || (!card.startDate && (!card.dateRanges || card.dateRanges.length === 0))) {
+        return { totalDays: 0, timeblockedDays: 0, isFullyTimeblocked: false };
+    }
 
-    const start = startOfDay(card.startDate);
-    const end   = startOfDay(card.endDate || card.startDate);
-    
+    const ranges = (card.dateRanges && card.dateRanges.length > 0)
+        ? card.dateRanges
+        : (card.startDate ? [{ start: card.startDate, end: card.endDate || card.startDate }] : []);
+
     let totalDays = 0;
     let timeblockedDays = 0;
+    const seenDays = new Set();
 
-    const cur = new Date(start);
-    while (cur <= end) {
-        totalDays++;
-        const times = getTimesForDay(card, cur);
-        if (times.length > 0) {
-            timeblockedDays++;
+    for (const r of ranges) {
+        const cur = startOfDay(r.start);
+        const end = startOfDay(r.end || r.start);
+        while (cur <= end) {
+            const k = formatDate(cur);
+            if (!seenDays.has(k)) {
+                seenDays.add(k);
+                totalDays++;
+                const times = getTimesForDay(card, cur);
+                if (times.length > 0) {
+                    timeblockedDays++;
+                }
+            }
+            cur.setDate(cur.getDate() + 1);
         }
-        cur.setDate(cur.getDate() + 1);
     }
 
     const isFullyTimeblocked = totalDays > 0 && timeblockedDays === totalDays;
@@ -702,23 +737,205 @@ class KanbanParser {
             const isCompleted = m[1] === 'x';
             let rest = m[2];
 
-            // Ignore nested checklist child lines from becoming top-level cards, but capture any tags and subtasks
+            // Nested checklist child lines: parse as first-class subtask cards linked to lastCard
             const isSubtask = /^\s{2,}|\t/.test(raw);
             if (isSubtask && lastCard) {
-                const subCheckMatch = trimmed.match(/^-\s+\[([ xX])\]\s+(.+)/);
+                const subCheckMatch = trimmed.match(/^-\s+\[([ xX])\]\s*(.*)/);
                 if (subCheckMatch) {
                     if (!lastCard.subtasks) lastCard.subtasks = [];
-                    let stText = subCheckMatch[2];
-                    const stTags = stText.match(/#[\w-]+/g);
-                    if (stTags) {
-                        stTags.forEach(t => { if (!lastCard.tags.includes(t)) lastCard.tags.push(t); });
-                        stText = stText.replace(/#[\w-]+/g, '').trim();
+                    const isSubCompleted = subCheckMatch[1].toLowerCase() === 'x';
+                    let stRest = subCheckMatch[2] || '';
+
+                    // 1. Subtask Date ranges: @{DD-MM-YYYY..DD-MM-YYYY, ...} or multiple @{}
+                    const stDateRanges = [];
+                    let stHasExplicitDate = false;
+                    const stAtRegex = /@\{([^}]+)\}/g;
+                    let stAm;
+                    while ((stAm = stAtRegex.exec(stRest)) !== null) {
+                        const parts = stAm[1].split(/[,;]/);
+                        for (let p of parts) {
+                            p = p.trim();
+                            if (!p) continue;
+                            const rm = p.match(/^(\d{2}-\d{2}-\d{4})\.\.(\d{2}-\d{2}-\d{4})$/);
+                            if (rm) {
+                                const s = parseDate(rm[1]);
+                                const e = parseDate(rm[2]);
+                                if (s && e) {
+                                    stDateRanges.push({ start: s, end: e });
+                                    stHasExplicitDate = true;
+                                }
+                                continue;
+                            }
+                            const sm = p.match(/^(\d{2}-\d{2}-\d{4})$/);
+                            if (sm) {
+                                const s = parseDate(sm[1]);
+                                if (s) {
+                                    stDateRanges.push({ start: s, end: new Date(s) });
+                                    stHasExplicitDate = true;
+                                }
+                            }
+                        }
                     }
-                    lastCard.subtasks.push({
-                        lineIndex: i,
-                        completed: subCheckMatch[1].toLowerCase() === 'x',
-                        text: stText
+                    stRest = stRest.replace(/@\{[^}]+\}/g, '');
+                    stDateRanges.sort((a, b) => a.start.getTime() - b.start.getTime());
+                    let stStartDate = stDateRanges.length > 0 ? stDateRanges[0].start : null;
+                    let stEndDate   = stDateRanges.length > 0 ? stDateRanges[stDateRanges.length - 1].end : null;
+
+                    // 3. Subtask Time blocks: <!-- tb: ... --> or legacy ⏰
+                    const stDailyTimes = {};
+                    let stLegacyStart = null, stLegacyEnd = null;
+                    const addStDailyTime = (dateKey, tStart, tEnd) => {
+                        if (!dateKey || !tStart || !tEnd) return;
+                        if (!stDailyTimes[dateKey]) stDailyTimes[dateKey] = [];
+                        if (!stDailyTimes[dateKey].some(s => s.timeStart === tStart && s.timeEnd === tEnd)) {
+                            stDailyTimes[dateKey].push({ timeStart: tStart, timeEnd: tEnd });
+                        }
+                    };
+
+                    const stCommentRegex = /<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/g;
+                    let stCm;
+                    while ((stCm = stCommentRegex.exec(stRest)) !== null) {
+                        const commentBody = stCm[1];
+                        const innerDatedRegex = /(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                        let idm;
+                        let foundDated = false;
+                        while ((idm = innerDatedRegex.exec(commentBody)) !== null) {
+                            addStDailyTime(idm[1], idm[2], idm[3]);
+                            foundDated = true;
+                        }
+                        if (!foundDated) {
+                            const innerSimpleRegex = /(?:^|\s|,)(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                            let ism;
+                            while ((ism = innerSimpleRegex.exec(commentBody)) !== null) {
+                                stLegacyStart = ism[1];
+                                stLegacyEnd   = ism[2];
+                                if (stStartDate) {
+                                    addStDailyTime(formatDate(stStartDate), ism[1], ism[2]);
+                                }
+                            }
+                        }
+                    }
+                    stRest = stRest.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/g, '');
+
+                    const stDatedTimeRegex = /⏰\s*(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                    let stDtm;
+                    while ((stDtm = stDatedTimeRegex.exec(stRest)) !== null) {
+                        addStDailyTime(stDtm[1], stDtm[2], stDtm[3]);
+                    }
+                    stRest = stRest.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
+
+                    const stSimpleTimeRegex = /⏰\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                    let stStm;
+                    while ((stStm = stSimpleTimeRegex.exec(stRest)) !== null) {
+                        stLegacyStart = stStm[1];
+                        stLegacyEnd   = stStm[2];
+                        if (stStartDate) {
+                            addStDailyTime(formatDate(stStartDate), stStm[1], stStm[2]);
+                        }
+                    }
+                    stRest = stRest.replace(/⏰\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
+
+                    if (stLegacyStart && stLegacyEnd && stStartDate) {
+                        addStDailyTime(formatDate(stStartDate), stLegacyStart, stLegacyEnd);
+                    }
+
+                    // DO NOT prune stDailyTimes outside [stStartDate, stEndDate]! Historical work must never be lost.
+                    if (!stStartDate && Object.keys(stDailyTimes).length > 0) {
+                        const sortedDates = Object.keys(stDailyTimes).map(k => parseDate(k)).filter(Boolean).sort((a, b) => a - b);
+                        if (sortedDates.length > 0) {
+                            stStartDate = sortedDates[0];
+                            stEndDate = sortedDates[sortedDates.length - 1];
+                            sortedDates.forEach(d => {
+                                stDateRanges.push({ start: d, end: new Date(d), isFromTimeblock: true });
+                            });
+                        }
+                    }
+
+                    Object.keys(stDailyTimes).forEach(k => {
+                        stDailyTimes[k].sort((a, b) => timeToMinutes(a.timeStart) - timeToMinutes(b.timeStart));
                     });
+
+                    const stFirstDateKey = Object.keys(stDailyTimes)[0];
+                    const stFirstSlot = stFirstDateKey && stDailyTimes[stFirstDateKey].length > 0 ? stDailyTimes[stFirstDateKey][0] : null;
+                    const stTimeStart = stLegacyStart || (stFirstSlot ? stFirstSlot.timeStart : null);
+                    const stTimeEnd   = stLegacyEnd   || (stFirstSlot ? stFirstSlot.timeEnd   : null);
+
+                    let stTbDurationMinutes = 0;
+                    const stDKeys = Object.keys(stDailyTimes);
+                    if (stDKeys.length > 0) {
+                        for (const dKey of stDKeys) {
+                            const slots = stDailyTimes[dKey];
+                            if (Array.isArray(slots)) {
+                                for (const dt of slots) {
+                                    if (dt.timeStart && dt.timeEnd) {
+                                        const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
+                                        if (dur > 0) stTbDurationMinutes += dur;
+                                    }
+                                }
+                            }
+                        }
+                    } else if (stTimeStart && stTimeEnd) {
+                        const dur = timeToMinutes(stTimeEnd) - timeToMinutes(stTimeStart);
+                        if (dur > 0) stTbDurationMinutes = dur;
+                    }
+
+                    // 4. Estimates
+                    const stEstInfo = parseTimeEstimate(stRest);
+                    const stEstimateMinutes = stTbDurationMinutes > 0 ? stTbDurationMinutes : stEstInfo.minutes;
+                    const stEstimateText = stEstimateMinutes > 0 ? formatMinutesToHours(stEstimateMinutes) : '';
+                    stRest = stEstInfo.clean;
+
+                    // 5. Tags
+                    const stTagMatches = stRest.match(/#[\w-]+/g) || [];
+                    const stTags = stTagMatches.map(t => t);
+                    stRest = stRest.replace(/#[\w-]+/g, '').trim();
+
+                    const stTitle = stRest.trim();
+
+                    if (stTags.length > 0) {
+                        stTags.forEach(t => { if (!lastCard.tags.includes(t)) lastCard.tags.push(t); });
+                    }
+
+                    const subtaskCard = {
+                        id:                 `${i}-${stTitle}`,
+                        uid:                `subtask-${lastCard.id}-${i}`,
+                        title:              stTitle,
+                        cleanTitle:         stTitle,
+                        isSubtask:          true,
+                        parentId:           lastCard.id,
+                        parentTitle:        lastCard.title,
+                        parentProjectColor: lastCard.projectColor,
+                        parentTagColor:     lastCard.tagColor,
+                        parentTags:         [...(lastCard.tags || [])],
+                        parentLineIndex:    lastCard.lineIndex,
+                        lineIndex:          i,
+                        column:             lastCard.column,
+                        isCompleted:        isSubCompleted,
+                        completed:          isSubCompleted,
+                        text:               stTitle,
+                        tags:               stTags.length > 0 ? stTags : [...(lastCard.tags || [])],
+                        subtasks:           [],
+                        bullets:            [],
+                        images:             [],
+                        notes:              [],
+                        estimateMinutes:    stEstimateMinutes,
+                        estimateText:       stEstimateText,
+                        startDate:          stStartDate,
+                        endDate:            stEndDate,
+                        dateRanges:         stDateRanges,
+                        timeStart:          stTimeStart,
+                        timeEnd:            stTimeEnd,
+                        dailyTimes:         stDailyTimes,
+                        hasExplicitDate:    stHasExplicitDate,
+                        isEvent:            false,
+                        eventType:          'task',
+                        tagColor:           stTags.length > 0 ? getCardTagColor(stTags, customProjects) : lastCard.tagColor,
+                        projectColor:       stTags.length > 0 ? getProjectColor(stTags, lastCard.column, { ...customColors, ...colColors }, customProjects) : lastCard.projectColor,
+                        priorityColor:      stTags.length > 0 ? getPriorityColor(stTags) : lastCard.priorityColor
+                    };
+
+                    lastCard.subtasks.push(subtaskCard);
+                    cards.push(subtaskCard);
                 } else if (!trimmed.startsWith('#')) {
                     if (!lastCard.notes) lastCard.notes = [];
                     lastCard.notes.push(trimmed);
@@ -736,24 +953,40 @@ class KanbanParser {
                 continue;
             }
 
-            // Date range: @{DD-MM-YYYY..DD-MM-YYYY}
-            let startDate = null, endDate = null;
-            const drm = rest.match(/@\{(\d{2}-\d{2}-\d{4})\.\.(\d{2}-\d{2}-\d{4})\}/);
-            if (drm) {
-                startDate = parseDate(drm[1]);
-                endDate   = parseDate(drm[2]);
-                rest = rest.replace(drm[0], '');
-            }
-
-            // Single date: @{DD-MM-YYYY}
-            if (!startDate) {
-                const dsm = rest.match(/@\{(\d{2}-\d{2}-\d{4})\}/);
-                if (dsm) {
-                    startDate = parseDate(dsm[1]);
-                    endDate   = new Date(startDate);
-                    rest = rest.replace(dsm[0], '');
+            // Date ranges: @{DD-MM-YYYY..DD-MM-YYYY, ...} or multiple @{}
+            const dateRanges = [];
+            let hasExplicitDate = false;
+            const atRegex = /@\{([^}]+)\}/g;
+            let am;
+            while ((am = atRegex.exec(rest)) !== null) {
+                const parts = am[1].split(/[,;]/);
+                for (let p of parts) {
+                    p = p.trim();
+                    if (!p) continue;
+                    const rm = p.match(/^(\d{2}-\d{2}-\d{4})\.\.(\d{2}-\d{2}-\d{4})$/);
+                    if (rm) {
+                        const s = parseDate(rm[1]);
+                        const e = parseDate(rm[2]);
+                        if (s && e) {
+                            dateRanges.push({ start: s, end: e });
+                            hasExplicitDate = true;
+                        }
+                        continue;
+                    }
+                    const sm = p.match(/^(\d{2}-\d{2}-\d{4})$/);
+                    if (sm) {
+                        const s = parseDate(sm[1]);
+                        if (s) {
+                            dateRanges.push({ start: s, end: new Date(s) });
+                            hasExplicitDate = true;
+                        }
+                    }
                 }
             }
+            rest = rest.replace(/@\{[^}]+\}/g, '');
+            dateRanges.sort((a, b) => a.start.getTime() - b.start.getTime());
+            let startDate = dateRanges.length > 0 ? dateRanges[0].start : null;
+            let endDate   = dateRanges.length > 0 ? dateRanges[dateRanges.length - 1].end : null;
 
             // Time block: support invisible comment <!-- tb: ... --> as well as legacy ⏰ tags
             const dailyTimes = {};
@@ -819,16 +1052,16 @@ class KanbanParser {
                 addDailyTime(sStr, legacyStart, legacyEnd);
             }
 
-            // If card has explicit startDate, prune any dailyTimes slots outside [startDate, endDate]
-            if (startDate) {
-                const sLimit = startOfDay(startDate);
-                const eLimit = endOfDay(endDate || startDate);
-                Object.keys(dailyTimes).forEach(k => {
-                    const parsedK = parseDate(k);
-                    if (parsedK && (parsedK < sLimit || parsedK > eLimit)) {
-                        delete dailyTimes[k];
-                    }
-                });
+            // DO NOT prune dailyTimes outside [startDate, endDate]! Historical work must never be lost.
+            if (!startDate && Object.keys(dailyTimes).length > 0) {
+                const sortedDates = Object.keys(dailyTimes).map(k => parseDate(k)).filter(Boolean).sort((a, b) => a - b);
+                if (sortedDates.length > 0) {
+                    startDate = sortedDates[0];
+                    endDate = sortedDates[sortedDates.length - 1];
+                    sortedDates.forEach(d => {
+                        dateRanges.push({ start: d, end: new Date(d), isFromTimeblock: true });
+                    });
+                }
             }
 
             // Sort slots within each day chronologically
@@ -930,9 +1163,11 @@ class KanbanParser {
                 estimateText,
                 startDate,
                 endDate,
+                dateRanges,
                 timeStart,
                 timeEnd,
                 dailyTimes,
+                hasExplicitDate,
                 isEvent,
                 eventType,
                 habitId,
@@ -947,6 +1182,19 @@ class KanbanParser {
 
             cards.push(card);
             lastCard = card;
+        }
+
+        // Sum subtask hours into parent macro cards
+        for (const c of cards) {
+            if (!c.isSubtask && c.subtasks && c.subtasks.length > 0) {
+                const subtasksMinutes = c.subtasks.reduce((acc, st) => acc + (st.estimateMinutes || 0), 0);
+                if (subtasksMinutes > 0) {
+                    c.subtasksEstimateMinutes = subtasksMinutes;
+                    c.ownEstimateMinutes = c.estimateMinutes || 0;
+                    c.estimateMinutes = (c.estimateMinutes || 0) + subtasksMinutes;
+                    c.estimateText = formatMinutesToHours(c.estimateMinutes);
+                }
+            }
         }
 
         return { cards, columns, columnColors: colColors };
@@ -1034,22 +1282,57 @@ class KanbanParser {
         return lines.join('\n');
     }
 
-    /** Delete a card block including subtasks */
+    /** Delete a card block including subtasks (or delete just single subtask if card.isSubtask) */
     deleteCard(content, cardLineIndex, card = null) {
         const lines = content.split('\n');
         const idx = this.findActualCardLineIndex(lines, cardLineIndex, card);
         if (idx === -1) return content;
 
+        if (card && card.isSubtask) {
+            lines.splice(idx, 1);
+            return lines.join('\n');
+        }
+
         let endIndex = idx + 1;
         while (endIndex < lines.length) {
             const raw = lines[endIndex];
             const trimmed = raw.trim();
-            if (/^-\s+\[[ x]\]/.test(raw) && !/^\s+/.test(raw)) break;
+            if (/^-\s+\[[ xX]\]/.test(raw) && !/^\s+/.test(raw)) break;
             if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) break;
             endIndex++;
         }
 
         lines.splice(idx, endIndex - idx);
+        return lines.join('\n');
+    }
+
+    /** Add a subtask to a card in the Kanban file */
+    addSubtaskToCard(content, parentLineIndex, subtaskText, parentCard = null) {
+        if (!subtaskText || !subtaskText.trim()) return content;
+        const lines = content.split('\n');
+        const pIdx = this.findActualCardLineIndex(lines, parentLineIndex, parentCard);
+        if (pIdx === -1) return content;
+
+        let endIdx = pIdx + 1;
+        let indent = '\t';
+        while (endIdx < lines.length) {
+            const raw = lines[endIdx];
+            const trimmed = raw.trim();
+            if (/^-\s+\[[ xX]\]/.test(raw) && !/^\s+/.test(raw)) break;
+            if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) break;
+            if (/^\s{2,}|\t/.test(raw)) {
+                const mIndent = raw.match(/^(\s{2,}|\t)/);
+                if (mIndent) indent = mIndent[1];
+            }
+            endIdx++;
+        }
+
+        while (endIdx > pIdx + 1 && lines[endIdx - 1].trim() === '') {
+            endIdx--;
+        }
+
+        const newSubtaskLine = `${indent}- [ ] ${subtaskText.trim()}`;
+        lines.splice(endIdx, 0, newSubtaskLine);
         return lines.join('\n');
     }
 
@@ -1351,22 +1634,27 @@ class KanbanParser {
         return lines.join('\n');
     }
 
-    /** Get clean editable markdown text for a card */
+    /** Get clean editable markdown text for a card or subtask */
     getCardEditableText(content, cardLineIndex) {
         const lines = content.split('\n');
         if (cardLineIndex < 0 || cardLineIndex >= lines.length) return '';
 
-        let endIndex = cardLineIndex + 1;
-        while (endIndex < lines.length) {
-            const raw = lines[endIndex];
-            const trimmed = raw.trim();
-            if (/^-\s+\[[ x]\]/.test(raw) && !/^\s+/.test(raw)) break;
-            if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) break;
-            endIndex++;
-        }
+        const origLine = lines[cardLineIndex];
+        const isSubtask = /^\s{2,}|\t/.test(origLine);
 
-        while (endIndex > cardLineIndex + 1 && lines[endIndex - 1].trim() === '') {
-            endIndex--;
+        let endIndex = cardLineIndex + 1;
+        if (!isSubtask) {
+            while (endIndex < lines.length) {
+                const raw = lines[endIndex];
+                const trimmed = raw.trim();
+                if (/^-\s+\[[ xX]\]/.test(raw) && !/^\s+/.test(raw)) break;
+                if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) break;
+                endIndex++;
+            }
+
+            while (endIndex > cardLineIndex + 1 && lines[endIndex - 1].trim() === '') {
+                endIndex--;
+            }
         }
 
         const blockLines = lines.slice(cardLineIndex, endIndex);
@@ -1374,7 +1662,7 @@ class KanbanParser {
 
         // Clean first line: remove '- [ ]', dates '@{...}', and hidden comments '<!-- ... -->'
         let firstLine = blockLines[0];
-        firstLine = firstLine.replace(/^-\s+\[[ x]\]\s*/, '');
+        firstLine = firstLine.replace(/^\s*-\s+\[[ xX]\]\s*/, '');
         firstLine = firstLine.replace(/@\{[\d-]+(?:\.\.[\d-]+)?\}/g, '');
         firstLine = firstLine.replace(/<!--[\s\S]*?-->/g, '');
         firstLine = firstLine.replace(/⏰\s*[\d-:]+(?:-[\d:]+)?/g, '');
@@ -1394,55 +1682,54 @@ class KanbanParser {
 
         // 1. Identify original card bounds and preserve completion / existing metadata
         const origFirstLine = lines[cardLineIndex];
-        const isCompleted = /^-\s+\[[xX]\]/.test(origFirstLine);
-        const checkPrefix = isCompleted ? '- [x] ' : '- [ ] ';
+        const isCompleted = /^\s*-\s+\[[xX]\]/.test(origFirstLine);
+        const indentMatch = origFirstLine.match(/^(\s*)/);
+        const indent = indentMatch ? indentMatch[1] : '';
+        const checkPrefix = indent + (isCompleted ? '- [x] ' : '- [ ] ');
 
         // Extract existing time block comments or metadata if present
         let commentTag = '';
         const commentMatch = origFirstLine.match(/<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/);
         if (commentMatch) {
             const rawBody = commentMatch[1];
-            if (startDate) {
-                const sLimit = startOfDay(startDate);
-                const eLimit = endOfDay(endDate || startDate);
+            // Parse dated blocks: DD-MM-YYYY HH:mm-HH:mm (ALWAYS preserve all historical and scheduled slots!)
+            const datedRegex = /(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+            let dm;
+            const validSlots = [];
+            while ((dm = datedRegex.exec(rawBody)) !== null) {
+                validSlots.push(`${dm[1]} ${dm[2]}-${dm[3]}`);
+            }
 
-                // Parse dated blocks: DD-MM-YYYY HH:mm-HH:mm
-                const datedRegex = /(\d{2}-\d{2}-\d{4})\s*[:\s]?\s*(\d{2}:\d{2})-(\d{2}:\d{2})/g;
-                let dm;
-                const validSlots = [];
-                let hasDated = false;
-                while ((dm = datedRegex.exec(rawBody)) !== null) {
-                    hasDated = true;
-                    const dObj = parseDate(dm[1]);
-                    if (dObj && dObj >= sLimit && dObj <= eLimit) {
-                        validSlots.push(`${dm[1]} ${dm[2]}-${dm[3]}`);
+            // Also check simple slots HH:mm-HH:mm if no dated blocks
+            if (validSlots.length === 0) {
+                const simpleRegex = /(?:^|\s|,)(\d{2}:\d{2})-(\d{2}:\d{2})/g;
+                let sm;
+                while ((sm = simpleRegex.exec(rawBody)) !== null) {
+                    if (startDate) {
+                        validSlots.push(`${formatDate(startDate)} ${sm[1]}-${sm[2]}`);
+                    } else {
+                        validSlots.push(`${sm[1]}-${sm[2]}`);
                     }
                 }
+            }
 
-                // Extract metadata (type, habitId, habitColor, series)
-                const metaTags = [];
-                const typeMatch = rawBody.match(/type:([^\s]+)/i);
-                if (typeMatch) metaTags.push(`type:${typeMatch[1]}`);
-                const hIdMatch = rawBody.match(/habitId:([^\s]+)/i);
-                if (hIdMatch) metaTags.push(`habitId:${hIdMatch[1]}`);
-                const hColMatch = rawBody.match(/habitColor:([^\s]+)/i);
-                if (hColMatch) metaTags.push(`habitColor:${hColMatch[1]}`);
-                const sIdMatch = rawBody.match(/series:([^\s]+)/i);
-                if (sIdMatch) metaTags.push(`series:${sIdMatch[1]}`);
-                const metaStr = metaTags.length > 0 ? ` ${metaTags.join(' ')}` : '';
+            // Preserve non-time metadata (type:, habitId:, habitColor:, series:)
+            const metaTags = [];
+            const typeMatch = rawBody.match(/type:([^\s]+)/i);
+            if (typeMatch) metaTags.push(`type:${typeMatch[1]}`);
+            const hIdMatch = rawBody.match(/habitId:([^\s]+)/i);
+            if (hIdMatch) metaTags.push(`habitId:${hIdMatch[1]}`);
+            const hColMatch = rawBody.match(/habitColor:([^\s]+)/i);
+            if (hColMatch) metaTags.push(`habitColor:${hColMatch[1]}`);
+            const sIdMatch = rawBody.match(/series:([^\s]+)/i);
+            if (sIdMatch) metaTags.push(`series:${sIdMatch[1]}`);
+            const metaStr = metaTags.length > 0 ? ` ${metaTags.join(' ')}` : '';
 
-                if (hasDated) {
-                    if (validSlots.length > 0 || metaTags.length > 0) {
-                        commentTag = ` <!-- tb: ${validSlots.join(' ')}${metaStr} -->`;
-                    }
-                } else {
-                    commentTag = ` ${commentMatch[0]}`;
-                }
-            } else {
-                const isRoutine = /type:(?:break|meeting|focus|habit|custom)/i.test(rawBody);
-                if (isRoutine) {
-                    commentTag = ` ${commentMatch[0]}`;
-                }
+            if (validSlots.length > 0 || metaTags.length > 0) {
+                const blockStr = validSlots.length > 0 ? ` ${validSlots.join(' ')}` : '';
+                commentTag = ` <!-- tb:${blockStr}${metaStr} -->`;
+            } else if (rawBody.trim()) {
+                commentTag = ` <!-- tb: ${rawBody.trim()} -->`;
             }
         }
 
@@ -1463,7 +1750,7 @@ class KanbanParser {
             firstLineBody = `${firstLineBody} ~${estimateText}`;
         }
 
-        const headerLine = `${checkPrefix}${firstLineBody}${dateTag}${commentTag}`.trim();
+        const headerLine = `${checkPrefix}${firstLineBody}${dateTag}${commentTag}`.trimEnd();
 
         const formattedCardLines = [headerLine];
         for (let i = 1; i < inputLines.length; i++) {
@@ -1477,23 +1764,25 @@ class KanbanParser {
 
         // 3. Find end index of original card
         let endIndex = cardLineIndex + 1;
-        while (endIndex < lines.length) {
-            const raw = lines[endIndex];
-            const trimmed = raw.trim();
-            if (/^-\s+\[[ x]\]/.test(raw) && !/^\s+/.test(raw)) break;
-            if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) break;
-            endIndex++;
-        }
-        while (endIndex > cardLineIndex + 1 && lines[endIndex - 1].trim() === '') {
-            endIndex--;
+        if (!indent) {
+            while (endIndex < lines.length) {
+                const raw = lines[endIndex];
+                const trimmed = raw.trim();
+                if (/^-\s+\[[ xX]\]/.test(raw) && !/^\s+/.test(raw)) break;
+                if (/^##\s+/.test(trimmed) || /^%%\s*kanban:settings/i.test(trimmed)) break;
+                endIndex++;
+            }
+            while (endIndex > cardLineIndex + 1 && lines[endIndex - 1].trim() === '') {
+                endIndex--;
+            }
         }
 
         // Replace card block in place
         lines.splice(cardLineIndex, endIndex - cardLineIndex, ...formattedCardLines);
         let updatedContent = lines.join('\n');
 
-        // 4. Move to target column ONLY IF changed
-        if (targetColumn && origColumn && targetColumn.trim().toLowerCase() !== origColumn.trim().toLowerCase()) {
+        // 4. Move to target column ONLY IF changed and NOT a subtask
+        if (!indent && targetColumn && origColumn && targetColumn.trim().toLowerCase() !== origColumn.trim().toLowerCase()) {
             updatedContent = this.moveCardToColumn(updatedContent, cardLineIndex, targetColumn);
         }
 
@@ -1670,7 +1959,22 @@ class KanbanParser {
             if (!searchTitle && /^-\s+\[([ xX])\]/.test(l.trim())) return lineIndex;
         }
 
-        // 2. If card title is provided, search across all lines for the matching card
+        // 2. If card is a subtask and parent is known, search under parent card first!
+        if (card && card.isSubtask && (card.parentTitle || card.parentLineIndex !== undefined)) {
+            const pIdx = this.findActualCardLineIndex(lines, card.parentLineIndex, card.parentTitle);
+            if (pIdx !== -1) {
+                for (let j = pIdx + 1; j < lines.length; j++) {
+                    const raw = lines[j];
+                    if (/^-\s+\[[ xX]\]/.test(raw) && !/^\s+/.test(raw)) break; // next top-level card
+                    if (/^##\s+/.test(raw.trim())) break; // next column
+                    if (searchTitle && raw.includes(searchTitle) && /^-\s+\[([ xX])\]/.test(raw.trim())) {
+                        return j;
+                    }
+                }
+            }
+        }
+
+        // 3. If card title is provided, search across all lines for the matching card
         if (searchTitle) {
             for (let i = 0; i < lines.length; i++) {
                 if (/^-\s+\[([ xX])\]/.test(lines[i].trim()) && lines[i].includes(searchTitle)) {
@@ -1679,7 +1983,7 @@ class KanbanParser {
             }
         }
 
-        // 3. Fallback to lineIndex if valid
+        // 4. Fallback to lineIndex if valid
         if (typeof lineIndex === 'number' && lineIndex >= 0 && lineIndex < lines.length) {
             return lineIndex;
         }
@@ -1687,36 +1991,53 @@ class KanbanParser {
     }
 
     /** Replace or add a date range metadatum in a card line */
-    updateDateRange(content, lineIndex, startDate, endDate, card = null) {
+    updateDateRange(content, lineIndex, startDateOrRanges, endDate = null, card = null) {
         const lines = content.split('\n');
         const idx = this.findActualCardLineIndex(lines, lineIndex, card);
         if (idx === -1) return content;
         let line = lines[idx];
-        const newDate = sameDay(startDate, endDate)
-            ? `@{${formatDate(startDate)}}`
-            : `@{${formatDate(startDate)}..${formatDate(endDate)}}`;
 
-        if (/@\{[\d-]+(?:\.\.[\d-]+)?\}/.test(line)) {
-            line = line.replace(/@\{[\d-]+(?:\.\.[\d-]+)?\}/, newDate);
-        } else {
-            line = line.trimEnd() + ' ' + newDate;
+        let newDateTag = '';
+        if (Array.isArray(startDateOrRanges)) {
+            const parts = startDateOrRanges.map(r => {
+                const s = typeof r.start === 'string' ? r.start : formatDate(r.start);
+                const e = typeof r.end === 'string' ? r.end : formatDate(r.end || r.start);
+                return s === e ? s : `${s}..${e}`;
+            });
+            newDateTag = parts.length > 0 ? `@{${parts.join(', ')}}` : '';
+        } else if (startDateOrRanges) {
+            const s = formatDate(startDateOrRanges);
+            const e = endDate ? formatDate(endDate) : s;
+            newDateTag = s === e ? `@{${s}}` : `@{${s}..${e}}`;
+        }
+
+        if (/@\{[^}]+\}/.test(line)) {
+            if (newDateTag) {
+                line = line.replace(/@\{[^}]+\}/, newDateTag);
+            } else {
+                line = line.replace(/@\{[^}]+\}/g, '').trimEnd();
+            }
+        } else if (newDateTag) {
+            line = line.trimEnd() + ' ' + newDateTag;
         }
         lines[idx] = line;
         return lines.join('\n');
     }
 
-    /** Remove date range and timeblocks from a card, putting it back in backlog */
+    /** Remove date range from a card, putting it back in backlog */
     removeDateRange(content, lineIndex, card = null) {
         const lines = content.split('\n');
         const idx = this.findActualCardLineIndex(lines, lineIndex, card);
         if (idx === -1) return content;
         let line = lines[idx];
-        line = line.replace(/@\{[\d-]+(?:\.\.[\d-]+)?\}/g, '');
-        line = line.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/g, '');
-        line = line.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
-        line = line.replace(/⏰\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
-        line = line.replace(/\s+/g, ' ').trimEnd();
-        lines[idx] = line;
+        const indentMatch = line.match(/^(\s*)/);
+        const indent = indentMatch ? indentMatch[1] : '';
+        let lineBody = line.slice(indent.length);
+
+        lineBody = lineBody.replace(/@\{[^}]+\}/g, '');
+        // DO NOT delete <!-- tb: ... --> ! Historical work in timeblocking must never be lost.
+        lineBody = lineBody.replace(/\s+/g, ' ').trimEnd();
+        lines[idx] = indent + lineBody;
         return lines.join('\n');
     }
 
@@ -1812,17 +2133,7 @@ class KanbanParser {
             }
         }
 
-        // Prune any slots outside card's explicit date range
-        if (card && card.startDate) {
-            const sLimit = startOfDay(card.startDate);
-            const eLimit = endOfDay(card.endDate || card.startDate);
-            Object.keys(dailyMap).forEach(d => {
-                const parsedD = parseDate(d);
-                if (parsedD && (parsedD < sLimit || parsedD > eLimit)) {
-                    delete dailyMap[d];
-                }
-            });
-        }
+        // DO NOT prune dailyMap slots outside card date range! Historical work in Timeblocking must never be lost.
 
         // Sort slots within each day chronologically
         Object.keys(dailyMap).forEach(d => {
@@ -1850,11 +2161,15 @@ class KanbanParser {
             if (sIdMatch && !curSeriesId) curSeriesId = sIdMatch[1];
         }
 
+        const indentMatch = line.match(/^(\s*)/);
+        const indent = indentMatch ? indentMatch[1] : '';
+        let lineBody = line.slice(indent.length);
+
         // Clean all old comments and legacy time tags from the line
-        line = line.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/g, '');
-        line = line.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
-        line = line.replace(/⏰\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
-        line = line.replace(/\s+/g, ' ').trimEnd();
+        lineBody = lineBody.replace(/<!--\s*(?:tb:?|⏰)\s*[\s\S]*?-->/g, '');
+        lineBody = lineBody.replace(/⏰\s*\d{2}-\d{2}-\d{4}\s*[:\s]?\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
+        lineBody = lineBody.replace(/⏰\s*\d{2}:\d{2}-\d{2}:\d{2}/g, '');
+        lineBody = lineBody.replace(/\s+/g, ' ').trimEnd();
 
         // Format updated time tags into a clean, 100% invisible HTML comment
         const dateKeys = Object.keys(dailyMap).sort();
@@ -1876,11 +2191,11 @@ class KanbanParser {
                 if (curSeriesId) metaTags.push(`series:${curSeriesId}`);
                 const metaStr = metaTags.length > 0 ? ` ${metaTags.join(' ')}` : '';
 
-                line = `${line} <!-- tb: ${formattedBlocks.join(' ')}${metaStr} -->`;
+                lineBody = `${lineBody} <!-- tb: ${formattedBlocks.join(' ')}${metaStr} -->`;
             }
         }
 
-        lines[idx] = line;
+        lines[idx] = indent + lineBody;
         return lines.join('\n');
     }
 }
@@ -1974,24 +2289,138 @@ class DateRangeModal extends obsidian.Modal {
         contentEl.addClass('kt-modal');
         contentEl.createEl('h2', { text: `Agendar: ${card.title}` });
 
-        let startVal = card.startDate ? formatDate(card.startDate) : formatDate(new Date());
-        let endVal   = card.endDate   ? formatDate(card.endDate)   : startVal;
+        contentEl.createEl('p', {
+            cls: 'kt-sched-modal-desc',
+            text: 'Defina os períodos agendados no Cronograma. Você pode adicionar múltiplos períodos ou semanas distintas para tarefas com pausas entre os dias:'
+        });
 
-        new obsidian.Setting(contentEl)
-            .setName('Data de Início')
-            .setDesc('Formato: DD-MM-YYYY')
-            .addText(t => {
-                t.setValue(startVal).setPlaceholder('15-08-2026');
-                t.onChange(v => startVal = v);
-            });
+        // Initialize blocks array: [{ start: 'DD-MM-YYYY', end: 'DD-MM-YYYY' }]
+        let blocks = [];
+        if (card.dateRanges && card.dateRanges.length > 0) {
+            blocks = card.dateRanges.map(r => ({
+                start: formatDate(r.start),
+                end: formatDate(r.end || r.start)
+            }));
+        } else if (card.startDate) {
+            const s = formatDate(card.startDate);
+            const e = card.endDate ? formatDate(card.endDate) : s;
+            blocks = [{ start: s, end: e }];
+        } else {
+            const todayStr = formatDate(new Date());
+            blocks = [{ start: todayStr, end: todayStr }];
+        }
 
-        new obsidian.Setting(contentEl)
-            .setName('Data de Fim')
-            .setDesc('Igual ao início para tarefas de 1 dia')
-            .addText(t => {
-                t.setValue(endVal).setPlaceholder('18-08-2026');
-                t.onChange(v => endVal = v);
+        const blocksContainer = contentEl.createDiv('kt-sched-blocks-container');
+
+        const renderBlocks = () => {
+            blocksContainer.empty();
+
+            blocks.forEach((blk, idx) => {
+                const row = blocksContainer.createDiv('kt-sched-block-row');
+
+                const numBadge = row.createSpan('kt-sched-block-badge');
+                numBadge.setText(`Bloco ${idx + 1}`);
+
+                const startInput = row.createEl('input', {
+                    type: 'text',
+                    cls: 'kt-sched-input',
+                    value: blk.start,
+                    placeholder: '15-08-2026'
+                });
+                startInput.title = 'Data de início (DD-MM-YYYY)';
+                startInput.onchange = (e) => {
+                    blk.start = e.target.value.trim();
+                };
+
+                row.createSpan({ cls: 'kt-sched-sep', text: 'até' });
+
+                const endInput = row.createEl('input', {
+                    type: 'text',
+                    cls: 'kt-sched-input',
+                    value: blk.end,
+                    placeholder: '18-08-2026'
+                });
+                endInput.title = 'Data de fim (DD-MM-YYYY)';
+                endInput.onchange = (e) => {
+                    blk.end = e.target.value.trim();
+                };
+
+                if (blocks.length > 1) {
+                    const removeBtn = row.createEl('button', {
+                        cls: 'kt-sched-block-remove-btn',
+                        text: '✕'
+                    });
+                    removeBtn.title = 'Remover este período';
+                    removeBtn.onclick = () => {
+                        blocks.splice(idx, 1);
+                        renderBlocks();
+                    };
+                }
             });
+        };
+
+        renderBlocks();
+
+        // Action buttons under blocks
+        const blockActions = contentEl.createDiv('kt-sched-block-actions');
+        
+        const addBlockBtn = blockActions.createEl('button', {
+            cls: 'kt-btn-add-sched-block',
+            text: '＋ Adicionar outro período / semana'
+        });
+        addBlockBtn.onclick = () => {
+            let nextStart = new Date();
+            if (blocks.length > 0) {
+                const last = blocks[blocks.length - 1];
+                const lastDate = parseDate(last.end) || parseDate(last.start);
+                if (lastDate) {
+                    nextStart = new Date(lastDate);
+                    nextStart.setDate(nextStart.getDate() + 7);
+                }
+            }
+            const nextStr = formatDate(nextStart);
+            blocks.push({ start: nextStr, end: nextStr });
+            renderBlocks();
+        };
+
+        if (card.dailyTimes && Object.keys(card.dailyTimes).length > 0) {
+            const snapBtn = blockActions.createEl('button', {
+                cls: 'kt-btn-snap-worked',
+                text: '🎯 Usar dias do Timeblocking'
+            });
+            snapBtn.title = 'Preenche automaticamente períodos separados agrupando os dias em que há horas registradas no Timeblocking';
+            snapBtn.onclick = () => {
+                const sortedDates = Object.keys(card.dailyTimes)
+                    .map(k => parseDate(k))
+                    .filter(Boolean)
+                    .sort((a, b) => a - b);
+
+                if (sortedDates.length === 0) return;
+
+                // Group contiguous days into clusters
+                const clusters = [];
+                let currentCluster = { start: sortedDates[0], end: sortedDates[0] };
+
+                for (let i = 1; i < sortedDates.length; i++) {
+                    const d = sortedDates[i];
+                    const diffDays = Math.round((d.getTime() - currentCluster.end.getTime()) / 86400000);
+                    if (diffDays === 1) {
+                        currentCluster.end = d;
+                    } else {
+                        clusters.push(currentCluster);
+                        currentCluster = { start: d, end: d };
+                    }
+                }
+                clusters.push(currentCluster);
+
+                blocks = clusters.map(c => ({
+                    start: formatDate(c.start),
+                    end: formatDate(c.end)
+                }));
+                renderBlocks();
+                new obsidian.Notice(`Preenchido com ${blocks.length} período(s) baseado no Timeblocking!`);
+            };
+        }
 
         // Footer
         const footer = contentEl.createDiv('kt-modal-footer');
@@ -2015,8 +2444,9 @@ class DateRangeModal extends obsidian.Modal {
             }
         };
 
-        if (card.startDate) {
+        if (card.startDate || card.hasExplicitDate || (card.dateRanges && card.dateRanges.length > 0)) {
             const removeSchedBtn = rightGroup.createEl('button', { text: 'Remover do cronograma' });
+            removeSchedBtn.title = 'Remove as barras do cronograma sem apagar nenhum horário registrado no Timeblocking';
             removeSchedBtn.onclick = () => {
                 if (this.onRemoveSchedule) {
                     this.onRemoveSchedule();
@@ -2027,11 +2457,29 @@ class DateRangeModal extends obsidian.Modal {
 
         const saveBtn = rightGroup.createEl('button', { cls: 'mod-cta', text: 'Salvar' });
         saveBtn.onclick = () => {
-            const s = parseDate(startVal);
-            const e = parseDate(endVal);
-            if (!s || !e) { new obsidian.Notice('Data inválida. Use DD-MM-YYYY'); return; }
+            const validRanges = [];
+            for (let i = 0; i < blocks.length; i++) {
+                const b = blocks[i];
+                const s = parseDate(b.start);
+                const e = parseDate(b.end || b.start);
+                if (!s || !e) {
+                    new obsidian.Notice(`Data inválida no Bloco ${i + 1}. Use formato DD-MM-YYYY`);
+                    return;
+                }
+                if (s > e) {
+                    validRanges.push({ start: e, end: s });
+                } else {
+                    validRanges.push({ start: s, end: e });
+                }
+            }
+            if (validRanges.length === 0) {
+                new obsidian.Notice('Adicione pelo menos um período válido.');
+                return;
+            }
+            validRanges.sort((a, b) => a.start.getTime() - b.start.getTime());
+
             if (this.onSave) {
-                this.onSave(s, e);
+                this.onSave(validRanges);
             }
             this.close();
         };
@@ -2525,17 +2973,19 @@ class CardOptionsModal extends obsidian.Modal {
         this.modalEl.style.width = '560px';
         this.modalEl.style.maxWidth = '94vw';
         contentEl.addClass('kt-card-edit-modal');
-        contentEl.createEl('h2', { text: `Editar Tarefa / Opções` });
+        const modalTitle = card.isSubtask ? `Editar Subtarefa (↳ ${card.parentTitle || 'Tarefa Pai'})` : `Editar Tarefa / Opções`;
+        contentEl.createEl('h2', { text: modalTitle });
 
         // 1. Content Textarea (Title, Markdown, Images, Subtasks, Tags)
         const contentSection = contentEl.createDiv('kt-edit-content-section');
-        contentSection.createEl('label', { cls: 'kt-edit-label', text: 'Conteúdo do Card (Markdown, Imagens e Subtarefas):' });
+        const labelText = card.isSubtask ? 'Texto da Subtarefa:' : 'Conteúdo do Card (Markdown, Imagens e Subtarefas):';
+        contentSection.createEl('label', { cls: 'kt-edit-label', text: labelText });
 
         const textarea = contentSection.createEl('textarea', {
             cls: 'kt-card-edit-textarea',
             attr: {
-                placeholder: 'Escreva o título, cole imagens ![[imagem.png]], checklists - [ ] ou #tags...',
-                rows: 6
+                placeholder: card.isSubtask ? 'Título da subtarefa, #tags ou ⏱️ estimativa...' : 'Escreva o título, cole imagens ![[imagem.png]], checklists - [ ] ou #tags...',
+                rows: card.isSubtask ? 3 : 6
             }
         });
         textarea.value = this.initialText;
@@ -2543,21 +2993,23 @@ class CardOptionsModal extends obsidian.Modal {
         renderHashtagSuggestionsBar(contentSection, textarea, this.app, this.plugin);
 
         const helperHint = contentSection.createDiv('kt-edit-helper-hint');
-        helperHint.setText('💡 Dica: Você pode colar imagens com ![[imagem.png]] e checklists com - [ ]');
+        helperHint.setText(card.isSubtask ? '💡 Dica: Subtarefas herdam a coluna e o projeto da tarefa pai.' : '💡 Dica: Você pode colar imagens com ![[imagem.png]] e checklists com - [ ]');
 
         // 2. Column selector & schedule fields
         const metaSection = contentEl.createDiv('kt-edit-meta-section');
 
         let selectedCol = card.column;
-        new obsidian.Setting(metaSection)
-            .setName('Coluna do Kanban')
-            .addDropdown(d => {
-                this.allColumns.forEach(c => {
-                    d.addOption(c, c);
+        if (!card.isSubtask) {
+            new obsidian.Setting(metaSection)
+                .setName('Coluna do Kanban')
+                .addDropdown(d => {
+                    this.allColumns.forEach(c => {
+                        d.addOption(c, c);
+                    });
+                    d.setValue(card.column);
+                    d.onChange(v => selectedCol = v);
                 });
-                d.setValue(card.column);
-                d.onChange(v => selectedCol = v);
-            });
+        }
 
         let startVal = card.startDate ? formatDate(card.startDate) : '';
         let endVal   = card.endDate   ? formatDate(card.endDate)   : startVal;
@@ -3102,13 +3554,42 @@ class ProjectReportModal extends obsidian.Modal {
         const projCols = (project.columns || []).map(c => c.toLowerCase());
         const excludedSet = new Set(project.excludedTaskTitles || []);
 
-        const matchingCards = this.cards.filter(c => {
+        const matchingCards = (this.cards || []).filter(c => {
             if (c.isEvent || c.column === 'Rotina') return false;
             const hasTag = projTag && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
             const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
             const hasTitleTag = projTag && c.title.toLowerCase().includes('#' + projTag);
             return hasTag || inCol || hasTitleTag;
         });
+
+        // Merge persistent tasks that are no longer in active cards (e.g. deleted from Kanban)
+        const seenTitles = new Set(matchingCards.map(c => (c.cleanTitle || c.title || '').trim().toLowerCase()));
+        if (project.persistentTasks && Array.isArray(project.persistentTasks)) {
+            for (const pt of project.persistentTasks) {
+                const ptKey = (pt.cleanTitle || pt.title || '').trim().toLowerCase();
+                if (!ptKey) continue;
+                if (!seenTitles.has(ptKey)) {
+                    matchingCards.push({
+                        id: pt.id,
+                        title: pt.title,
+                        cleanTitle: pt.cleanTitle || pt.title,
+                        column: pt.column || 'Removida',
+                        isCompleted: !!pt.isCompleted,
+                        dailyTimes: pt.dailyTimes ? JSON.parse(JSON.stringify(pt.dailyTimes)) : {},
+                        timeStart: pt.timeStart || null,
+                        timeEnd: pt.timeEnd || null,
+                        startDate: pt.startDate ? parseDate(pt.startDate) : null,
+                        endDate: pt.endDate ? parseDate(pt.endDate) : null,
+                        estimateMinutes: pt.estimateMinutes || 0,
+                        estimateText: pt.estimateText || '',
+                        tags: [...(pt.tags || [])],
+                        isDeleted: true,
+                        deletedAt: pt.deletedAt || null
+                    });
+                    seenTitles.add(ptKey);
+                }
+            }
+        }
 
         const now = new Date();
         const startOfThisWeek = this.view ? this.view.getWeekStart() : startOfWeek(now);
@@ -3153,6 +3634,7 @@ class ProjectReportModal extends obsidian.Modal {
                                     timeEnd: dt.timeEnd,
                                     durationMinutes: dur,
                                     isDone,
+                                    isDeleted: !!c.isDeleted,
                                     column: c.column
                                 });
                             }
@@ -3178,6 +3660,7 @@ class ProjectReportModal extends obsidian.Modal {
                         timeEnd: c.timeEnd,
                         durationMinutes: dur,
                         isDone,
+                        isDeleted: !!c.isDeleted,
                         column: c.column
                     });
                 }
@@ -3200,6 +3683,7 @@ class ProjectReportModal extends obsidian.Modal {
                     timeEnd: null,
                     durationMinutes: c.estimateMinutes,
                     isDone,
+                    isDeleted: !!c.isDeleted,
                     column: c.column
                 });
             } else {
@@ -3214,6 +3698,7 @@ class ProjectReportModal extends obsidian.Modal {
                         timeEnd: null,
                         durationMinutes: 0,
                         isDone,
+                        isDeleted: !!c.isDeleted,
                         column: c.column
                     });
                 }
@@ -3452,6 +3937,9 @@ class ProjectReportModal extends obsidian.Modal {
                         left.createSpan({ cls: 'kt-report-item-time-range', text: `${item.timeStart} - ${item.timeEnd}` });
                     }
                     left.createSpan({ cls: 'kt-report-item-title', text: item.title });
+                    if (item.isDeleted) {
+                        left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Removida)' });
+                    }
 
                     const right = rowEl.createDiv('kt-report-item-right');
                     right.createSpan({ cls: 'kt-report-item-col', text: item.column });
@@ -3474,6 +3962,7 @@ class ProjectReportModal extends obsidian.Modal {
                         card: e.card,
                         title: e.title,
                         isDone: e.isDone,
+                        isDeleted: !!e.isDeleted,
                         column: e.column,
                         dates: new Set(),
                         totalMinutes: 0,
@@ -3496,6 +3985,9 @@ class ProjectReportModal extends obsidian.Modal {
                 const left = taskHdr.createDiv('kt-report-task-left');
                 left.createSpan({ cls: 'kt-report-item-chk', text: t.isDone ? '✓' : '○' });
                 left.createSpan({ cls: 'kt-report-task-title', text: t.title });
+                if (t.isDeleted) {
+                    left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Removida)' });
+                }
 
                 const datesArr = Array.from(t.dates).sort();
                 if (datesArr.length > 0) {
@@ -8393,6 +8885,133 @@ class FinanceTripCategoryModal extends obsidian.Modal {
     }
 }
 
+class FinanceTripDestinationModal extends obsidian.Modal {
+    constructor(app, destination, onSave, onDelete) {
+        super(app);
+        this.app = app;
+        this.destination = destination || null;
+        this.onSave = onSave;
+        this.onDelete = onDelete;
+
+        this.nameVal = destination ? (destination.name || '') : '';
+        this.latVal = destination ? (destination.lat != null ? destination.lat : '') : '';
+        this.lngVal = destination ? (destination.lng != null ? destination.lng : '') : '';
+        this.arrivalVal = destination ? (destination.arrivalDate || '') : '';
+        this.departureVal = destination ? (destination.departureDate || '') : '';
+        this.notesVal = destination ? (destination.notes || '') : '';
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.modalEl.addClass('kt-card-edit-modal-wrapper', 'kt-fin-modal-wrapper');
+        this.modalEl.style.width = '480px';
+        contentEl.empty();
+        contentEl.addClass('kt-card-edit-modal');
+
+        contentEl.createEl('h2', { text: this.destination && this.destination.id ? 'Editar Destino / Parada' : 'Adicionar Destino ao Roteiro' });
+
+        new obsidian.Setting(contentEl)
+            .setName('Nome do Destino / Cidade')
+            .setDesc('Ex: Tóquio, Paris, Roma, Fernando de Noronha')
+            .addText(t => {
+                t.setValue(this.nameVal).onChange(v => this.nameVal = v);
+                t.inputEl.style.width = '100%';
+                window.setTimeout(() => t.inputEl.focus(), 50);
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Data de Chegada')
+            .addText(t => {
+                t.inputEl.type = 'date';
+                t.setValue(this.arrivalVal).onChange(v => this.arrivalVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Data de Partida')
+            .addText(t => {
+                t.inputEl.type = 'date';
+                t.setValue(this.departureVal).onChange(v => this.departureVal = v);
+                t.inputEl.style.width = '100%';
+            });
+
+        new obsidian.Setting(contentEl)
+            .setName('Latitude & Longitude')
+            .setDesc('Coordenadas geográficas no mapa')
+            .addText(t => {
+                t.setPlaceholder('Latitude (ex: 35.6762)').setValue(this.latVal !== '' ? String(this.latVal) : '').onChange(v => this.latVal = parseFloat(v) || '');
+                t.inputEl.style.width = '48%';
+                t.inputEl.style.marginRight = '4%';
+            })
+            .addText(t => {
+                t.setPlaceholder('Longitude (ex: 139.6503)').setValue(this.lngVal !== '' ? String(this.lngVal) : '').onChange(v => this.lngVal = parseFloat(v) || '');
+                t.inputEl.style.width = '48%';
+            });
+
+        const notesSetting = new obsidian.Setting(contentEl)
+            .setName('Anotações do Roteiro')
+            .setDesc('Atrações principais, hotel, dicas locais');
+        const notesArea = notesSetting.controlEl.createEl('textarea');
+        notesArea.value = this.notesVal;
+        notesArea.rows = 3;
+        notesArea.style.width = '100%';
+        notesArea.style.resize = 'vertical';
+        notesArea.oninput = () => this.notesVal = notesArea.value;
+
+        const footer = contentEl.createDiv('kt-modal-footer');
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'space-between';
+        footer.style.alignItems = 'center';
+        footer.style.marginTop = '18px';
+
+        const leftBtns = footer.createDiv();
+        if (this.destination && this.destination.id && this.onDelete) {
+            const delBtn = leftBtns.createEl('button', { cls: 'mod-warning', text: 'Excluir Parada' });
+            delBtn.onclick = () => {
+                this.close();
+                this.onDelete(this.destination.id);
+            };
+        }
+
+        const rightBtns = footer.createDiv();
+        rightBtns.style.display = 'flex';
+        rightBtns.style.gap = '10px';
+
+        const cancelBtn = rightBtns.createEl('button', { text: 'Cancelar' });
+        cancelBtn.onclick = () => this.close();
+
+        const saveBtn = rightBtns.createEl('button', { cls: 'mod-cta', text: this.destination && this.destination.id ? 'Salvar Alterações' : 'Adicionar ao Roteiro' });
+        saveBtn.onclick = () => {
+            if (!this.nameVal.trim()) {
+                new obsidian.Notice('Por favor, informe o nome do destino.');
+                return;
+            }
+            const lat = Number(this.latVal);
+            const lng = Number(this.lngVal);
+            if (isNaN(lat) || isNaN(lng) || this.latVal === '' || this.lngVal === '') {
+                new obsidian.Notice('Latitude e Longitude válidas são necessárias para posicionar no mapa.');
+                return;
+            }
+            const dest = {
+                id: (this.destination && this.destination.id) ? this.destination.id : 'dest-' + Date.now(),
+                name: this.nameVal.trim(),
+                lat: lat,
+                lng: lng,
+                arrivalDate: this.arrivalVal || null,
+                departureDate: this.departureVal || null,
+                notes: this.notesVal.trim(),
+                order: (this.destination && this.destination.order) ? this.destination.order : 0
+            };
+            this.close();
+            this.onSave(dest);
+        };
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
 // ================================================================
 // HEALTH TRACKER CATALOG & MODALS
 // ================================================================
@@ -13062,6 +13681,118 @@ kanban-plugin: basic
         this.cards       = parsed.cards;
         this.columns     = parsed.columns;
         this.plugin.lastDetectedColumns = this.columns;
+        await this.syncProjectPersistentTasks(this.cards);
+    }
+
+    async syncProjectPersistentTasks(cards) {
+        if (!this.plugin.settings.projects || !Array.isArray(this.plugin.settings.projects)) return;
+        let modified = false;
+
+        for (const proj of this.plugin.settings.projects) {
+            if (!proj.persistentTasks) proj.persistentTasks = [];
+
+            const projTag = (proj.tag || '').trim().toLowerCase().replace(/^#/, '');
+            const projCols = (proj.columns || []).map(c => c.toLowerCase());
+
+            const matching = (cards || []).filter(c => {
+                if (c.isEvent || c.column === 'Rotina') return false;
+                const hasTag = projTag && c.tags && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
+                const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
+                const hasTitleTag = projTag && c.title && c.title.toLowerCase().includes('#' + projTag);
+                return hasTag || inCol || hasTitleTag;
+            });
+
+            const seenTitles = new Set();
+
+            for (const c of matching) {
+                const titleKey = (c.cleanTitle || c.title || '').trim();
+                if (!titleKey) continue;
+                seenTitles.add(titleKey.toLowerCase());
+
+                const isDone = c.isCompleted || c.column === 'Done' || isIgnoredColumn(c.column);
+                const existing = proj.persistentTasks.find(pt => (pt.title || '').trim().toLowerCase() === titleKey.toLowerCase());
+
+                if (existing) {
+                    if (existing.isDeleted) {
+                        existing.isDeleted = false;
+                        delete existing.deletedAt;
+                        modified = true;
+                    }
+                    if (existing.column !== c.column) {
+                        existing.column = c.column;
+                        modified = true;
+                    }
+                    if (existing.isCompleted !== isDone) {
+                        existing.isCompleted = isDone;
+                        modified = true;
+                    }
+                    if (c.dailyTimes && Object.keys(c.dailyTimes).length > 0) {
+                        if (!existing.dailyTimes) existing.dailyTimes = {};
+                        for (const dk of Object.keys(c.dailyTimes)) {
+                            const cSlots = Array.isArray(c.dailyTimes[dk]) ? c.dailyTimes[dk] : [c.dailyTimes[dk]];
+                            if (!existing.dailyTimes[dk]) {
+                                existing.dailyTimes[dk] = [...cSlots];
+                                modified = true;
+                            } else {
+                                for (const cs of cSlots) {
+                                    if (!existing.dailyTimes[dk].some(es => es.timeStart === cs.timeStart && es.timeEnd === cs.timeEnd)) {
+                                        existing.dailyTimes[dk].push(cs);
+                                        modified = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (c.timeStart && c.timeEnd && (!existing.timeStart || !existing.timeEnd)) {
+                        existing.timeStart = c.timeStart;
+                        existing.timeEnd = c.timeEnd;
+                        modified = true;
+                    }
+                    if (c.estimateMinutes && existing.estimateMinutes !== c.estimateMinutes) {
+                        existing.estimateMinutes = c.estimateMinutes;
+                        existing.estimateText = c.estimateText;
+                        modified = true;
+                    }
+                    existing.lastSeen = new Date().toISOString();
+                } else {
+                    proj.persistentTasks.push({
+                        id: c.id || c.uid || `pt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                        title: c.title,
+                        cleanTitle: c.cleanTitle || c.title,
+                        column: c.column,
+                        isCompleted: isDone,
+                        dailyTimes: c.dailyTimes ? JSON.parse(JSON.stringify(c.dailyTimes)) : {},
+                        timeStart: c.timeStart || null,
+                        timeEnd: c.timeEnd || null,
+                        startDate: c.startDate ? formatDate(c.startDate) : null,
+                        endDate: c.endDate ? formatDate(c.endDate) : null,
+                        estimateMinutes: c.estimateMinutes || 0,
+                        estimateText: c.estimateText || '',
+                        tags: [...(c.tags || [])],
+                        isDeleted: false,
+                        firstSeen: new Date().toISOString(),
+                        lastSeen: new Date().toISOString()
+                    });
+                    modified = true;
+                }
+            }
+
+            // Any persistent task not in current active cards is marked isDeleted
+            for (const pt of proj.persistentTasks) {
+                const tKey = (pt.title || '').trim().toLowerCase();
+                if (!seenTitles.has(tKey)) {
+                    if (!pt.isDeleted) {
+                        pt.isDeleted = true;
+                        pt.deletedAt = new Date().toISOString();
+                        modified = true;
+                    }
+                }
+            }
+        }
+
+        if (modified) {
+            await this.plugin.saveSettings();
+        }
     }
 
     syncTodayCards(content, columnColors, customProjects = []) {
@@ -13098,7 +13829,16 @@ kanban-plugin: basic
         const content = await this.app.vault.read(file);
         const updated = this.parser.updateDateRange(content, card.lineIndex, start, end, card);
         await this.app.vault.modify(file, updated);
-        new obsidian.Notice(`${card.title} → ${formatDate(start)}${sameDay(start, end) ? '' : ' – ' + formatDate(end)}`);
+        if (Array.isArray(start)) {
+            const desc = start.map(r => {
+                const s = typeof r.start === 'string' ? r.start : formatDate(r.start);
+                const e = typeof r.end === 'string' ? r.end : formatDate(r.end || r.start);
+                return s === e ? s : `${s} – ${e}`;
+            }).join(', ');
+            new obsidian.Notice(`${card.title} → ${desc}`);
+        } else {
+            new obsidian.Notice(`${card.title} → ${formatDate(start)}${sameDay(start, end) ? '' : ' – ' + formatDate(end)}`);
+        }
     }
 
     async persistTimeBlock(card, date, ts, te, instanceIndex = null, mode = 'set') {
@@ -13149,6 +13889,27 @@ kanban-plugin: basic
                 } else if (targetDay > newEnd) {
                     newEnd = targetDay;
                     content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd, card);
+                }
+            }
+        }
+
+        // Auto-expand parent card date range if this is a subtask scheduled outside parent bounds
+        if (card.isSubtask && (card.parentLineIndex !== undefined || card.parentId)) {
+            const parentCard = this.cards.find(c => c.id === card.parentId || c.lineIndex === card.parentLineIndex);
+            if (parentCard) {
+                let pStart = parentCard.startDate ? startOfDay(parentCard.startDate) : null;
+                let pEnd   = parentCard.endDate ? endOfDay(parentCard.endDate) : (pStart ? endOfDay(pStart) : null);
+                let pChanged = false;
+                if (!pStart) {
+                    pStart = targetDay;
+                    pEnd   = targetDay;
+                    pChanged = true;
+                } else {
+                    if (targetDay < pStart) { pStart = targetDay; pChanged = true; }
+                    if (targetDay > pEnd)   { pEnd   = targetDay; pChanged = true; }
+                }
+                if (pChanged) {
+                    content = this.parser.updateDateRange(content, parentCard.lineIndex, pStart, pEnd, parentCard);
                 }
             }
         }
@@ -13516,14 +14277,14 @@ kanban-plugin: basic
         }
     }
 
-    async deleteCardLine(lineIndex) {
+    async deleteCardLine(lineIndex, card = null) {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         const content = await this.app.vault.read(file);
-        const updated = this.parser.deleteCard(content, lineIndex);
+        const updated = this.parser.deleteCard(content, lineIndex, card);
         await this.app.vault.modify(file, updated);
         await this.syncAllHabitLogs();
-        new obsidian.Notice('Card excluído');
+        new obsidian.Notice(card && card.isSubtask ? 'Subtarefa excluída' : 'Card excluído');
     }
 
     async removeCardFromSchedule(card) {
@@ -13545,6 +14306,16 @@ kanban-plugin: basic
         let content = await this.app.vault.read(file);
         content = this.parser.toggleSubtaskCompletion(content, subtaskLineIndex);
         await this.app.vault.modify(file, content);
+    }
+
+    async addSubtaskToCard(parentLineIndex, subtaskText, parentCard = null) {
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
+        if (!file) return;
+        let content = await this.app.vault.read(file);
+        content = this.parser.addSubtaskToCard(content, parentLineIndex, subtaskText, parentCard);
+        await this.app.vault.modify(file, content);
+        new obsidian.Notice(`Subtarefa adicionada: ${subtaskText}`);
+        await this.refresh();
     }
 
     async openCardOptionsModal(card, targetDay = null) {
@@ -15113,10 +15884,32 @@ kanban-plugin: basic
                 });
             }
 
-            const weekCards = scheduled.filter(c => {
-                const s = startOfDay(c.startDate);
-                const e = endOfDay(c.endDate || c.startDate);
-                return e >= weekStart && s <= weekEnd;
+            const weekCards = [];
+            scheduled.forEach(c => {
+                const ranges = (c.dateRanges && c.dateRanges.length > 0)
+                    ? c.dateRanges
+                    : (c.startDate ? [{ start: c.startDate, end: c.endDate || c.startDate }] : []);
+
+                ranges.forEach(r => {
+                    const s = startOfDay(r.start);
+                    const e = endOfDay(r.end || r.start);
+                    if (e >= weekStart && s <= weekEnd) {
+                        weekCards.push({
+                            card: c,
+                            range: r,
+                            startDate: r.start,
+                            endDate: r.end || r.start,
+                            isCompleted: c.isCompleted,
+                            title: c.title,
+                            tags: c.tags,
+                            tagColor: c.tagColor,
+                            projectColor: c.projectColor,
+                            column: c.column,
+                            estimateMinutes: c.estimateMinutes,
+                            estimateText: c.estimateText
+                        });
+                    }
+                });
             });
 
             // Multi-day cards first (longer duration first), then by start date
@@ -15147,9 +15940,9 @@ kanban-plugin: basic
             });
 
             // 2. Allocate tracks for task cards without any collision
-            weekCards.forEach(card => {
-                const cardStart = startOfDay(card.startDate);
-                const cardEnd = endOfDay(card.endDate || card.startDate);
+            weekCards.forEach(item => {
+                const cardStart = startOfDay(item.startDate);
+                const cardEnd = endOfDay(item.endDate || item.startDate);
 
                 let startCol = 0;
                 for (let c = 0; c < 7; c++) {
@@ -15185,9 +15978,9 @@ kanban-plugin: basic
                         for (let col = startCol; col <= endCol; col++) {
                             tracks[trackIdx][col] = true;
                         }
-                        card._calTrackIdx = trackIdx;
-                        card._calStartCol = startCol;
-                        card._calColSpan  = colSpan;
+                        item._calTrackIdx = trackIdx;
+                        item._calStartCol = startCol;
+                        item._calColSpan  = colSpan;
                         break;
                     }
                     trackIdx++;
@@ -15253,15 +16046,16 @@ kanban-plugin: basic
             });
 
             // 4. Render Task Cards in eventsLayer
-            weekCards.forEach(card => {
-                const startCol = card._calStartCol !== undefined ? card._calStartCol : 0;
-                const colSpan  = card._calColSpan !== undefined ? card._calColSpan : 1;
-                const trackIdx = card._calTrackIdx !== undefined ? card._calTrackIdx : 0;
+            weekCards.forEach(item => {
+                const card     = item.card;
+                const startCol = item._calStartCol !== undefined ? item._calStartCol : 0;
+                const colSpan  = item._calColSpan !== undefined ? item._calColSpan : 1;
+                const trackIdx = item._calTrackIdx !== undefined ? item._calTrackIdx : 0;
 
-                const cardStart = startOfDay(card.startDate);
-                const cardEnd   = endOfDay(card.endDate || card.startDate);
+                const cardStart = startOfDay(item.startDate);
+                const cardEnd   = endOfDay(item.endDate || item.startDate);
 
-                const isMultiDay = (colSpan > 1) || (card.startDate && card.endDate && !sameDay(card.startDate, card.endDate));
+                const isMultiDay = (colSpan > 1) || (item.startDate && item.endDate && !sameDay(item.startDate, item.endDate));
                 const isContPrev = cardStart < weekStart;
                 const isContNext = cardEnd > weekEnd;
 
@@ -15299,8 +16093,8 @@ kanban-plugin: basic
                     this.renderTagPills(metaRow, card.tags, true);
                 }
 
-                const sStr = formatDate(card.startDate);
-                const eStr = card.endDate ? formatDate(card.endDate) : sStr;
+                const sStr = formatDate(item.startDate);
+                const eStr = item.endDate ? formatDate(item.endDate) : sStr;
                 bar.title = `${card.title} (${sStr === eStr ? sStr : `${sStr} → ${eStr}`})`;
 
                 // Dragging
@@ -15336,7 +16130,7 @@ kanban-plugin: basic
                 bar.onclick = (e) => {
                     if (e.target === chk) return;
                     e.stopPropagation();
-                    this.openCardOptionsModal(card, card.startDate);
+                    this.openCardOptionsModal(card, item.startDate);
                 };
 
                 bar.addEventListener('contextmenu', (e) => {
@@ -15604,8 +16398,9 @@ kanban-plugin: basic
 
         // Day cells
         const cells = row.createDiv('kt-gantt-cells');
-        const cardStart = startOfDay(card.startDate);
-        const cardEnd   = endOfDay(card.endDate || card.startDate);
+        const cardRanges = (card.dateRanges && card.dateRanges.length > 0)
+            ? card.dateRanges
+            : (card.startDate ? [{ start: card.startDate, end: card.endDate || card.startDate }] : []);
 
         const cellElements = [];
         const cellDates    = [];
@@ -15621,7 +16416,13 @@ kanban-plugin: basic
             if (sameDay(d, new Date())) cell.addClass('kt-is-today');
             if (d.getDay() === 0 || d.getDay() === 6) cell.addClass('kt-is-weekend');
 
-            if (ds >= cardStart && ds <= cardEnd) {
+            const matchingRange = cardRanges.find(r => {
+                const rs = startOfDay(r.start);
+                const re = endOfDay(r.end || r.start);
+                return ds >= rs && ds <= re;
+            });
+
+            if (matchingRange) {
                 cell.addClass('kt-span');
                 cell.style.setProperty('--span-color', card.projectColor);
 
@@ -15630,33 +16431,35 @@ kanban-plugin: basic
                     cell.addClass('kt-span-timeblocked');
                     const ind = cell.createSpan('kt-span-tb-indicator');
                     ind.setText(`${dayTime.timeStart}–${dayTime.timeEnd}`);
-                    cell.title = `${card.title} (${formatDate(card.startDate)} – ${formatDate(card.endDate || card.startDate)})\nHorário em ${this.dayLabel(d)}: ${dayTime.timeStart} – ${dayTime.timeEnd}`;
+                    cell.title = `${card.title} (${formatDate(matchingRange.start)} – ${formatDate(matchingRange.end || matchingRange.start)})\nHorário em ${this.dayLabel(d)}: ${dayTime.timeStart} – ${dayTime.timeEnd}`;
                 } else {
                     cell.addClass('kt-span-not-timeblocked');
-                    cell.title = `${card.title} (${formatDate(card.startDate)} – ${formatDate(card.endDate || card.startDate)})\nSem horário no Timeblocking para ${this.dayLabel(d)}`;
+                    cell.title = `${card.title} (${formatDate(matchingRange.start)} – ${formatDate(matchingRange.end || matchingRange.start)})\nSem horário no Timeblocking para ${this.dayLabel(d)}`;
                 }
 
-                const isFirst = sameDay(ds, cardStart);
-                const isLast  = sameDay(ds, cardEnd) || sameDay(ds, new Date(card.endDate || card.startDate));
+                const rStart = startOfDay(matchingRange.start);
+                const rEnd   = endOfDay(matchingRange.end || matchingRange.start);
+                const isFirst = sameDay(ds, rStart);
+                const isLast  = sameDay(ds, rEnd) || sameDay(ds, new Date(matchingRange.end || matchingRange.start));
 
                 if (isFirst) {
                     cell.addClass('kt-span-first');
                     // Handle de redimensionamento da borda esquerda (início)
                     const leftHandle = cell.createDiv('kt-resize-edge kt-resize-edge-start');
-                    leftHandle.title = 'Arraste para alterar o dia inicial';
-                    this.attachGanttResize(leftHandle, 'start', card, ws, cellDates, cellElements, row);
+                    leftHandle.title = 'Arraste para alterar o dia inicial deste período';
+                    this.attachGanttResize(leftHandle, 'start', card, matchingRange, ws, cellDates, cellElements, row);
                 }
 
                 if (isLast) {
                     cell.addClass('kt-span-last');
                     // Handle de redimensionamento da borda direita (término)
                     const rightHandle = cell.createDiv('kt-resize-edge kt-resize-edge-end');
-                    rightHandle.title = 'Arraste para alterar o dia final';
-                    this.attachGanttResize(rightHandle, 'end', card, ws, cellDates, cellElements, row);
+                    rightHandle.title = 'Arraste para alterar o dia final deste período';
+                    this.attachGanttResize(rightHandle, 'end', card, matchingRange, ws, cellDates, cellElements, row);
                 }
 
                 // Drag do bloco inteiro horizontalmente ou clique para editar datas
-                this.attachGanttSpanMove(cell, card, ws, cellDates, cellElements, row, i);
+                this.attachGanttSpanMove(cell, card, matchingRange, ws, cellDates, cellElements, row, i);
             } else {
                 cell.title = `Clique duas vezes para abrir ${this.dayLabel(d)} no Timeblocking`;
                 cell.ondblclick = () => {
@@ -15666,12 +16469,33 @@ kanban-plugin: basic
         }
     }
 
-    updateGanttRowVisual(cellElements, cellDates, card, pStart, pEnd, dayShift = 0) {
+    updateGanttRowVisual(cellElements, cellDates, card, pStartOrRanges, pEndOrDayShift = 0, maybeDayShift = 0, movedRange = null) {
+        let ranges = [];
+        let dayShift = 0;
+        let activeMovedRange = movedRange;
+
+        if (Array.isArray(pStartOrRanges)) {
+            ranges = pStartOrRanges;
+            dayShift = typeof pEndOrDayShift === 'number' ? pEndOrDayShift : 0;
+            if (typeof maybeDayShift === 'object') {
+                activeMovedRange = maybeDayShift;
+            }
+        } else if (pStartOrRanges instanceof Date) {
+            ranges = [{ start: pStartOrRanges, end: pEndOrDayShift instanceof Date ? pEndOrDayShift : pStartOrRanges }];
+            dayShift = typeof maybeDayShift === 'number' ? maybeDayShift : 0;
+        }
+
         cellElements.forEach((cell, i) => {
             const d = startOfDay(cellDates[i]);
-            const inSpan = d.getTime() >= pStart.getTime() && d.getTime() <= pEnd.getTime();
-            const isFirst = inSpan && sameDay(d, pStart);
-            const isLast  = inSpan && sameDay(d, pEnd);
+            const match = ranges.find(r => {
+                const rs = startOfDay(r.start);
+                const re = endOfDay(r.end || r.start);
+                return d.getTime() >= rs.getTime() && d.getTime() <= re.getTime();
+            });
+
+            const inSpan = !!match;
+            const isFirst = inSpan && sameDay(d, match.start);
+            const isLast  = inSpan && sameDay(d, match.end || match.start);
 
             cell.classList.toggle('kt-span', inSpan);
             cell.classList.toggle('kt-span-first', isFirst);
@@ -15690,7 +16514,7 @@ kanban-plugin: basic
 
                 // Check timeblock for this shifted date
                 const origDate = new Date(d);
-                if (dayShift !== 0) {
+                if (dayShift !== 0 && (!activeMovedRange || match === activeMovedRange)) {
                     origDate.setDate(origDate.getDate() - dayShift);
                 }
                 const dayTime = getTimeForDay(card, origDate);
@@ -15719,13 +16543,18 @@ kanban-plugin: basic
         });
     }
 
-    attachGanttSpanMove(cellEl, card, ws, cellDates, cellElements, row, originIndex) {
+    attachGanttSpanMove(cellEl, card, matchingRange, ws, cellDates, cellElements, row, originIndex) {
         cellEl.addEventListener('pointerdown', (e) => {
             if (e.target.classList.contains('kt-resize-edge')) return;
             if (e.button !== 0) return;
 
-            const currentStart = startOfDay(card.startDate);
-            const currentEnd   = startOfDay(card.endDate || card.startDate);
+            const allRanges = (card.dateRanges && card.dateRanges.length > 0)
+                ? card.dateRanges.map(r => ({ start: new Date(r.start), end: new Date(r.end || r.start) }))
+                : [{ start: new Date(card.startDate), end: new Date(card.endDate || card.startDate) }];
+
+            const targetRange = matchingRange || allRanges[0];
+            const currentStart = startOfDay(targetRange.start);
+            const currentEnd   = startOfDay(targetRange.end || targetRange.start);
             const durationDays = Math.round((currentEnd.getTime() - currentStart.getTime()) / 86400000);
 
             const startX = e.clientX;
@@ -15759,7 +16588,15 @@ kanban-plugin: basic
                         previewStart = newStart;
                         previewEnd   = newEnd;
 
-                        this.updateGanttRowVisual(cellElements, cellDates, card, previewStart, previewEnd, dayShift);
+                        const previewMovedRange = { start: previewStart, end: previewEnd };
+                        const previewRanges = allRanges.map(r => {
+                            if (sameDay(r.start, currentStart) && sameDay(r.end, currentEnd)) {
+                                return previewMovedRange;
+                            }
+                            return r;
+                        });
+
+                        this.updateGanttRowVisual(cellElements, cellDates, card, previewRanges, dayShift, 0, previewMovedRange);
                     }
                 }
             };
@@ -15770,8 +16607,15 @@ kanban-plugin: basic
                 document.body.classList.remove('kt-is-resizing');
 
                 if (hasMoved) {
-                    if (!sameDay(previewStart, card.startDate) || !sameDay(previewEnd, card.endDate || card.startDate)) {
-                        await this.persistShiftedDateRange(card, previewStart, previewEnd, dayShift);
+                    if (!sameDay(previewStart, currentStart) || !sameDay(previewEnd, currentEnd)) {
+                        const finalRanges = allRanges.map(r => {
+                            if (sameDay(r.start, currentStart) && sameDay(r.end, currentEnd)) {
+                                return { start: previewStart, end: previewEnd };
+                            }
+                            return r;
+                        });
+                        finalRanges.sort((a, b) => a.start.getTime() - b.start.getTime());
+                        await this.persistShiftedDateRange(card, finalRanges, dayShift, targetRange);
                         await this.refresh();
                     } else {
                         await this.refresh();
@@ -15786,27 +16630,49 @@ kanban-plugin: basic
         });
     }
 
-    async persistShiftedDateRange(card, newStart, newEnd, dayShift) {
+    async persistShiftedDateRange(card, newRangesOrStart, maybeEndOrDayShift, maybeDayShift = 0, movedRange = null) {
         const file = this.app.vault.getAbstractFileByPath(this.plugin.settings.kanbanFile);
         if (!file) return;
         let content = await this.app.vault.read(file);
+
+        let finalRanges = null;
+        let dayShift = 0;
+        let targetMoved = movedRange;
+
+        if (Array.isArray(newRangesOrStart)) {
+            finalRanges = newRangesOrStart;
+            dayShift = typeof maybeEndOrDayShift === 'number' ? maybeEndOrDayShift : 0;
+            if (typeof maybeDayShift === 'object') {
+                targetMoved = maybeDayShift;
+            }
+        } else {
+            finalRanges = [{ start: newRangesOrStart, end: maybeEndOrDayShift }];
+            dayShift = typeof maybeDayShift === 'number' ? maybeDayShift : 0;
+        }
         
-        // 1. Atualiza intervalo @{DD-MM-YYYY..DD-MM-YYYY}
-        content = this.parser.updateDateRange(content, card.lineIndex, newStart, newEnd);
+        // 1. Atualiza intervalo @{...}
+        content = this.parser.updateDateRange(content, card.lineIndex, finalRanges, null, card);
         
         // 2. Se houver dailyTimes, move os blocos de horário junto com o deslocamento de dias
         if (dayShift !== 0 && card.dailyTimes && Object.keys(card.dailyTimes).length > 0) {
             const oldKeys = Object.keys(card.dailyTimes);
+            const origStart = targetMoved ? startOfDay(targetMoved.start) : null;
+            const origEnd   = targetMoved ? endOfDay(targetMoved.end || targetMoved.start) : null;
+
             for (const oldKey of oldKeys) {
-                const oldSlots = Array.isArray(card.dailyTimes[oldKey]) ? card.dailyTimes[oldKey] : [card.dailyTimes[oldKey]];
                 const oldDate = parseDate(oldKey);
                 if (oldDate) {
+                    if (origStart && origEnd && (oldDate < origStart || oldDate > origEnd)) {
+                        // Date does not belong to the moved block, keep intact!
+                        continue;
+                    }
+                    const oldSlots = Array.isArray(card.dailyTimes[oldKey]) ? card.dailyTimes[oldKey] : [card.dailyTimes[oldKey]];
                     const shiftedDate = new Date(oldDate);
                     shiftedDate.setDate(shiftedDate.getDate() + dayShift);
-                    content = this.parser.updateTimeBlock(content, card.lineIndex, oldDate, null, null);
+                    content = this.parser.updateTimeBlock(content, card.lineIndex, oldDate, null, null, null, 'set', card);
                     for (const slot of oldSlots) {
                         if (slot && slot.timeStart && slot.timeEnd) {
-                            content = this.parser.updateTimeBlock(content, card.lineIndex, shiftedDate, slot.timeStart, slot.timeEnd, null, 'add');
+                            content = this.parser.updateTimeBlock(content, card.lineIndex, shiftedDate, slot.timeStart, slot.timeEnd, null, 'add', card);
                         }
                     }
                 }
@@ -15814,16 +16680,22 @@ kanban-plugin: basic
         }
         
         await this.app.vault.modify(file, content);
-        new obsidian.Notice(`${card.title} → ${formatDate(newStart)}${sameDay(newStart, newEnd) ? '' : ' – ' + formatDate(newEnd)}`);
+        const desc = finalRanges.map(r => `${formatDate(r.start)}${sameDay(r.start, r.end || r.start) ? '' : ' – ' + formatDate(r.end || r.start)}`).join(', ');
+        new obsidian.Notice(`${card.title} → ${desc}`);
     }
 
-    attachGanttResize(handleEl, edgeType, card, ws, cellDates, cellElements, row) {
+    attachGanttResize(handleEl, edgeType, card, matchingRange, ws, cellDates, cellElements, row) {
         handleEl.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             e.stopPropagation();
 
-            const currentStart = startOfDay(card.startDate);
-            const currentEnd   = startOfDay(card.endDate || card.startDate);
+            const allRanges = (card.dateRanges && card.dateRanges.length > 0)
+                ? card.dateRanges.map(r => ({ start: new Date(r.start), end: new Date(r.end || r.start) }))
+                : [{ start: new Date(card.startDate), end: new Date(card.endDate || card.startDate) }];
+
+            const targetRange = matchingRange || allRanges[0];
+            const currentStart = startOfDay(targetRange.start);
+            const currentEnd   = startOfDay(targetRange.end || targetRange.start);
             let previewStart = new Date(currentStart);
             let previewEnd   = new Date(currentEnd);
             let hasMoved     = false;
@@ -15857,7 +16729,15 @@ kanban-plugin: basic
                         }
                     }
 
-                    this.updateGanttRowVisual(cellElements, cellDates, card, previewStart, previewEnd, 0);
+                    const previewMovedRange = { start: previewStart, end: previewEnd };
+                    const previewRanges = allRanges.map(r => {
+                        if (sameDay(r.start, currentStart) && sameDay(r.end, currentEnd)) {
+                            return previewMovedRange;
+                        }
+                        return r;
+                    });
+
+                    this.updateGanttRowVisual(cellElements, cellDates, card, previewRanges, 0, 0, previewMovedRange);
                 }
             };
 
@@ -15867,8 +16747,15 @@ kanban-plugin: basic
                 document.body.classList.remove('kt-is-resizing');
 
                 if (hasMoved) {
-                    if (!sameDay(previewStart, card.startDate) || !sameDay(previewEnd, card.endDate || card.startDate)) {
-                        await this.persistDateRange(card, previewStart, previewEnd);
+                    if (!sameDay(previewStart, currentStart) || !sameDay(previewEnd, currentEnd)) {
+                        const finalRanges = allRanges.map(r => {
+                            if (sameDay(r.start, currentStart) && sameDay(r.end, currentEnd)) {
+                                return { start: previewStart, end: previewEnd };
+                            }
+                            return r;
+                        });
+                        finalRanges.sort((a, b) => a.start.getTime() - b.start.getTime());
+                        await this.persistDateRange(card, finalRanges);
                         await this.refresh();
                     } else {
                         await this.refresh();
@@ -16227,13 +17114,42 @@ kanban-plugin: basic
         const projCols = (project.columns || []).map(c => c.toLowerCase());
         const excludedSet = new Set(project.excludedTaskTitles || []);
 
-        const matchingCards = cards.filter(c => {
+        const matchingCards = (cards || []).filter(c => {
             if (c.isEvent || c.column === 'Rotina') return false;
             const hasTag = projTag && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
             const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
             const hasTitleTag = projTag && c.title.toLowerCase().includes('#' + projTag);
             return hasTag || inCol || hasTitleTag;
         });
+
+        // Merge persistent tasks that are no longer in active cards (e.g. deleted from Kanban)
+        const seenTitles = new Set(matchingCards.map(c => (c.cleanTitle || c.title || '').trim().toLowerCase()));
+        if (project.persistentTasks && Array.isArray(project.persistentTasks)) {
+            for (const pt of project.persistentTasks) {
+                const ptKey = (pt.cleanTitle || pt.title || '').trim().toLowerCase();
+                if (!ptKey) continue;
+                if (!seenTitles.has(ptKey)) {
+                    matchingCards.push({
+                        id: pt.id,
+                        title: pt.title,
+                        cleanTitle: pt.cleanTitle || pt.title,
+                        column: pt.column || 'Removida',
+                        isCompleted: !!pt.isCompleted,
+                        dailyTimes: pt.dailyTimes ? JSON.parse(JSON.stringify(pt.dailyTimes)) : {},
+                        timeStart: pt.timeStart || null,
+                        timeEnd: pt.timeEnd || null,
+                        startDate: pt.startDate ? parseDate(pt.startDate) : null,
+                        endDate: pt.endDate ? parseDate(pt.endDate) : null,
+                        estimateMinutes: pt.estimateMinutes || 0,
+                        estimateText: pt.estimateText || '',
+                        tags: [...(pt.tags || [])],
+                        isDeleted: true,
+                        deletedAt: pt.deletedAt || null
+                    });
+                    seenTitles.add(ptKey);
+                }
+            }
+        }
 
         let pastMinutes = 0;   // Realizadas (Hoje para trás)
         let futureMinutes = 0; // Agendadas (Dias futuros)
@@ -16244,6 +17160,7 @@ kanban-plugin: basic
         let doneTasks = 0;
         let inDevTasks = 0;
         let backlogTasks = 0;
+        let deletedTasks = 0;
 
         const now = new Date();
         const today = startOfDay(now);
@@ -16262,6 +17179,7 @@ kanban-plugin: basic
             const isInDev = (c.column || '').toLowerCase().includes('indev') || (c.column || '').toLowerCase().includes('in development') || (c.column || '').toLowerCase() === 'this week';
             const isExcluded = excludedSet.has(c.title.trim());
 
+            if (c.isDeleted) deletedTasks++;
             if (isDone) doneTasks++;
             else if (isInDev) inDevTasks++;
             else backlogTasks++;
@@ -16287,13 +17205,12 @@ kanban-plugin: basic
                             const dur = timeToMinutes(dt.timeEnd) - timeToMinutes(dt.timeStart);
                             if (dur > 0) {
                                 const isFutureSlot = slotDate ? startOfDay(slotDate).getTime() > today.getTime() : false;
-                                if (isDone) {
-                                    pastMinutes += dur;
-                                    doneMinutes += dur;
-                                } else if (isFutureSlot) {
+                                if (isFutureSlot && !isDone) {
                                     futureMinutes += dur;
                                 } else {
-                                    if (isInDev) inDevMinutes += dur;
+                                    pastMinutes += dur;
+                                    if (isDone) doneMinutes += dur;
+                                    else if (isInDev) inDevMinutes += dur;
                                     else backlogMinutes += dur;
                                 }
 
@@ -16304,7 +17221,8 @@ kanban-plugin: basic
                                     timeEnd: dt.timeEnd,
                                     durationMinutes: dur,
                                     isFuture: isFutureSlot && !isDone,
-                                    isDone
+                                    isDone,
+                                    isDeleted: !!c.isDeleted
                                 });
                             }
                         }
@@ -16316,13 +17234,12 @@ kanban-plugin: basic
                     const cardDate = c.startDate ? startOfDay(c.startDate) : null;
                     const isFutureSlot = cardDate ? cardDate.getTime() > today.getTime() : false;
                     
-                    if (isDone) {
-                        pastMinutes += dur;
-                        doneMinutes += dur;
-                    } else if (isFutureSlot) {
+                    if (isFutureSlot && !isDone) {
                         futureMinutes += dur;
                     } else {
-                        if (isInDev) inDevMinutes += dur;
+                        pastMinutes += dur;
+                        if (isDone) doneMinutes += dur;
+                        else if (isInDev) inDevMinutes += dur;
                         else backlogMinutes += dur;
                     }
 
@@ -16333,20 +17250,20 @@ kanban-plugin: basic
                         timeEnd: c.timeEnd,
                         durationMinutes: dur,
                         isFuture: isFutureSlot && !isDone,
-                        isDone
+                        isDone,
+                        isDeleted: !!c.isDeleted
                     });
                 }
             } else if (c.estimateMinutes && c.estimateMinutes > 0) {
                 if (periodFilter === 'all') {
                     const cardDate = c.startDate ? startOfDay(c.startDate) : null;
                     const isFutureSlot = cardDate ? cardDate.getTime() > today.getTime() : false;
-                    if (isDone) {
-                        pastMinutes += c.estimateMinutes;
-                        doneMinutes += c.estimateMinutes;
-                    } else if (isFutureSlot) {
+                    if (isFutureSlot && !isDone) {
                         futureMinutes += c.estimateMinutes;
                     } else {
-                        if (isInDev) inDevMinutes += c.estimateMinutes;
+                        pastMinutes += c.estimateMinutes;
+                        if (isDone) doneMinutes += c.estimateMinutes;
+                        else if (isInDev) inDevMinutes += c.estimateMinutes;
                         else backlogMinutes += c.estimateMinutes;
                     }
                 }
@@ -16362,6 +17279,7 @@ kanban-plugin: basic
             doneTasks,
             inDevTasks,
             backlogTasks,
+            deletedTasks,
             pastMinutes,
             futureMinutes,
             totalMinutes: pastMinutes, // Primary total hours is past/today!
@@ -16592,12 +17510,20 @@ kanban-plugin: basic
         if (stats.matchingCards.length === 0) {
             tasksList.createDiv('kt-proj-drawer-empty').setText('Nenhuma tarefa encontrada com esta hashtag ou coluna.');
         } else {
-            stats.matchingCards.forEach(c => {
+            // Sort: active tasks first, deleted tasks at bottom
+            const sortedCards = [...stats.matchingCards].sort((a, b) => {
+                if (a.isDeleted && !b.isDeleted) return 1;
+                if (!a.isDeleted && b.isDeleted) return -1;
+                return 0;
+            });
+
+            sortedCards.forEach(c => {
+                const isDeleted = !!c.isDeleted;
                 const isDone = c.isCompleted || c.column === 'Done' || isIgnoredColumn(c.column);
                 const isExcluded = (project.excludedTaskTitles || []).includes(c.title.trim());
-                const isCountedInRealized = isDone && !isExcluded;
+                const isCountedInRealized = !isExcluded;
 
-                const tItem = tasksList.createDiv(`kt-proj-task-item ${isDone ? 'is-done' : ''} ${isExcluded ? 'is-excluded' : ''} ${!isCountedInRealized ? 'not-counted' : ''}`);
+                const tItem = tasksList.createDiv(`kt-proj-task-item ${isDone ? 'is-done' : ''} ${isExcluded ? 'is-excluded' : ''} ${!isCountedInRealized ? 'not-counted' : ''} ${isDeleted ? 'is-deleted' : ''}`);
 
                 const left = tItem.createDiv('kt-proj-task-left');
                 
@@ -16609,15 +17535,34 @@ kanban-plugin: basic
                 leftCheck.title = isDone ? 'Tarefa concluída (clique para marcar como pendente)' : 'Tarefa pendente (clique para marcar como concluída)';
                 leftCheck.onclick = async (e) => {
                     e.stopPropagation();
-                    await this.toggleCardCompletion(c);
-                    await this.refresh();
+                    if (isDeleted) {
+                        c.isCompleted = !c.isCompleted;
+                        const pt = (project.persistentTasks || []).find(p => (p.cleanTitle || p.title || '').trim().toLowerCase() === (c.cleanTitle || c.title || '').trim().toLowerCase());
+                        if (pt) {
+                            pt.isCompleted = c.isCompleted;
+                            await this.plugin.saveSettings();
+                            this.render();
+                        }
+                    } else {
+                        await this.toggleCardCompletion(c);
+                        await this.refresh();
+                    }
                 };
 
-                const titleSpan = left.createSpan({ cls: 'kt-proj-task-title', text: c.title });
-                titleSpan.onclick = () => this.openCardOptionsModal(c);
+                const titleSpan = left.createSpan({ cls: 'kt-proj-task-title', text: c.cleanTitle || c.title });
+                if (isDeleted) {
+                    titleSpan.title = 'Esta tarefa foi removida do Kanban, mas seu histórico de horas está salvo no projeto. Clique no "✕" à direita para excluí-la definitivamente deste projeto.';
+                } else {
+                    titleSpan.onclick = () => this.openCardOptionsModal(c);
+                }
 
                 const right = tItem.createDiv('kt-proj-task-right');
-                right.createSpan({ cls: 'kt-proj-task-col', text: c.column });
+                if (isDeleted) {
+                    const delBadge = right.createSpan({ cls: 'kt-proj-task-deleted-badge', text: '🗑️ Removida' });
+                    delBadge.title = c.deletedAt ? `Removida do Kanban em ${new Date(c.deletedAt).toLocaleDateString()}` : 'Removida do Kanban';
+                } else {
+                    right.createSpan({ cls: 'kt-proj-task-col', text: c.column });
+                }
                 
                 // Calculate task's total time
                 let taskDurMinutes = 0;
@@ -16642,39 +17587,59 @@ kanban-plugin: basic
                 if (taskDurMinutes > 0) {
                     const timeSpan = right.createSpan({ cls: 'kt-proj-task-time', text: `⏱ ${formatMinutesToHours(taskDurMinutes)}` });
                     if (!isCountedInRealized) {
-                        if (!isDone && isExcluded) timeSpan.title = 'Não contabilizado: tarefa pendente e desmarcada no seletor da direita';
-                        else if (!isDone) timeSpan.title = 'Não contabilizado nos ganhos: tarefa pendente (precisa ser concluída ✓)';
-                        else timeSpan.title = 'Não contabilizado nos ganhos: desmarcada no seletor da direita';
+                        timeSpan.title = 'Desconsiderado do cálculo pelo seletor à direita';
                     } else {
-                        timeSpan.title = 'Contabilizado nas horas e ganhos realizados ✓';
+                        timeSpan.title = isDeleted ? 'Horas trabalhadas mantidas no histórico do projeto ✓' : 'Contabilizado nas horas e ganhos realizados ✓';
                     }
                 } else if (c.estimateText) {
                     right.createSpan({ cls: 'kt-proj-task-time', text: `⏱ ${c.estimateText}` });
                 }
 
-                // Minimalist Toggle Button on Far Right (Inclusão / Exclusão manual)
-                const toggleBtn = right.createSpan({
-                    cls: `kt-proj-task-toggle-btn ${!isExcluded ? 'is-included' : 'is-excluded'}`,
-                    text: !isExcluded ? '✓' : '○'
-                });
-                toggleBtn.title = isExcluded
-                    ? 'Desconsiderado do cálculo do projeto (clique para incluir)'
-                    : 'Incluído no cálculo do projeto (clique para desconsiderar)';
+                if (isDeleted) {
+                    // Permanent delete button for deleted tasks
+                    const removeBtn = right.createEl('button', {
+                        cls: 'kt-proj-task-remove-btn',
+                        text: '✕'
+                    });
+                    removeBtn.title = 'Excluir permanentemente este registro do projeto';
+                    removeBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        new ConfirmDeleteModal(this.app, `${c.cleanTitle || c.title} (do projeto ${project.name})`, async () => {
+                            project.persistentTasks = (project.persistentTasks || []).filter(p => {
+                                const pKey = (p.cleanTitle || p.title || '').trim().toLowerCase();
+                                const cKey = (c.cleanTitle || c.title || '').trim().toLowerCase();
+                                return pKey !== cKey && p.id !== c.id;
+                            });
+                            await this.plugin.saveSettings();
+                            this.render();
+                            new obsidian.Notice(`Registro de "${c.title}" excluído do projeto.`);
+                        }).open();
+                    };
+                } else {
+                    // Minimalist Toggle Button on Far Right (Inclusão / Exclusão manual)
+                    const toggleBtn = right.createSpan({
+                        cls: `kt-proj-task-toggle-btn ${!isExcluded ? 'is-included' : 'is-excluded'}`,
+                        text: !isExcluded ? '✓' : '○'
+                    });
+                    toggleBtn.title = isExcluded
+                        ? 'Desconsiderado do cálculo do projeto (clique para incluir)'
+                        : 'Incluído no cálculo do projeto (clique para desconsiderar)';
 
-                toggleBtn.onclick = async (e) => {
-                    e.stopPropagation();
-                    if (!project.excludedTaskTitles) project.excludedTaskTitles = [];
-                    const titleKey = c.title.trim();
-                    if (isExcluded) {
-                        project.excludedTaskTitles = project.excludedTaskTitles.filter(t => t !== titleKey);
-                    } else {
-                        if (!project.excludedTaskTitles.includes(titleKey)) {
-                            project.excludedTaskTitles.push(titleKey);
+                    toggleBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        if (!project.excludedTaskTitles) project.excludedTaskTitles = [];
+                        const titleKey = c.title.trim();
+                        if (isExcluded) {
+                            project.excludedTaskTitles = project.excludedTaskTitles.filter(t => t !== titleKey);
+                        } else {
+                            if (!project.excludedTaskTitles.includes(titleKey)) {
+                                project.excludedTaskTitles.push(titleKey);
+                            }
                         }
-                    }
-                    await this.plugin.saveSettings();
-                    this.render();
-                };
+                        await this.plugin.saveSettings();
+                        this.render();
+                    };
+                }
             });
         }
     }
@@ -19041,6 +20006,9 @@ kanban-plugin: basic
         }
 
         if (this.financesMainViewTab === 'trips') {
+            if (this.tripSubTab === 'map') {
+                finContainer.addClass('kt-fin-fullscreen-map');
+            }
             this.renderFinancesTripsView(finContainer, curr);
             return;
         }
@@ -21889,7 +22857,40 @@ kanban-plugin: basic
             ).open();
         };
 
-        // 5. Top KPI Cards (Clean, Executive & Minimalist with Progress Rings)
+        // 5. Sub-Navigation Tabs: Orçamento & Despesas vs. Mapa & Roteiro
+        this.tripSubTab = this.tripSubTab || 'budget';
+
+        const subtabsBar = viewWrap.createDiv('kt-trip-subtabs-bar');
+
+        const budgetBtn = subtabsBar.createEl('button', {
+            cls: `kt-trip-subtab-btn ${this.tripSubTab === 'budget' ? 'is-active' : ''}`,
+            text: 'Orçamento & Despesas'
+        });
+        budgetBtn.onclick = () => {
+            if (this.tripSubTab !== 'budget') {
+                this.tripSubTab = 'budget';
+                this.render();
+            }
+        };
+
+        const mapBtn = subtabsBar.createEl('button', {
+            cls: `kt-trip-subtab-btn ${this.tripSubTab === 'map' ? 'is-active' : ''}`,
+            text: 'Mapa & Roteiro'
+        });
+        mapBtn.onclick = () => {
+            if (this.tripSubTab !== 'map') {
+                this.tripSubTab = 'map';
+                this.render();
+            }
+        };
+
+        if (this.tripSubTab === 'map') {
+            viewWrap.addClass('kt-trip-map-mode');
+            this.renderTripMapView(viewWrap, activeTrip, tripCurr);
+            return;
+        }
+
+        // 6. Top KPI Cards (Clean, Executive & Minimalist with Progress Rings)
         const kpisBar = viewWrap.createDiv('kt-trip-kpis-bar');
 
         // KPI 1: Meta Total
@@ -22230,6 +23231,695 @@ kanban-plugin: basic
                 <span class="kt-trip-sum-val" style="color: #38bdf8;">${this.formatFinCurrency(Math.max(0, totalEstimated - totalPaid), tripCurr)}</span>
             </div>
         `;
+    }
+
+    renderTripMapView(container, activeTrip, tripCurr) {
+        if (!Array.isArray(activeTrip.destinations)) {
+            activeTrip.destinations = [];
+        }
+
+        const mapLayout = container.createDiv('kt-trip-map-layout');
+
+        // Main Map Section (Left Column)
+        const mapMain = mapLayout.createDiv('kt-trip-map-main');
+
+        // Top Toolbar: Search + Action Buttons
+        const toolbar = mapMain.createDiv('kt-trip-map-toolbar');
+
+        const searchWrap = toolbar.createDiv('kt-trip-map-search-wrap');
+        const searchInput = searchWrap.createEl('input', {
+            cls: 'kt-trip-map-search-input',
+            type: 'text',
+            placeholder: 'Buscar cidade ou país no mapa-múndi (ex: Tóquio, Paris, Roma, Rio)...'
+        });
+        const searchDropdown = searchWrap.createDiv('kt-trip-map-search-dropdown');
+        searchDropdown.style.display = 'none';
+
+        let searchDebounceTimer = null;
+        searchInput.addEventListener('input', () => {
+            if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+            const query = searchInput.value.trim();
+            if (query.length < 2) {
+                searchDropdown.style.display = 'none';
+                searchDropdown.empty();
+                return;
+            }
+            searchDebounceTimer = setTimeout(async () => {
+                searchDropdown.empty();
+                searchDropdown.style.display = 'block';
+                const loadingItem = searchDropdown.createDiv('kt-trip-search-item is-loading');
+                loadingItem.setText('Buscando destinos...');
+
+                const results = await this.searchNominatim(query);
+                searchDropdown.empty();
+                if (!results || results.length === 0) {
+                    const noRes = searchDropdown.createDiv('kt-trip-search-item is-empty');
+                    noRes.setText('Nenhuma localidade encontrada.');
+                    return;
+                }
+
+                results.forEach(res => {
+                    const item = searchDropdown.createDiv('kt-trip-search-item');
+                    const titleDiv = item.createDiv('kt-trip-search-item-title');
+                    const city = res.address?.city || res.address?.town || res.address?.village || res.address?.municipality || res.address?.state || res.name || res.display_name.split(',')[0];
+                    const country = res.address?.country || '';
+                    const label = [city, country].filter(Boolean).join(', ') || res.display_name;
+                    titleDiv.setText(label);
+
+                    const subDiv = item.createDiv('kt-trip-search-item-sub');
+                    subDiv.setText(res.display_name);
+
+                    item.onclick = () => {
+                        searchInput.value = '';
+                        searchDropdown.style.display = 'none';
+                        searchDropdown.empty();
+
+                        const lat = parseFloat(res.lat);
+                        const lng = parseFloat(res.lon);
+                        if (this._tripLeafletMap) {
+                            this._tripLeafletMap.flyTo([lat, lng], 11, { duration: 1.5 });
+                        }
+
+                        new FinanceTripDestinationModal(this.app, {
+                            name: label,
+                            lat: parseFloat(lat.toFixed(4)),
+                            lng: parseFloat(lng.toFixed(4)),
+                            order: (activeTrip.destinations.length || 0) + 1
+                        }, async (newDest) => {
+                            activeTrip.destinations.push(newDest);
+                            await this.plugin.saveSettings();
+                            this.render();
+                            new obsidian.Notice(`Destino "${newDest.name}" adicionado ao roteiro!`);
+                        }).open();
+                    };
+                });
+            }, 350);
+        });
+
+        // Close search dropdown on click outside
+        const outsideClickHandler = (e) => {
+            if (!searchWrap.contains(e.target)) {
+                searchDropdown.style.display = 'none';
+            }
+        };
+        document.addEventListener('click', outsideClickHandler);
+
+        const toolbarBtns = toolbar.createDiv('kt-trip-map-toolbar-actions');
+
+        if (!this.tripMapStyle || this.tripMapStyle === 'dark') {
+            this.tripMapStyle = this.plugin?.settings?.finances?.tripMapStyle || 'midnight';
+            if (this.tripMapStyle === 'dark') this.tripMapStyle = 'midnight';
+        }
+
+        const styleSelect = toolbarBtns.createEl('select', {
+            cls: 'kt-trip-map-select kt-trip-map-style-select'
+        });
+        styleSelect.title = 'Visual do Mapa (Midnight Azul, Atlas Vívido, Satélite Real, Ruas Detalhado)';
+        const mapStyleOptions = [
+            { id: 'midnight', label: '🌙 Midnight Azul (Oceano Colorido & Rápido)' },
+            { id: 'natgeo', label: '🌍 Atlas Físico (National Geographic Vívido)' },
+            { id: 'satellite', label: '🛰️ Satélite Real (Cores da Terra)' },
+            { id: 'street', label: '🗺️ Ruas Detalhado (Bilingue)' },
+            { id: 'osm', label: '🌐 OpenStreetMap Padrão' },
+            { id: 'gray', label: '🌑 Grafite Minimalista (Cinza)' }
+        ];
+        mapStyleOptions.forEach(opt => {
+            const o = styleSelect.createEl('option', { value: opt.id, text: opt.label });
+            if (this.tripMapStyle === opt.id) o.selected = true;
+        });
+        styleSelect.onchange = () => {
+            this.tripMapStyle = styleSelect.value;
+            if (this.plugin?.settings?.finances) {
+                this.plugin.settings.finances.tripMapStyle = this.tripMapStyle;
+                this.plugin.saveSettings();
+            }
+            if (this._tripLeafletMap) {
+                this.applyMapTileStyle(this._tripLeafletMap);
+            }
+        };
+
+        const centerRouteBtn = toolbarBtns.createEl('button', {
+            cls: 'kt-trip-map-btn',
+            text: 'Centralizar Rota'
+        });
+        centerRouteBtn.title = 'Ajustar o zoom para visualizar todos os destinos da viagem';
+        centerRouteBtn.onclick = () => {
+            if (!this._tripLeafletMap) return;
+            const validCoords = (activeTrip.destinations || [])
+                .filter(d => d.lat != null && d.lng != null)
+                .map(d => [Number(d.lat), Number(d.lng)]);
+            if (validCoords.length === 1) {
+                this._tripLeafletMap.setView(validCoords[0], 8);
+            } else if (validCoords.length > 1 && window.L) {
+                this._tripLeafletMap.fitBounds(window.L.latLngBounds(validCoords), { padding: [50, 50], maxZoom: 12 });
+            } else {
+                this._tripLeafletMap.setView([20, 0], 2);
+            }
+        };
+
+        const addManualBtn = toolbarBtns.createEl('button', {
+            cls: 'kt-trip-map-btn mod-cta',
+            text: '+ Adicionar Destino'
+        });
+        addManualBtn.onclick = () => {
+            new FinanceTripDestinationModal(this.app, null, async (newDest) => {
+                newDest.order = (activeTrip.destinations.length || 0) + 1;
+                activeTrip.destinations.push(newDest);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`Destino "${newDest.name}" adicionado ao roteiro!`);
+            }).open();
+        };
+
+        // Map Canvas Container
+        const mapCanvas = mapMain.createDiv('kt-trip-map-canvas');
+
+        // Sidebar (Right column): Roteiro & Paradas
+        this.renderTripItinerarySidebar(mapLayout, activeTrip);
+
+        // Initialize Map asynchronously
+        this.initTripLeafletMap(mapCanvas, activeTrip);
+    }
+
+    async initTripLeafletMap(containerEl, activeTrip) {
+        try {
+            const L = await this.ensureLeafletLoaded();
+            if (!containerEl.isConnected) return;
+
+            if (this._tripLeafletMap) {
+                try {
+                    this._tripLeafletMap.remove();
+                } catch (e) {}
+                this._tripLeafletMap = null;
+            }
+
+            if (this._tripMapResizeObserver) {
+                try {
+                    this._tripMapResizeObserver.disconnect();
+                } catch (e) {}
+                this._tripMapResizeObserver = null;
+            }
+
+            const map = L.map(containerEl, {
+                center: [20, 0],
+                zoom: 2,
+                minZoom: 2,
+                maxZoom: 18,
+                zoomControl: true,
+                attributionControl: true
+            });
+            this._tripLeafletMap = map;
+
+            // Apply Tiles (Esri Dark Gray by default - Zero API key required, zero watermarks)
+            this.applyMapTileStyle(map);
+
+            // Progressive invalidateSize to guarantee all tiles load regardless of DOM reflow delays
+            const scheduleInvalidate = () => {
+                if (this._tripLeafletMap === map) {
+                    map.invalidateSize({ pan: false });
+                }
+            };
+            window.setTimeout(scheduleInvalidate, 50);
+            window.setTimeout(scheduleInvalidate, 150);
+            window.setTimeout(scheduleInvalidate, 300);
+            window.setTimeout(scheduleInvalidate, 600);
+            window.setTimeout(scheduleInvalidate, 1200);
+
+            // Auto-resize observer on containerEl
+            if (typeof ResizeObserver !== 'undefined') {
+                const ro = new ResizeObserver(() => {
+                    scheduleInvalidate();
+                });
+                ro.observe(containerEl);
+                this._tripMapResizeObserver = ro;
+            }
+
+            // Click on map to add destination
+            map.on('click', async (e) => {
+                const { lat, lng } = e.latlng;
+                const guessedName = await this.reverseGeocodeNominatim(lat, lng);
+                new FinanceTripDestinationModal(this.app, {
+                    name: guessedName,
+                    lat: parseFloat(lat.toFixed(4)),
+                    lng: parseFloat(lng.toFixed(4)),
+                    order: (activeTrip.destinations.length || 0) + 1
+                }, async (newDest) => {
+                    activeTrip.destinations.push(newDest);
+                    await this.plugin.saveSettings();
+                    this.render();
+                    new obsidian.Notice(`Destino "${newDest.name}" adicionado ao roteiro!`);
+                }).open();
+            });
+
+            this.updateTripMapLayers(map, activeTrip);
+
+            // Zoom to fit existing destinations if any
+            const validCoords = (activeTrip.destinations || [])
+                .filter(d => d.lat != null && d.lng != null)
+                .map(d => [Number(d.lat), Number(d.lng)]);
+            if (validCoords.length === 1) {
+                map.setView(validCoords[0], 7);
+            } else if (validCoords.length > 1) {
+                map.fitBounds(L.latLngBounds(validCoords), { padding: [50, 50], maxZoom: 12 });
+            }
+        } catch (err) {
+            console.error("Leaflet init error:", err);
+            containerEl.empty();
+            const errBox = containerEl.createDiv('kt-trip-map-error');
+            errBox.createDiv({ cls: 'kt-trip-map-error-title', text: 'Não foi possível carregar o mapa interativo' });
+            errBox.createEl('p', {
+                cls: 'kt-trip-map-error-desc',
+                text: 'Houve uma falha ao conectar ao servidor de mapa. Verifique sua conexão com a internet. O roteiro ainda pode ser gerenciado pelo painel lateral.'
+            });
+            const retryBtn = errBox.createEl('button', { cls: 'mod-cta', text: 'Tentar Novamente' });
+            retryBtn.onclick = () => this.initTripLeafletMap(containerEl, activeTrip);
+        }
+    }
+
+    applyMapTileStyle(map) {
+        if (!map || !window.L) return;
+        const L = window.L;
+        const container = map.getContainer();
+
+        if (this._tripTileLayers && Array.isArray(this._tripTileLayers)) {
+            this._tripTileLayers.forEach(l => {
+                try { map.removeLayer(l); } catch (e) {}
+            });
+        }
+        this._tripTileLayers = [];
+
+        let style = this.tripMapStyle || 'midnight';
+        if (style === 'dark') style = 'midnight';
+
+        if (container) {
+            container.classList.remove('kt-map-dark-tiles', 'kt-map-midnight-tiles');
+        }
+
+        // Fast, lightweight tile options (1 layer, buffer 2 instead of 6, instant rendering)
+        const tileOptions = {
+            minZoom: 2,
+            maxZoom: 19,
+            noWrap: false,
+            keepBuffer: 2,
+            updateWhenIdle: false,
+            updateInterval: 100
+        };
+
+        if (style === 'natgeo') {
+            // 🌍 Atlas National Geographic: Cores vivas, mares azuis celestes, relevo verde, nomes em latim
+            if (container) container.style.backgroundColor = '#b5d0d0';
+            const layer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}', Object.assign({}, tileOptions, {
+                attribution: '&copy; National Geographic, Esri',
+                maxNativeZoom: 16
+            })).addTo(map);
+            this._tripTileLayers.push(layer);
+
+        } else if (style === 'street') {
+            // 🗺️ Ruas Detalhado: Rios azuis, parques, vias em laranja, nomes bilingues
+            if (container) container.style.backgroundColor = '#d4dadc';
+            const layer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', Object.assign({}, tileOptions, {
+                attribution: '&copy; Esri, DeLorme, USGS',
+                maxNativeZoom: 18
+            })).addTo(map);
+            this._tripTileLayers.push(layer);
+
+        } else if (style === 'satellite') {
+            // 🛰️ Satélite Real: Fotografia orbital com cores autênticas dos oceanos e continentes
+            if (container) container.style.backgroundColor = '#040d1a';
+            const layer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', Object.assign({}, tileOptions, {
+                attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+                maxNativeZoom: 18
+            })).addTo(map);
+            this._tripTileLayers.push(layer);
+
+        } else if (style === 'osm') {
+            // 🌐 OpenStreetMap Padrão Comunitário
+            if (container) container.style.backgroundColor = '#e5e7eb';
+            const layer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', Object.assign({}, tileOptions, {
+                attribution: '&copy; OpenStreetMap contributors',
+                maxNativeZoom: 19
+            })).addTo(map);
+            this._tripTileLayers.push(layer);
+
+        } else if (style === 'gray') {
+            // 🌑 Grafite Minimalista Monocromático (para quem quiser o cinza)
+            if (container) container.style.backgroundColor = '#1e1e1e';
+            const layer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', Object.assign({}, tileOptions, {
+                attribution: '&copy; Esri, DeLorme, NAVTEQ',
+                maxNativeZoom: 16
+            })).addTo(map);
+            this._tripTileLayers.push(layer);
+
+        } else {
+            // Padrão: 'midnight' -> 🌙 Midnight Azul & Verde
+            // 1 camada única ultra veloz (NatGeo) com filtro Midnight:
+            // Oceanos em azul marinho profundo (não cinza!), relevo verde e âmbar, nomes em latim
+            // Carregamento instantâneo, super leve e com alto contraste
+            if (container) {
+                container.classList.add('kt-map-midnight-tiles');
+                container.style.backgroundColor = '#0a1526';
+            }
+            const layer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}', Object.assign({}, tileOptions, {
+                attribution: '&copy; National Geographic, Esri',
+                maxNativeZoom: 16
+            })).addTo(map);
+            this._tripTileLayers.push(layer);
+        }
+
+        // Keep markers layer on top of new tile layers
+        if (this._tripMarkersLayer) {
+            try {
+                this._tripMarkersLayer.bringToFront();
+            } catch (e) {}
+        }
+    }
+
+    updateTripMapLayers(map, activeTrip) {
+        if (!map || !window.L) return;
+        const L = window.L;
+
+        if (this._tripMarkersLayer) {
+            try { map.removeLayer(this._tripMarkersLayer); } catch (e) {}
+            this._tripMarkersLayer = null;
+        }
+
+        const layer = L.layerGroup().addTo(map);
+        this._tripMarkersLayer = layer;
+
+        const destinations = activeTrip.destinations || [];
+        if (destinations.length === 0) return;
+
+        const routeCoords = [];
+
+        destinations.forEach((dest, idx) => {
+            if (dest.lat == null || dest.lng == null) return;
+            const pos = [Number(dest.lat), Number(dest.lng)];
+            routeCoords.push(pos);
+
+            // Minimalist emerald pin with sequence number
+            const iconHtml = `
+                <div class="kt-map-marker-pin">
+                    <span class="kt-map-marker-num">${idx + 1}</span>
+                    <div class="kt-map-marker-pulse"></div>
+                </div>
+            `;
+
+            const icon = L.divIcon({
+                className: 'kt-map-marker-container',
+                html: iconHtml,
+                iconSize: [30, 30],
+                iconAnchor: [15, 15],
+                popupAnchor: [0, -16]
+            });
+
+            const marker = L.marker(pos, { icon }).addTo(layer);
+
+            // Popup with clean dark card styling
+            const dateStr = [dest.arrivalDate, dest.departureDate].filter(Boolean).join(' → ');
+            const popupDiv = document.createElement('div');
+            popupDiv.className = 'kt-map-popup-card';
+            popupDiv.innerHTML = `
+                <div class="kt-map-popup-header">
+                    <span class="kt-map-popup-badge">Parada ${idx + 1}</span>
+                    <span class="kt-map-popup-name">${dest.name}</span>
+                </div>
+                ${dateStr ? `<div class="kt-map-popup-dates">${dateStr}</div>` : ''}
+                ${dest.notes ? `<div class="kt-map-popup-notes">${dest.notes}</div>` : ''}
+                <div class="kt-map-popup-actions">
+                    <button class="kt-map-popup-act-btn edit-btn">Editar</button>
+                    <button class="kt-map-popup-act-btn del-btn mod-warning">Excluir</button>
+                </div>
+            `;
+
+            popupDiv.querySelector('.edit-btn').onclick = () => {
+                new FinanceTripDestinationModal(this.app, dest, async (updatedDest) => {
+                    const dIdx = activeTrip.destinations.findIndex(d => d.id === dest.id);
+                    if (dIdx !== -1) activeTrip.destinations[dIdx] = updatedDest;
+                    await this.plugin.saveSettings();
+                    this.render();
+                }, async (delId) => {
+                    activeTrip.destinations = activeTrip.destinations.filter(d => d.id !== delId);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+
+            popupDiv.querySelector('.del-btn').onclick = async () => {
+                activeTrip.destinations = activeTrip.destinations.filter(d => d.id !== dest.id);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`Parada "${dest.name}" removida.`);
+            };
+
+            marker.bindPopup(popupDiv, { className: 'kt-map-custom-popup' });
+        });
+
+        // Draw luminous dashed emerald line connecting destinations
+        if (routeCoords.length >= 2) {
+            L.polyline(routeCoords, {
+                color: '#10b981',
+                weight: 3,
+                opacity: 0.85,
+                dashArray: '6, 8',
+                lineJoin: 'round'
+            }).addTo(layer);
+        }
+    }
+
+    renderTripItinerarySidebar(container, activeTrip) {
+        const sidebar = container.createDiv('kt-trip-itinerary-sidebar');
+
+        const destinations = activeTrip.destinations || [];
+        const totalKm = this.calculateRouteDistanceKm(destinations);
+
+        // Header
+        const header = sidebar.createDiv('kt-trip-itin-header');
+        const headerTop = header.createDiv('kt-trip-itin-header-top');
+        headerTop.createEl('h3', { cls: 'kt-trip-itin-title', text: 'Roteiro & Paradas' });
+        headerTop.createDiv({ cls: 'kt-trip-itin-badge-count', text: `${destinations.length} ${destinations.length === 1 ? 'destino' : 'destinos'}` });
+
+        if (totalKm > 0) {
+            const distanceChip = header.createDiv('kt-trip-itin-distance-chip');
+            distanceChip.createSpan({ cls: 'kt-trip-itin-dist-label', text: 'Distância em rota:' });
+            distanceChip.createSpan({ cls: 'kt-trip-itin-dist-val', text: ` ~${totalKm.toLocaleString('pt-BR')} km` });
+        }
+
+        // Destinations List
+        const listWrap = sidebar.createDiv('kt-trip-itin-list');
+
+        if (destinations.length === 0) {
+            const empty = listWrap.createDiv('kt-trip-itin-empty');
+            empty.createDiv({ cls: 'kt-trip-itin-empty-icon', text: '📍' });
+            empty.createDiv({ cls: 'kt-trip-itin-empty-title', text: 'Nenhum destino marcado' });
+            empty.createDiv({
+                cls: 'kt-trip-itin-empty-sub',
+                text: 'Busque cidades no mapa acima ou clique em qualquer lugar do planeta para registrar sua primeira parada.'
+            });
+            return;
+        }
+
+        destinations.forEach((dest, idx) => {
+            const item = listWrap.createDiv('kt-trip-itin-item');
+
+            // Left badge
+            const badge = item.createDiv('kt-trip-itin-num');
+            badge.setText(String(idx + 1));
+
+            // Content
+            const content = item.createDiv('kt-trip-itin-content');
+            const nameEl = content.createDiv('kt-trip-itin-name');
+            nameEl.setText(dest.name);
+
+            const dateStr = [dest.arrivalDate, dest.departureDate].filter(Boolean).join(' → ');
+            if (dateStr) {
+                content.createDiv({ cls: 'kt-trip-itin-dates', text: dateStr });
+            }
+            if (dest.notes) {
+                content.createDiv({ cls: 'kt-trip-itin-notes', text: dest.notes });
+            }
+
+            // Click item to fly to destination on map
+            content.style.cursor = 'pointer';
+            content.onclick = () => {
+                if (this._tripLeafletMap && dest.lat != null && dest.lng != null) {
+                    this._tripLeafletMap.flyTo([Number(dest.lat), Number(dest.lng)], 11, { duration: 1.2 });
+                }
+            };
+
+            // Actions (Reorder Up/Down, Edit, Delete)
+            const actions = item.createDiv('kt-trip-itin-actions');
+
+            const upBtn = actions.createEl('button', {
+                cls: 'kt-trip-itin-btn',
+                text: '↑'
+            });
+            upBtn.title = 'Mover para cima';
+            if (idx === 0) upBtn.disabled = true;
+            upBtn.onclick = async (e) => {
+                e.stopPropagation();
+                if (idx > 0) {
+                    const temp = destinations[idx];
+                    destinations[idx] = destinations[idx - 1];
+                    destinations[idx - 1] = temp;
+                    destinations.forEach((d, i) => d.order = i + 1);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }
+            };
+
+            const downBtn = actions.createEl('button', {
+                cls: 'kt-trip-itin-btn',
+                text: '↓'
+            });
+            downBtn.title = 'Mover para baixo';
+            if (idx === destinations.length - 1) downBtn.disabled = true;
+            downBtn.onclick = async (e) => {
+                e.stopPropagation();
+                if (idx < destinations.length - 1) {
+                    const temp = destinations[idx];
+                    destinations[idx] = destinations[idx + 1];
+                    destinations[idx + 1] = temp;
+                    destinations.forEach((d, i) => d.order = i + 1);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }
+            };
+
+            const editBtn = actions.createEl('button', {
+                cls: 'kt-trip-itin-btn',
+                text: '✎'
+            });
+            editBtn.title = 'Editar destino';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                new FinanceTripDestinationModal(this.app, dest, async (updatedDest) => {
+                    const dIdx = destinations.findIndex(d => d.id === dest.id);
+                    if (dIdx !== -1) destinations[dIdx] = updatedDest;
+                    await this.plugin.saveSettings();
+                    this.render();
+                }, async (delId) => {
+                    activeTrip.destinations = activeTrip.destinations.filter(d => d.id !== delId);
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+
+            const delBtn = actions.createEl('button', {
+                cls: 'kt-trip-itin-btn mod-warning',
+                text: '×'
+            });
+            delBtn.title = 'Excluir parada';
+            delBtn.onclick = async (e) => {
+                e.stopPropagation();
+                activeTrip.destinations = activeTrip.destinations.filter(d => d.id !== dest.id);
+                activeTrip.destinations.forEach((d, i) => d.order = i + 1);
+                await this.plugin.saveSettings();
+                this.render();
+                new obsidian.Notice(`Destino "${dest.name}" removido.`);
+            };
+        });
+    }
+
+    calculateHaversineKm(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    calculateRouteDistanceKm(destinations) {
+        if (!Array.isArray(destinations) || destinations.length < 2) return 0;
+        let total = 0;
+        for (let i = 0; i < destinations.length - 1; i++) {
+            const d1 = destinations[i];
+            const d2 = destinations[i + 1];
+            if (d1.lat != null && d1.lng != null && d2.lat != null && d2.lng != null) {
+                total += this.calculateHaversineKm(Number(d1.lat), Number(d1.lng), Number(d2.lat), Number(d2.lng));
+            }
+        }
+        return Math.round(total);
+    }
+
+    async ensureLeafletLoaded() {
+        if (window.L && typeof window.L.map === 'function') {
+            return window.L;
+        }
+        if (window._loadingLeafletPromise) {
+            return window._loadingLeafletPromise;
+        }
+        window._loadingLeafletPromise = new Promise((resolve, reject) => {
+            if (!document.querySelector('link[href*="leaflet"]')) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                document.head.appendChild(link);
+            }
+            if (window.L && typeof window.L.map === 'function') {
+                resolve(window.L);
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+            script.onload = () => resolve(window.L);
+            script.onerror = () => reject(new Error('Falha ao carregar Leaflet.js'));
+            document.head.appendChild(script);
+        });
+        return window._loadingLeafletPromise;
+    }
+
+    async searchNominatim(query) {
+        if (!query || query.trim().length < 2) return [];
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query.trim())}&limit=6&addressdetails=1&accept-language=pt-BR,pt;q=0.9,en;q=0.8`;
+        try {
+            if (typeof obsidian !== 'undefined' && obsidian.requestUrl) {
+                const res = await obsidian.requestUrl({
+                    url: url,
+                    headers: { 'Accept': 'application/json', 'User-Agent': 'Obsidian-Kanban-Timeline/1.0' }
+                });
+                return res.json || [];
+            } else if (typeof fetch !== 'undefined') {
+                const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+                return await res.json();
+            }
+        } catch (err) {
+            console.warn("Nominatim search error:", err);
+        }
+        return [];
+    }
+
+    async reverseGeocodeNominatim(lat, lng) {
+        const fallback = `Destino (${lat.toFixed(2)}, ${lng.toFixed(2)})`;
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&addressdetails=1&accept-language=pt-BR,pt;q=0.9,en;q=0.8`;
+        try {
+            let data = null;
+            if (typeof obsidian !== 'undefined' && obsidian.requestUrl) {
+                const res = await obsidian.requestUrl({
+                    url: url,
+                    headers: { 'Accept': 'application/json', 'User-Agent': 'Obsidian-Kanban-Timeline/1.0' }
+                });
+                data = res.json;
+            } else if (typeof fetch !== 'undefined') {
+                const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+                data = await res.json();
+            }
+            if (data && data.address) {
+                const city = data.address.city || data.address.town || data.address.village || data.address.municipality || data.address.state || data.name;
+                const country = data.address.country;
+                if (city && country) return `${city}, ${country}`;
+                if (city) return city;
+            }
+            if (data && data.display_name) {
+                return data.display_name.split(',').slice(0, 2).join(',').trim();
+            }
+        } catch (err) {
+            console.warn("Nominatim reverse geocode error:", err);
+        }
+        return fallback;
     }
 
     renderFinancesBudgetSummary(parent, year, month, monthData, curr, initialBal, finalBal, monthSavings, savingsPct, totalExpReal, totalIncReal) {
@@ -26125,7 +27815,7 @@ kanban-plugin: basic
         const visibleColumns = this.columns.filter(c => !hiddenColumns.includes(c));
 
         const topBar = kanbanWrap.createDiv('kt-kanban-top-bar');
-        const activeCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina');
+        const activeCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !c.isSubtask);
         topBar.createDiv('kt-kanban-stats').setText(
             `${visibleColumns.length} Colunas • ${activeCards.length} Tarefas no total` +
             (hiddenColumns.length > 0 ? ` • ${hiddenColumns.length} ocultas` : '')
@@ -26321,7 +28011,7 @@ kanban-plugin: basic
         const grouped = {};
         visibleColumns.forEach(col => { grouped[col] = []; });
         this.cards.forEach(c => {
-            if (c.isEvent || c.column === 'Rotina') return;
+            if (c.isEvent || c.column === 'Rotina' || c.isSubtask) return;
             if (!grouped[c.column]) return; // skip cards from hidden columns
             grouped[c.column].push(c);
         });
@@ -26358,7 +28048,7 @@ kanban-plugin: basic
         titleBox.createSpan({ cls: 'kt-backlog-title-text', text: 'QUADRO KANBAN' });
         
         const countBadge = titleBox.createSpan('kt-badge-count');
-        const activeCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina');
+        const activeCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !c.isSubtask);
         countBadge.setText(`${unscheduled.length} sem data • ${activeCards.length} total`);
 
         const toggleBtn = header.createEl('button', {
@@ -26786,17 +28476,28 @@ kanban-plugin: basic
             });
         }
 
-        // Subtasks (Checklists - [ ] and - [x])
+        // Subtasks (Checklists - [ ] and - [x]) - Jira Style
         if (card.subtasks && card.subtasks.length > 0) {
-            const subtasksWrap = body.createDiv('kt-card-subtasks');
+            const subtasksWrap = body.createDiv('kt-card-subtasks kt-jira-subtasks');
             
             const completedCount = card.subtasks.filter(s => s.completed).length;
-            const progress = subtasksWrap.createDiv('kt-subtask-progress');
-            progress.setText(`${completedCount}/${card.subtasks.length}`);
+            const totalCount = card.subtasks.length;
+            const pct = Math.round((completedCount / totalCount) * 100);
+
+            const progHeader = subtasksWrap.createDiv('kt-subtask-prog-header');
+            const progress = progHeader.createDiv('kt-subtask-progress');
+            progress.setText(`${completedCount}/${totalCount} (${pct}%)`);
+
+            const bar = subtasksWrap.createDiv('kt-subtask-progressbar');
+            const fill = bar.createDiv('kt-subtask-progress-fill');
+            fill.style.width = `${pct}%`;
+            if (completedCount === totalCount && totalCount > 0) {
+                fill.addClass('is-all-done');
+            }
 
             const subtasksList = subtasksWrap.createDiv('kt-subtask-items');
             card.subtasks.forEach(st => {
-                const item = subtasksList.createDiv('kt-subtask-item');
+                const item = subtasksList.createDiv(`kt-subtask-item${st.completed ? ' is-completed' : ''}`);
                 const stChk = item.createSpan('kt-subtask-chk');
                 stChk.setText(st.completed ? '✓' : '○');
                 stChk.title = st.completed ? 'Marcar como pendente' : 'Concluir subtarefa';
@@ -26807,9 +28508,71 @@ kanban-plugin: basic
                 };
 
                 const stText = item.createSpan('kt-subtask-label');
-                if (st.completed) stText.addClass('is-completed');
-                renderFormattedTextWithLinks(stText, st.text, this.app, this.plugin.settings.kanbanFile);
+                renderFormattedTextWithLinks(stText, st.text || st.title, this.app, this.plugin.settings.kanbanFile);
+
+                // Badges: Schedule & Estimate
+                const badgesWrap = item.createSpan('kt-subtask-badges');
+                if (st.startDate) {
+                    const dtBadge = badgesWrap.createSpan('kt-subtask-date-badge');
+                    const hasSlots = st.dailyTimes && Object.keys(st.dailyTimes).length > 0;
+                    const stLeanDate = formatLeanDate(st.startDate, st.endDate);
+                    if (hasSlots) {
+                        const firstD = Object.keys(st.dailyTimes)[0];
+                        const s0 = st.dailyTimes[firstD][0];
+                        dtBadge.setText(`⏰ ${stLeanDate}`);
+                        dtBadge.title = `Subtarefa agendada: Dia ${stLeanDate} (${s0.timeStart}–${s0.timeEnd})`;
+                    } else {
+                        dtBadge.setText(`📅 ${stLeanDate}`);
+                        const isSame = !st.endDate || sameDay(st.startDate, st.endDate);
+                        dtBadge.title = `Subtarefa agendada: ${formatDate(st.startDate)}${isSame ? '' : ' – ' + formatDate(st.endDate)}`;
+                    }
+                }
+                if (st.estimateText) {
+                    const estBadge = badgesWrap.createSpan('kt-subtask-est-badge');
+                    estBadge.setText(`⏱ ${st.estimateText}`);
+                    estBadge.title = `Estimativa da subtarefa: ${st.estimateText}`;
+                }
             });
+
+            // Inline "+ Subtarefa" quick adder
+            const addWrap = subtasksWrap.createDiv('kt-subtask-quick-add');
+            const addBtn = addWrap.createSpan({ cls: 'kt-subtask-add-btn', text: '+ Subtarefa' });
+            addBtn.onclick = (e) => {
+                e.stopPropagation();
+                addBtn.style.display = 'none';
+                const input = addWrap.createEl('input', {
+                    cls: 'kt-subtask-quick-input',
+                    type: 'text',
+                    placeholder: 'Nova subtarefa... (Enter)'
+                });
+                input.focus();
+                input.onclick = (ev) => ev.stopPropagation();
+                let saved = false;
+                const save = async () => {
+                    if (saved) return;
+                    saved = true;
+                    const val = input.value.trim();
+                    if (val) {
+                        await this.addSubtaskToCard(card.lineIndex, val, card);
+                    } else {
+                        input.remove();
+                        addBtn.style.display = 'inline-flex';
+                    }
+                };
+                input.onkeydown = async (ev) => {
+                    if (ev.key === 'Enter') {
+                        ev.preventDefault();
+                        await save();
+                    } else if (ev.key === 'Escape') {
+                        saved = true;
+                        input.remove();
+                        addBtn.style.display = 'inline-flex';
+                    }
+                };
+                input.onblur = async () => {
+                    await save();
+                };
+            };
         }
 
         // Bullet Points (- item without [ ])
@@ -26836,20 +28599,24 @@ kanban-plugin: basic
         const metaRow = body.createDiv('kt-card-meta-row');
         this.renderTagPills(metaRow, card.tags, true);
 
-        // Estimate Badge
+        // Estimate Badge (sums subtasks if present)
         if (card.estimateMinutes && card.estimateMinutes > 0) {
             const estBadge = metaRow.createSpan('kt-card-est-badge');
             estBadge.setText(`⏱ ${card.estimateText}`);
-            estBadge.title = `Estimativa: ${card.estimateText}`;
+            if (card.subtasks && card.subtasks.length > 0 && card.subtasksEstimateMinutes > 0) {
+                const ownPart = card.ownEstimateMinutes > 0 ? `${formatMinutesToHours(card.ownEstimateMinutes)} tarefa + ` : '';
+                estBadge.title = `Estimativa total: ${card.estimateText} (${ownPart}${formatMinutesToHours(card.subtasksEstimateMinutes)} em ${card.subtasks.length} subtarefas)`;
+            } else {
+                estBadge.title = `Estimativa: ${card.estimateText}`;
+            }
         }
 
         if (card.startDate) {
             const dateChip = metaRow.createSpan('kt-card-date-chip');
-            const dText = sameDay(card.startDate, card.endDate || card.startDate)
-                ? formatDate(card.startDate).slice(0, 5)
-                : `${formatDate(card.startDate).slice(0, 5)}..${formatDate(card.endDate || card.startDate).slice(0, 5)}`;
+            const dText = formatLeanDate(card.startDate, card.endDate);
             dateChip.setText(dText);
-            dateChip.title = `Agendado: ${formatDate(card.startDate)} – ${formatDate(card.endDate || card.startDate)}`;
+            const isSame = !card.endDate || sameDay(card.startDate, card.endDate);
+            dateChip.title = `Agendado: ${formatDate(card.startDate)}${isSame ? '' : ' – ' + formatDate(card.endDate)}`;
         }
 
         // 3-Dots Options Menu Button (•••)
@@ -27051,6 +28818,98 @@ kanban-plugin: basic
                 this.render();
             };
         }
+
+        // Sticky Row for All-Day Events, Reminders & Unslotted Tasks
+        const allDayRow = main.createDiv('kt-tb-week-allday-row');
+        const allDaySpacer = allDayRow.createDiv('kt-tb-week-axis-spacer kt-tb-allday-spacer');
+        allDaySpacer.createSpan({ cls: 'kt-tb-allday-spacer-lbl', text: 'Eventos' });
+
+        const allDayWrap = allDayRow.createDiv('kt-tb-week-allday-wrap');
+        allDayWrap.style.gridTemplateColumns = `repeat(${daysCount}, minmax(0, 1fr))`;
+
+        days.forEach(d => {
+            const isToday = sameDay(d, new Date());
+            const isWeekend = (d.getDay() === 0 || d.getDay() === 6);
+            const isSel = this.selectedDay && sameDay(d, this.selectedDay);
+
+            const dayCell = allDayWrap.createDiv(`kt-tb-week-allday-cell${isToday ? ' kt-is-today' : ''}${isSel ? ' kt-selected' : ''}${isWeekend ? ' kt-is-weekend' : ''}`);
+
+            const calEvents = this.getCustomCalendarEventsForDay(d);
+            const remoteEvents = this.getRemoteEventsForDay(d).filter(e => !e.timeStart || e.isAllDay);
+
+            // 1. Calendar Special Events (Birthdays, Deliveries, Milestones, Reminders)
+            calEvents.forEach(evt => {
+                const chip = dayCell.createDiv('kt-tb-allday-chip kt-tb-cal-evt-chip');
+                const col = evt.color || '#ec4899';
+                chip.style.borderLeftColor = col;
+                chip.style.setProperty('--evt-accent', col);
+
+                if (evt.icon) {
+                    chip.createSpan({ cls: 'kt-tb-chip-icon', text: evt.icon });
+                }
+                chip.createSpan({ cls: 'kt-tb-chip-title', text: evt.title });
+
+                let recurrenceBadge = '';
+                if (evt.recurrence === 'yearly') recurrenceBadge = ' • Anual';
+                else if (evt.recurrence === 'monthly') recurrenceBadge = ' • Mensal';
+                else if (evt.recurrence === 'bimonthly') recurrenceBadge = ' • Bimestral';
+                else if (evt.recurrence === 'every_3_months') recurrenceBadge = ' • Trimestral';
+                else if (evt.recurrence === 'every_6_months') recurrenceBadge = ' • Semestral';
+
+                chip.title = `${evt.icon || ''} ${evt.title}${recurrenceBadge}${evt.description ? '\n' + evt.description : ''}\nClique para editar • Botão direito para opções`;
+
+                chip.onclick = (e) => {
+                    e.stopPropagation();
+                    new CalendarEventModal(this.app, this.plugin, evt, d, async () => {
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+
+                chip.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = new obsidian.Menu();
+                    menu.addItem(menuItem => {
+                        menuItem.setTitle('✎ Editar Evento / Data...')
+                            .setIcon('pencil')
+                            .onClick(() => chip.click());
+                    });
+                    menu.addItem(menuItem => {
+                        menuItem.setTitle('🗑️ Excluir Evento')
+                            .setIcon('trash')
+                            .onClick(async () => {
+                                this.plugin.settings.calendarEvents = (this.plugin.settings.calendarEvents || []).filter(x => x.id !== evt.id);
+                                await this.plugin.saveSettings();
+                                this.render();
+                                new obsidian.Notice(`✓ Evento "${evt.title}" excluído.`);
+                            });
+                    });
+                    menu.showAtMouseEvent(e);
+                };
+            });
+
+            // 2. Remote All-Day Events
+            remoteEvents.forEach(evt => {
+                const chip = dayCell.createDiv('kt-tb-allday-chip kt-tb-remote-evt-chip');
+                chip.createSpan({ cls: 'kt-tb-chip-icon', text: '🌐' });
+                chip.createSpan({ cls: 'kt-tb-chip-title', text: evt.title || evt.name });
+                chip.title = `Evento Remoto: ${evt.title || evt.name}`;
+            });
+
+            if (calEvents.length === 0 && remoteEvents.length === 0) {
+                dayCell.addClass('kt-is-empty');
+                dayCell.title = `Clique para adicionar um evento ou lembrete em ${this.dayLabel(d)}`;
+            }
+
+            dayCell.onclick = (e) => {
+                if (e.target !== dayCell) return;
+                new CalendarEventModal(this.app, this.plugin, null, d, async () => {
+                    await this.plugin.saveSettings();
+                    this.render();
+                }).open();
+            };
+        });
 
         // Scroll Area with shared time axis and day columns
         const scrollArea = main.createDiv('kt-tb-scroll-area kt-tb-week-scroll-area');
@@ -27310,7 +29169,7 @@ kanban-plugin: basic
                 const nameEl = btn.createSpan(); nameEl.setText(this.dayLabel(d));
 
                 const dayCardsCount = this.cards.filter(c => {
-                    if (c.isEvent || c.column === 'Rotina') return false;
+                    if (c.isEvent || c.column === 'Rotina' || c.isSubtask) return false;
                     if (!c.startDate) return false;
                     const s = startOfDay(c.startDate);
                     const e = endOfDay(c.endDate || c.startDate);
@@ -27399,7 +29258,7 @@ kanban-plugin: basic
                     // WEEK VIEW:
                     // 1. Cronograma da Semana
                     const weekScheduledCards = this.cards.filter(c => {
-                        if (c.isEvent || c.column === 'Rotina' || isIgnoredColumn(c.column) || c.isCompleted) return false;
+                        if (c.isEvent || c.column === 'Rotina' || isIgnoredColumn(c.column) || c.isCompleted || c.isSubtask) return false;
                         if (!c.startDate) return false;
                         const s = startOfDay(c.startDate);
                         const e = endOfDay(c.endDate || c.startDate);
@@ -27443,7 +29302,7 @@ kanban-plugin: basic
                     }
 
                     // Section 2: BACKLOG GERAL SEM DATA
-                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask);
                     const backlogHeader = contentContainer.createDiv('kt-section-label kt-section-collapsible');
                     const backlogArrow = backlogHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.backlogCollapsed ? '▶' : '▼' });
                     backlogHeader.createSpan({ text: ` 📋 BACKLOG GERAL (${unscheduled.length})` });
@@ -27476,7 +29335,7 @@ kanban-plugin: basic
                     // 1-DAY VIEW:
                     // Section 1: DO CRONOGRAMA DESTE DIA
                     const dayCards = this.cards.filter(c => {
-                        if (c.isEvent || c.column === 'Rotina') return false;
+                        if (c.isEvent || c.column === 'Rotina' || c.isSubtask) return false;
                         if (!c.startDate) return false;
                         const s = startOfDay(c.startDate);
                         const e = endOfDay(c.endDate || c.startDate);
@@ -27509,7 +29368,7 @@ kanban-plugin: basic
                     }
 
                     // Section 2: BACKLOG GERAL SEM DATA
-                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column));
+                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask);
                     const backlogHeader = contentContainer.createDiv('kt-section-label kt-section-collapsible');
                     const backlogArrow = backlogHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.backlogCollapsed ? '▶' : '▼' });
                     backlogHeader.createSpan({ text: ` 📋 BACKLOG GERAL (${unscheduled.length})` });
@@ -27603,7 +29462,16 @@ kanban-plugin: basic
         }
 
         // Card Title
-        c.createDiv('kt-c-title').setText(isDone ? `✓ ${card.title}` : card.title);
+        const titleDiv = c.createDiv('kt-c-title');
+        if (card.isSubtask && card.parentTitle) {
+            const pBadge = titleDiv.createSpan('kt-tb-parent-badge');
+            pBadge.setText(`↳ ${card.parentTitle}`);
+            if (card.parentProjectColor) {
+                pBadge.style.color = card.parentProjectColor;
+                pBadge.style.borderColor = card.parentProjectColor + '55';
+            }
+        }
+        titleDiv.createSpan().setText(isDone ? `✓ ${card.title}` : card.title);
 
         // Metadata Row
         const metaRow = c.createDiv('kt-card-meta-row');
@@ -27641,12 +29509,99 @@ kanban-plugin: basic
             }
         }
 
+        // Subtasks section in Timeblocking sidebar (Jira-style draggable subtasks)
+        if (card.subtasks && card.subtasks.length > 0) {
+            const completedCount = card.subtasks.filter(s => s.completed).length;
+            const totalCount = card.subtasks.length;
+            const subtasksGroup = c.createDiv('kt-sb-subtasks-group');
+
+            const toggleHeader = subtasksGroup.createDiv('kt-sb-subtasks-toggle');
+            const arrow = toggleHeader.createSpan({ cls: 'kt-sb-subtasks-arrow', text: '▶' });
+            toggleHeader.createSpan({ text: ` Subtarefas (${completedCount}/${totalCount})` });
+
+            const subtasksList = subtasksGroup.createDiv('kt-sb-subtasks-list');
+            subtasksList.style.display = 'none';
+
+            toggleHeader.onclick = (e) => {
+                e.stopPropagation();
+                const isHidden = subtasksList.style.display === 'none';
+                subtasksList.style.display = isHidden ? 'flex' : 'none';
+                arrow.setText(isHidden ? '▼' : '▶');
+            };
+
+            card.subtasks.forEach(st => {
+                const stItem = subtasksList.createDiv(`kt-sb-subtask-item${st.completed ? ' is-completed' : ''}`);
+                stItem.setAttribute('draggable', 'true');
+                stItem.title = 'Arraste esta subtarefa para agendá-la no Timeblocking ou clique para abrir detalhes';
+
+                const stChk = stItem.createSpan('kt-sb-subtask-chk');
+                stChk.setText(st.completed ? '✓' : '○');
+                stChk.title = st.completed ? 'Marcar como pendente' : 'Concluir subtarefa';
+                stChk.onclick = async (e) => {
+                    e.stopPropagation();
+                    await this.toggleSubtaskCompletion(st.lineIndex);
+                    await this.refresh();
+                };
+
+                const stTitle = stItem.createSpan('kt-sb-subtask-title');
+                stTitle.setText(st.title);
+
+                const stBadges = stItem.createSpan('kt-sb-subtask-badges');
+                if (st.startDate) {
+                    const stDaySlots = refDay ? getTimesForDay(st, refDay) : [];
+                    if (stDaySlots.length > 0) {
+                        const tBadge = stBadges.createSpan('kt-sb-subtask-time-badge');
+                        tBadge.setText(`⏰ ${stDaySlots[0].timeStart}–${stDaySlots[0].timeEnd}`);
+                    } else {
+                        const dBadge = stBadges.createSpan('kt-sb-subtask-date-badge');
+                        dBadge.setText(`📅 ${formatLeanDate(st.startDate, st.endDate)}`);
+                    }
+                } else {
+                    const pendBadge = stBadges.createSpan('kt-sb-subtask-unalloc-badge');
+                    pendBadge.setText('⚡ Sem data');
+                }
+
+                if (st.estimateText) {
+                    const estBadge = stBadges.createSpan('kt-sb-subtask-est-badge');
+                    estBadge.setText(`⏱ ${st.estimateText}`);
+                }
+
+                // Drag and drop for the subtask
+                stItem.addEventListener('dragstart', (e) => {
+                    e.stopPropagation();
+                    this.draggedCard = st;
+                    const stIdStr = st.id || ('st:' + st.title + ':' + st.lineIndex);
+                    try {
+                        e.dataTransfer.setData('text/plain', stIdStr);
+                        e.dataTransfer.effectAllowed = 'move';
+                    } catch(err) {}
+                    stItem.classList.add('kt-dragging');
+                    document.body.classList.add('kt-is-card-dragging');
+                });
+
+                stItem.addEventListener('dragend', (e) => {
+                    e.stopPropagation();
+                    stItem.classList.remove('kt-dragging');
+                    document.body.classList.remove('kt-is-card-dragging');
+                    document.querySelectorAll('.kt-tb-drop-preview').forEach(el => el.remove());
+                    document.querySelectorAll('.kt-tb-col-drop-hover, .kt-slot-drop-hover').forEach(el => el.classList.remove('kt-tb-col-drop-hover', 'kt-slot-drop-hover'));
+                    this.draggedCard = null;
+                });
+
+                stItem.onclick = (e) => {
+                    e.stopPropagation();
+                    this.openCardOptionsModal(st, refDay || this.selectedDay || new Date());
+                };
+            });
+        }
+
         c.title = opts.isWeekView
             ? 'Arraste para qualquer dia da semana para agendar horário ou clique para abrir detalhes'
             : 'Arraste para a grade de horários ou clique para abrir detalhes';
         c.setAttribute('draggable', 'true');
 
         c.addEventListener('dragstart', (e) => {
+            if (e.target.closest('.kt-sb-subtask-item')) return;
             this.draggedCard = card;
             const cardIdStr = card.id || card.uid || (card.title ? 'card:' + card.title : 'idx:' + card.lineIndex);
             try {
@@ -27665,7 +29620,8 @@ kanban-plugin: basic
             this.draggedCard = null;
         });
 
-        c.onclick = () => {
+        c.onclick = (e) => {
+            if (e.target.closest('.kt-sb-subtasks-group')) return;
             this.openCardOptionsModal(card, refDay || this.selectedDay || new Date());
         };
     }
@@ -27676,6 +29632,80 @@ kanban-plugin: basic
 
         const hdr = main.createDiv('kt-tb-day-header');
         hdr.createEl('span', { cls: 'kt-tb-day-title', text: this.dayLabelFull(day) });
+
+        // All-Day / Lembretes & Eventos Strip for Single Day View
+        const calEvents = this.getCustomCalendarEventsForDay(day);
+        const allDayRemoteEvts = this.getRemoteEventsForDay(day).filter(e => !e.timeStart || e.isAllDay);
+
+        const alldayBanner = main.createDiv('kt-tb-single-allday-banner');
+        const bannerHdr = alldayBanner.createDiv('kt-tb-single-allday-hdr');
+        bannerHdr.createSpan({ cls: 'kt-tb-single-allday-title', text: 'Lembretes & Eventos do Dia' });
+        
+        const addEventBtn = bannerHdr.createEl('button', {
+            cls: 'kt-tb-add-allday-btn',
+            text: '+ Novo Lembrete / Evento'
+        });
+        addEventBtn.onclick = () => {
+            new CalendarEventModal(this.app, this.plugin, null, day, async () => {
+                await this.plugin.saveSettings();
+                this.render();
+            }).open();
+        };
+
+        const chipsWrap = alldayBanner.createDiv('kt-tb-single-allday-chips');
+
+        if (calEvents.length === 0 && allDayRemoteEvts.length === 0) {
+            const emptyHint = chipsWrap.createSpan('kt-tb-allday-empty-hint');
+            emptyHint.setText('Nenhum evento ou lembrete para hoje.');
+        } else {
+            calEvents.forEach(evt => {
+                const chip = chipsWrap.createDiv('kt-tb-allday-chip kt-tb-cal-evt-chip');
+                const col = evt.color || '#ec4899';
+                chip.style.borderLeftColor = col;
+                chip.style.setProperty('--evt-accent', col);
+                if (evt.icon) chip.createSpan({ cls: 'kt-tb-chip-icon', text: evt.icon });
+                chip.createSpan({ cls: 'kt-tb-chip-title', text: evt.title });
+
+                let recurrenceBadge = '';
+                if (evt.recurrence === 'yearly') recurrenceBadge = ' • Anual';
+                else if (evt.recurrence === 'monthly') recurrenceBadge = ' • Mensal';
+                else if (evt.recurrence === 'bimonthly') recurrenceBadge = ' • Bimestral';
+                else if (evt.recurrence === 'every_3_months') recurrenceBadge = ' • Trimestral';
+                else if (evt.recurrence === 'every_6_months') recurrenceBadge = ' • Semestral';
+
+                chip.title = `${evt.icon || ''} ${evt.title}${recurrenceBadge}${evt.description ? '\n' + evt.description : ''}\nClique para editar`;
+                chip.onclick = (e) => {
+                    e.stopPropagation();
+                    new CalendarEventModal(this.app, this.plugin, evt, day, async () => {
+                        await this.plugin.saveSettings();
+                        this.render();
+                    }).open();
+                };
+                chip.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = new obsidian.Menu();
+                    menu.addItem(item => {
+                        item.setTitle('✎ Editar Evento...').setIcon('pencil').onClick(() => chip.click());
+                    });
+                    menu.addItem(item => {
+                        item.setTitle('🗑️ Excluir Evento').setIcon('trash').onClick(async () => {
+                            this.plugin.settings.calendarEvents = (this.plugin.settings.calendarEvents || []).filter(x => x.id !== evt.id);
+                            await this.plugin.saveSettings();
+                            this.render();
+                            new obsidian.Notice(`✓ Evento "${evt.title}" excluído.`);
+                        });
+                    });
+                    menu.showAtMouseEvent(e);
+                };
+            });
+
+            allDayRemoteEvts.forEach(evt => {
+                const chip = chipsWrap.createDiv('kt-tb-allday-chip kt-tb-remote-evt-chip');
+                chip.createSpan({ cls: 'kt-tb-chip-icon', text: '🌐' });
+                chip.createSpan({ cls: 'kt-tb-chip-title', text: evt.title || evt.name });
+            });
+        }
 
         const scrollArea = main.createDiv('kt-tb-scroll-area');
         const schedWrap  = scrollArea.createDiv('kt-tb-schedule-wrapper');
@@ -28266,6 +30296,10 @@ kanban-plugin: basic
             }
         };
 
+        if (card.isSubtask) {
+            el.addClass('kt-tb-subtask-card');
+        }
+
         const timeLabel = el.createDiv('kt-tb-card-time');
         timeLabel.setText(`⏰ ${startStr} – ${endStr}`);
         timeLabel.title = card.isRemoteCalendarEvent ? 'Clique para ver detalhes do evento' : (isRoutineOrEvent ? 'Clique para editar este evento / série' : 'Clique para editar este horário');
@@ -28275,6 +30309,17 @@ kanban-plugin: basic
             e.stopPropagation();
             openEditModal();
         };
+
+        // Jira-style Parent Badge for Subtasks
+        if (card.isSubtask && card.parentTitle) {
+            const pBadge = el.createDiv('kt-tb-parent-badge');
+            pBadge.setText(`↳ ${card.parentTitle}`);
+            pBadge.title = `Subtarefa de: ${card.parentTitle}`;
+            if (card.parentProjectColor) {
+                pBadge.style.color = card.parentProjectColor;
+                pBadge.style.borderColor = card.parentProjectColor + '55';
+            }
+        }
 
         const titleEl = el.createDiv('kt-c-title');
         titleEl.setText(card.isRemoteCalendarEvent ? `🗓️ ${card.title}` : (isDone ? `✓ ${card.title}` : card.title));
@@ -28502,6 +30547,18 @@ kanban-plugin: basic
 
                 menu.addSeparator();
 
+                if (card.isSubtask) {
+                    menu.addItem(item => {
+                        item.setTitle(card.isCompleted ? '○ Marcar como pendente' : '✓ Concluir subtarefa')
+                            .setIcon(card.isCompleted ? 'circle' : 'check-circle')
+                            .onClick(async () => {
+                                await this.toggleSubtaskCompletion(card.lineIndex);
+                                await this.refresh();
+                            });
+                    });
+                    menu.addSeparator();
+                }
+
                 menu.addItem(item => {
                     item.setTitle('🗑️ Excluir apenas este bloco de horário')
                         .setIcon('clock')
@@ -28513,12 +30570,13 @@ kanban-plugin: basic
                 });
 
                 menu.addItem(item => {
-                    item.setTitle('🗑️ Excluir card do Kanban')
+                    item.setTitle(card.isSubtask ? '🗑️ Excluir esta subtarefa' : '🗑️ Excluir card do Kanban')
                         .setIcon('trash')
                         .setWarning()
                         .onClick(async () => {
-                            new ConfirmDeleteModal(this.app, card.title, async () => {
-                                await this.deleteCardLine(card.lineIndex);
+                            const deleteTarget = card.isSubtask ? `a subtarefa "${card.title}"` : card.title;
+                            new ConfirmDeleteModal(this.app, deleteTarget, async () => {
+                                await this.deleteCardLine(card.lineIndex, card);
                                 await this.refresh();
                             }).open();
                         });
