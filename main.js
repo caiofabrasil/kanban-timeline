@@ -121,6 +121,99 @@ function endOfDay(date) {
     return d;
 }
 
+function mergeDateRanges(ranges) {
+    if (!ranges || ranges.length === 0) return [];
+    const valid = ranges.map(r => ({
+        start: startOfDay(r.start instanceof Date ? r.start : parseDate(r.start)),
+        end: endOfDay(r.end ? (r.end instanceof Date ? r.end : parseDate(r.end)) : (r.start instanceof Date ? r.start : parseDate(r.start)))
+    })).filter(r => r.start && !isNaN(r.start.getTime()) && r.end && !isNaN(r.end.getTime()));
+
+    if (valid.length === 0) return [];
+    valid.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    const merged = [];
+    let cur = { start: new Date(valid[0].start), end: new Date(valid[0].end) };
+
+    for (let i = 1; i < valid.length; i++) {
+        const next = valid[i];
+        const nextStart = next.start.getTime();
+        const nextEnd = next.end.getTime();
+
+        const curEndPlus1 = new Date(cur.end);
+        curEndPlus1.setDate(curEndPlus1.getDate() + 1);
+
+        if (nextStart <= curEndPlus1.getTime()) {
+            if (nextEnd > cur.end.getTime()) {
+                cur.end = new Date(next.end);
+            }
+        } else {
+            merged.push(cur);
+            cur = { start: new Date(next.start), end: new Date(next.end) };
+        }
+    }
+    merged.push(cur);
+    return merged;
+}
+
+function removeDayFromDateRanges(ranges, dayToRemove) {
+    if (!ranges || ranges.length === 0) return [];
+    const target = startOfDay(dayToRemove instanceof Date ? dayToRemove : parseDate(dayToRemove));
+    if (!target || isNaN(target.getTime())) return ranges;
+
+    const newRanges = [];
+
+    ranges.forEach(r => {
+        const rs = startOfDay(r.start instanceof Date ? r.start : parseDate(r.start));
+        const re = endOfDay(r.end ? (r.end instanceof Date ? r.end : parseDate(r.end)) : (r.start instanceof Date ? r.start : parseDate(r.start)));
+
+        if (!rs || isNaN(rs.getTime()) || !re || isNaN(re.getTime())) return;
+
+        if (target.getTime() < rs.getTime() || target.getTime() > re.getTime()) {
+            // Day is outside this range, keep intact
+            newRanges.push({ start: new Date(r.start), end: new Date(r.end || r.start) });
+        } else {
+            // Day is inside this range
+            const reStart = startOfDay(r.end || r.start);
+            if (sameDay(rs, reStart)) {
+                // Single day range, entirely removed
+            } else if (sameDay(rs, target)) {
+                // First day: shrink start
+                const nextDay = new Date(rs);
+                nextDay.setDate(nextDay.getDate() + 1);
+                newRanges.push({ start: nextDay, end: new Date(r.end || r.start) });
+            } else if (sameDay(reStart, target)) {
+                // Last day: shrink end
+                const prevDay = new Date(reStart);
+                prevDay.setDate(prevDay.getDate() - 1);
+                newRanges.push({ start: new Date(r.start), end: prevDay });
+            } else {
+                // Middle day: split into two ranges
+                const prevDay = new Date(target);
+                prevDay.setDate(prevDay.getDate() - 1);
+                const nextDay = new Date(target);
+                nextDay.setDate(nextDay.getDate() + 1);
+                newRanges.push({ start: new Date(r.start), end: prevDay });
+                newRanges.push({ start: nextDay, end: new Date(r.end || r.start) });
+            }
+        }
+    });
+
+    newRanges.sort((a, b) => a.start.getTime() - b.start.getTime());
+    return newRanges;
+}
+
+function isDevColumn(colName) {
+    if (!colName || typeof colName !== 'string') return false;
+    const clean = colName.trim().toLowerCase().replace(/[\s-_]+/g, '');
+    return clean === 'indevelopment' ||
+           clean === 'emdesenvolvimento' ||
+           clean === 'inprogresso' ||
+           clean === 'emprogresso' ||
+           clean === 'wip' ||
+           clean === 'doing' ||
+           clean === 'fazendo';
+}
+
 function getHabitDateKey(date) {
     const d = new Date(date);
     const y = d.getFullYear();
@@ -3535,9 +3628,11 @@ class ProjectReportModal extends obsidian.Modal {
         this.project = project;
         this.cards = cards || [];
         this.view = view;
-        this.periodFilter = 'month'; // 'all', 'month', 'week', 'today' (Default: Este Mês)
+        this.periodFilter = 'month'; // 'all', 'month', 'prev_month', 'week', 'today'
         this.statusFilter = 'all'; // 'all', 'done', 'pending'
         this.groupMode = 'date';   // 'date', 'task'
+        this.selectedCurrency = project.currency || 'R$';
+        this.hourlyRateOverride = (project.hourlyRate !== undefined) ? project.hourlyRate : 0;
     }
 
     onOpen() {
@@ -3555,11 +3650,17 @@ class ProjectReportModal extends obsidian.Modal {
         const excludedSet = new Set(project.excludedTaskTitles || []);
 
         const matchingCards = (this.cards || []).filter(c => {
-            if (c.isEvent || c.column === 'Rotina') return false;
-            const hasTag = projTag && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
+            const hasTag = projTag && c.tags && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
             const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
-            const hasTitleTag = projTag && c.title.toLowerCase().includes('#' + projTag);
-            return hasTag || inCol || hasTitleTag;
+            const hasTitleTag = projTag && (c.title || '').toLowerCase().includes('#' + projTag);
+            const hasProjName = project.name && (c.title || '').toLowerCase().includes(project.name.toLowerCase());
+            
+            if (!hasTag && !inCol && !hasTitleTag && !hasProjName) return false;
+
+            // Exclude personal breaks and habits
+            if (c.eventType === 'break' || c.eventType === 'habit') return false;
+
+            return true;
         });
 
         // Merge persistent tasks that are no longer in active cards (e.g. deleted from Kanban)
@@ -3599,6 +3700,9 @@ class ProjectReportModal extends obsidian.Modal {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
+        const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+
         const entries = [];
 
         matchingCards.forEach(c => {
@@ -3619,6 +3723,7 @@ class ProjectReportModal extends obsidian.Modal {
                         if (this.periodFilter === 'today' && !sameDay(slotDate, now)) continue;
                         if (this.periodFilter === 'week' && (slotDate < startOfThisWeek || slotDate >= endOfThisWeek)) continue;
                         if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) continue;
+                        if (this.periodFilter === 'prev_month' && (slotDate < startOfPrevMonth || slotDate > endOfPrevMonth)) continue;
                     }
 
                     for (const dt of slots) {
@@ -3649,6 +3754,7 @@ class ProjectReportModal extends obsidian.Modal {
                         if (this.periodFilter === 'today' && !sameDay(slotDate, now)) return;
                         if (this.periodFilter === 'week' && (slotDate < startOfThisWeek || slotDate >= endOfThisWeek)) return;
                         if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) return;
+                        if (this.periodFilter === 'prev_month' && (slotDate < startOfPrevMonth || slotDate > endOfPrevMonth)) return;
                     }
 
                     entries.push({
@@ -3670,6 +3776,7 @@ class ProjectReportModal extends obsidian.Modal {
                     if (this.periodFilter === 'today' && !sameDay(slotDate, now)) return;
                     if (this.periodFilter === 'week' && (slotDate < startOfThisWeek || slotDate >= endOfThisWeek)) return;
                     if (this.periodFilter === 'month' && (slotDate < startOfMonth || slotDate > endOfMonth)) return;
+                    if (this.periodFilter === 'prev_month' && (slotDate < startOfPrevMonth || slotDate > endOfPrevMonth)) return;
                 } else if (this.periodFilter !== 'all') {
                     return;
                 }
@@ -3724,10 +3831,11 @@ class ProjectReportModal extends obsidian.Modal {
 
         const entries = this.getReportEntries();
         const totalMinutes = entries.reduce((acc, e) => acc + (e.durationMinutes || 0), 0);
-        const totalEarnings = (totalMinutes / 60) * (project.hourlyRate || 0);
+        const curr = this.selectedCurrency || project.currency || 'R$';
+        const hourlyRate = (this.hourlyRateOverride !== undefined) ? this.hourlyRateOverride : (project.hourlyRate || 0);
+        const totalEarnings = (totalMinutes / 60) * hourlyRate;
         const doneCount = entries.filter(e => e.isDone).length;
         const totalTasks = entries.length;
-        const curr = project.currency || 'R$';
 
         // 1. Top Header Banner
         const topHdr = contentEl.createDiv('kt-report-header');
@@ -3745,7 +3853,7 @@ class ProjectReportModal extends obsidian.Modal {
         closeBtn.title = 'Fechar Relatório (Esc)';
         closeBtn.onclick = () => this.close();
 
-        // 2. Filter Bar (Período, Status, Agrupamento)
+        // 2. Filter Bar (Período, Status, Agrupamento, Moeda)
         const filterBar = contentEl.createDiv('kt-report-filter-bar');
 
         // Period filter group
@@ -3753,6 +3861,7 @@ class ProjectReportModal extends obsidian.Modal {
         const periods = [
             { id: 'all', label: 'Tudo' },
             { id: 'month', label: 'Este Mês' },
+            { id: 'prev_month', label: 'Mês Anterior' },
             { id: 'week', label: 'Esta Semana' },
             { id: 'today', label: 'Hoje' }
         ];
@@ -3802,6 +3911,37 @@ class ProjectReportModal extends obsidian.Modal {
             };
         });
 
+        // Currency toggle group (R$ vs $)
+        const currGrp = filterBar.createDiv('kt-report-btn-group');
+        const currencies = [
+            { id: 'R$', label: 'R$ Real' },
+            { id: '$', label: '$ Dólar' }
+        ];
+        currencies.forEach(c => {
+            const btn = currGrp.createEl('button', {
+                cls: `kt-report-filter-btn ${curr === c.id ? 'is-active' : ''}`,
+                text: c.label
+            });
+            btn.onclick = () => {
+                this.selectedCurrency = c.id;
+                this.renderModal();
+            };
+        });
+
+        if (curr !== (project.currency || 'R$')) {
+            const saveCurrBtn = currGrp.createEl('button', {
+                cls: 'kt-report-filter-btn mod-cta',
+                text: '💾 Fixar no Projeto'
+            });
+            saveCurrBtn.title = `Definir "${curr}" como moeda padrão do projeto "${project.name}"`;
+            saveCurrBtn.onclick = async () => {
+                project.currency = curr;
+                await this.plugin.saveSettings();
+                new obsidian.Notice(`✓ Moeda do projeto "${project.name}" alterada para ${curr}!`);
+                this.renderModal();
+            };
+        }
+
         // 3. KPI Summary Row
         const kpiRow = contentEl.createDiv('kt-report-kpi-row');
 
@@ -3809,10 +3949,10 @@ class ProjectReportModal extends obsidian.Modal {
         kpi1.createDiv('kt-report-kpi-val').setText(formatMinutesToHours(totalMinutes) || '0h');
         kpi1.createDiv('kt-report-kpi-lbl').setText(`Total de Horas (${(totalMinutes / 60).toFixed(2)}h)`);
 
-        if (project.hourlyRate > 0) {
+        if (hourlyRate > 0) {
             const kpi2 = kpiRow.createDiv('kt-report-kpi-card kt-kpi-green');
             kpi2.createDiv('kt-report-kpi-val').setText(formatCurrency(totalEarnings, curr));
-            kpi2.createDiv('kt-report-kpi-lbl').setText(`Valor Total (${curr} ${project.hourlyRate}/h)`);
+            kpi2.createDiv('kt-report-kpi-lbl').setText(`Valor Total (${curr} ${hourlyRate}/h)`);
         }
 
         const kpi3 = kpiRow.createDiv('kt-report-kpi-card');
@@ -3899,13 +4039,17 @@ class ProjectReportModal extends obsidian.Modal {
             const sortedDates = Object.keys(byDate).sort((a, b) => {
                 if (a === 'Geral' || a === 'Sem data') return 1;
                 if (b === 'Geral' || b === 'Sem data') return -1;
-                return b.localeCompare(a);
+                const dateA = parseDate(a);
+                const dateB = parseDate(b);
+                const tA = dateA ? dateA.getTime() : 0;
+                const tB = dateB ? dateB.getTime() : 0;
+                return tB - tA; // Mais recente primeiro
             });
 
             sortedDates.forEach(dKey => {
                 const list = byDate[dKey];
                 const dayMinutes = list.reduce((acc, x) => acc + (x.durationMinutes || 0), 0);
-                const dayEarnings = (dayMinutes / 60) * (project.hourlyRate || 0);
+                const dayEarnings = (dayMinutes / 60) * hourlyRate;
 
                 let headerDate = dKey;
                 const parsed = parseDate(dKey);
@@ -3923,13 +4067,23 @@ class ProjectReportModal extends obsidian.Modal {
                 
                 const dayMetrics = dayHdr.createDiv('kt-report-day-metrics');
                 dayMetrics.createSpan({ cls: 'kt-report-day-hours', text: formatMinutesToHours(dayMinutes) || '0h' });
-                if (project.hourlyRate > 0) {
+                if (hourlyRate > 0) {
                     dayMetrics.createSpan({ cls: 'kt-report-day-val', text: formatCurrency(dayEarnings, curr) });
                 }
 
                 const dayItems = dayBlock.createDiv('kt-report-day-items');
                 list.forEach(item => {
                     const rowEl = dayItems.createDiv(`kt-report-item-row ${item.isDone ? 'is-done' : ''}`);
+                    rowEl.title = 'Duplo clique: ir direto para esta tarefa no Timeblocking';
+                    rowEl.ondblclick = (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        const targetDate = item.dateObj || (item.dateStr && parseDate(item.dateStr)) || new Date();
+                        this.close();
+                        if (this.view && this.view.openDayInTimeblocking) {
+                            this.view.openDayInTimeblocking(targetDate, item.card, item.timeStart);
+                        }
+                    };
                     
                     const left = rowEl.createDiv('kt-report-item-left');
                     const chk = left.createSpan({ cls: 'kt-report-item-chk', text: item.isDone ? '✓' : '○' });
@@ -3945,8 +4099,8 @@ class ProjectReportModal extends obsidian.Modal {
                     right.createSpan({ cls: 'kt-report-item-col', text: item.column });
                     if (item.durationMinutes > 0) {
                         right.createSpan({ cls: 'kt-report-item-dur', text: formatMinutesToHours(item.durationMinutes) });
-                        if (project.hourlyRate > 0) {
-                            const itemEarned = (item.durationMinutes / 60) * project.hourlyRate;
+                        if (hourlyRate > 0) {
+                            const itemEarned = (item.durationMinutes / 60) * hourlyRate;
                             right.createSpan({ cls: 'kt-report-item-earned', text: formatCurrency(itemEarned, curr) });
                         }
                     }
@@ -3980,6 +4134,24 @@ class ProjectReportModal extends obsidian.Modal {
 
             sortedTasks.forEach(t => {
                 const taskBlock = breakdownList.createDiv(`kt-report-task-block ${t.isDone ? 'is-done' : ''}`);
+                taskBlock.title = 'Duplo clique: ir direto para esta tarefa no Timeblocking';
+                taskBlock.ondblclick = (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    let targetDate = new Date();
+                    let targetTime = null;
+                    if (t.sessions && t.sessions.length > 0) {
+                        targetDate = t.sessions[0].dateObj || (t.sessions[0].dateStr && parseDate(t.sessions[0].dateStr)) || targetDate;
+                        targetTime = t.sessions[0].timeStart;
+                    } else if (t.card?.startDate) {
+                        targetDate = t.card.startDate;
+                        targetTime = t.card.timeStart;
+                    }
+                    this.close();
+                    if (this.view && this.view.openDayInTimeblocking) {
+                        this.view.openDayInTimeblocking(targetDate, t.card, targetTime);
+                    }
+                };
                 
                 const taskHdr = taskBlock.createDiv('kt-report-task-hdr');
                 const left = taskHdr.createDiv('kt-report-task-left');
@@ -3989,7 +4161,11 @@ class ProjectReportModal extends obsidian.Modal {
                     left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Removida)' });
                 }
 
-                const datesArr = Array.from(t.dates).sort();
+                const datesArr = Array.from(t.dates).sort((a, b) => {
+                    const dateA = parseDate(a);
+                    const dateB = parseDate(b);
+                    return (dateA ? dateA.getTime() : 0) - (dateB ? dateB.getTime() : 0);
+                });
                 if (datesArr.length > 0) {
                     const datesStr = datesArr.map(d => {
                         const parts = d.split('-');
@@ -4001,8 +4177,8 @@ class ProjectReportModal extends obsidian.Modal {
                 const right = taskHdr.createDiv('kt-report-task-right');
                 right.createSpan({ cls: 'kt-report-item-col', text: t.column });
                 right.createSpan({ cls: 'kt-report-item-dur', text: formatMinutesToHours(t.totalMinutes) || '0h' });
-                if (project.hourlyRate > 0) {
-                    const taskEarned = (t.totalMinutes / 60) * project.hourlyRate;
+                if (hourlyRate > 0) {
+                    const taskEarned = (t.totalMinutes / 60) * hourlyRate;
                     right.createSpan({ cls: 'kt-report-item-earned', text: formatCurrency(taskEarned, curr) });
                 }
                 right.createSpan({ cls: `kt-report-item-status ${t.isDone ? 'is-done' : 'is-pending'}`, text: t.isDone ? 'Concluído' : 'Pendente' });
@@ -4033,7 +4209,11 @@ class ProjectReportModal extends obsidian.Modal {
         const sortedDates = Object.keys(byDate).sort((a, b) => {
             if (a === 'Sem data' || a === 'Geral') return 1;
             if (b === 'Sem data' || b === 'Geral') return -1;
-            return a.localeCompare(b); // Ascending: Segunda -> Terça -> Quarta
+            const dateA = parseDate(a);
+            const dateB = parseDate(b);
+            const tA = dateA ? dateA.getTime() : 0;
+            const tB = dateB ? dateB.getTime() : 0;
+            return tA - tB; // Ascending: mais antigo -> mais recente
         });
 
         const sections = [];
@@ -4056,21 +4236,22 @@ class ProjectReportModal extends obsidian.Modal {
 
     generateMarkdownTable(entries, totalMinutes, totalEarnings) {
         const p = this.project;
-        const curr = p.currency || 'R$';
+        const curr = this.selectedCurrency || p.currency || 'R$';
+        const hourlyRate = (this.hourlyRateOverride !== undefined) ? this.hourlyRateOverride : (p.hourlyRate || 0);
         let md = `### Relatório de Horas: ${p.name}\n\n`;
         md += `- **Projeto:** ${p.name} ${p.tag ? `(\`${p.tag}\`)` : ''}\n`;
         md += `- **Total de Horas:** ${formatMinutesToHours(totalMinutes)} (${(totalMinutes/60).toFixed(2)}h)\n`;
-        if (p.hourlyRate > 0) {
-            md += `- **Valor Total:** ${formatCurrency(totalEarnings, curr)} (${curr} ${p.hourlyRate}/h)\n`;
+        if (hourlyRate > 0) {
+            md += `- **Valor Total:** ${formatCurrency(totalEarnings, curr)} (${curr} ${hourlyRate}/h)\n`;
         }
-        md += `\n| Data | Horário | Tarefa | Duração | Status |${p.hourlyRate > 0 ? ' Valor |' : ''}\n`;
-        md += `| :--- | :--- | :--- | :--- | :--- |${p.hourlyRate > 0 ? ' :--- |' : ''}\n`;
+        md += `\n| Data | Horário | Tarefa | Duração | Status |${hourlyRate > 0 ? ' Valor |' : ''}\n`;
+        md += `| :--- | :--- | :--- | :--- | :--- |${hourlyRate > 0 ? ' :--- |' : ''}\n`;
 
         entries.forEach(e => {
             const timeRange = (e.timeStart && e.timeEnd) ? `${e.timeStart} - ${e.timeEnd}` : '-';
             const durStr = formatMinutesToHours(e.durationMinutes) || '0h';
             const statusStr = e.isDone ? 'Concluído' : 'Pendente';
-            const valStr = p.hourlyRate > 0 ? formatCurrency((e.durationMinutes / 60) * p.hourlyRate, curr) : '';
+            const valStr = hourlyRate > 0 ? formatCurrency((e.durationMinutes / 60) * hourlyRate, curr) : '';
             
             let dateFormatted = e.dateStr;
             if (e.dateStr && e.dateStr.includes('-')) {
@@ -4078,7 +4259,7 @@ class ProjectReportModal extends obsidian.Modal {
                 if (parts.length === 3) dateFormatted = `${parts[2]}/${parts[1]}/${parts[0]}`;
             }
 
-            md += `| ${dateFormatted} | ${timeRange} | ${e.title.replace(/\|/g, '-')} | ${durStr} | ${statusStr} |${p.hourlyRate > 0 ? ` ${valStr} |` : ''}\n`;
+            md += `| ${dateFormatted} | ${timeRange} | ${e.title.replace(/\|/g, '-')} | ${durStr} | ${statusStr} |${hourlyRate > 0 ? ` ${valStr} |` : ''}\n`;
         });
 
         return md;
@@ -4086,9 +4267,11 @@ class ProjectReportModal extends obsidian.Modal {
 
     exportCSV(entries) {
         const p = this.project;
+        const curr = this.selectedCurrency || p.currency || 'R$';
+        const hourlyRate = (this.hourlyRateOverride !== undefined) ? this.hourlyRateOverride : (p.hourlyRate || 0);
         let csv = '\uFEFF'; // UTF-8 BOM for Excel
         csv += 'Data;Horario;Tarefa;Duracao_Minutos;Duracao_Horas_Formatada;Horas_Decimais;Status;Coluna';
-        if (p.hourlyRate > 0) csv += ';Valor_Hora;Valor_Total';
+        if (hourlyRate > 0) csv += `;Valor_Hora_${curr};Valor_Total_${curr}`;
         csv += '\n';
 
         entries.forEach(e => {
@@ -4100,9 +4283,9 @@ class ProjectReportModal extends obsidian.Modal {
             const safeTitle = `"${(e.title || '').replace(/"/g, '""')}"`;
             
             let row = `${e.dateStr};${timeRange};${safeTitle};${e.durationMinutes};${durStr};${decimal};${statusStr};${col}`;
-            if (p.hourlyRate > 0) {
-                const val = ((e.durationMinutes / 60) * p.hourlyRate).toFixed(2).replace('.', ',');
-                row += `;${p.hourlyRate};${val}`;
+            if (hourlyRate > 0) {
+                const val = ((e.durationMinutes / 60) * hourlyRate).toFixed(2).replace('.', ',');
+                row += `;${hourlyRate};${val}`;
             }
             csv += row + '\n';
         });
@@ -13602,11 +13785,16 @@ class KanbanTimelineView extends obsidian.ItemView {
     async onClose() {}
 
     async refresh() {
-        await this.loadCards();
-        if (this.plugin.settings.awConnected) {
-            await this.loadActivityWatchData();
+        try {
+            await this.loadCards();
+            if (this.plugin.settings.awConnected) {
+                await this.loadActivityWatchData();
+            }
+            this.render();
+        } catch (err) {
+            console.error('[Kanban Timeline] Erro ao atualizar visualização:', err);
+            new obsidian.Notice('Aviso: Erro ao carregar dados do Kanban Timeline: ' + (err?.message || err));
         }
-        this.render();
     }
 
     async loadCards() {
@@ -15029,6 +15217,21 @@ kanban-plugin: basic
         if (this.viewMode === 'projects' || this.viewMode === 'habits' || this.viewMode === 'postits' || this.viewMode === 'finances' || this.viewMode === 'health') {
             this.savedPageScrollTop = wrap.scrollTop;
         }
+        const prevProjectsScroll = wrap.querySelector('.kt-projects-view');
+        if (prevProjectsScroll) {
+            this.savedProjectsScrollTop = prevProjectsScroll.scrollTop;
+        }
+        const prevTaskLists = wrap.querySelectorAll('.kt-proj-tasks-list');
+        if (prevTaskLists.length > 0) {
+            this.savedProjTasksScroll = this.savedProjTasksScroll || {};
+            prevTaskLists.forEach(tl => {
+                const cardEl = tl.closest('.kt-proj-card');
+                const projId = cardEl?.dataset?.projectId;
+                if (projId) {
+                    this.savedProjTasksScroll[projId] = tl.scrollTop;
+                }
+            });
+        }
         const prevFinTablesScroll = wrap.querySelector('.kt-fin-tables-scroll');
         if (prevFinTablesScroll) {
             this.savedFinancesTablesScrollTop = prevFinTablesScroll.scrollTop;
@@ -15057,7 +15260,7 @@ kanban-plugin: basic
         this.renderDockLayout(main);
     }
 
-    openDayInTimeblocking(date) {
+    openDayInTimeblocking(date, highlightCard = null, timeStart = null) {
         if (!date) return;
         const target = new Date(date);
         target.setHours(0, 0, 0, 0);
@@ -15078,7 +15281,17 @@ kanban-plugin: basic
         this.weekOffset = Math.round((targetMonday.getTime() - currentWeekMonday.getTime()) / msPerWeek);
         this.selectedDay = target;
         this.viewMode = 'timeblock';
-        this.savedTbScrollTop = null;
+        
+        if (timeStart) {
+            const dayStart = this.plugin.settings.dayStart || 7;
+            const startMin = timeToMinutes(timeStart);
+            const SLOT_HEIGHT = 36;
+            const PX_PER_MIN = SLOT_HEIGHT / 30;
+            this.savedTbScrollTop = Math.max(0, (startMin - dayStart * 60 - 30) * PX_PER_MIN);
+        } else {
+            this.savedTbScrollTop = null;
+        }
+
         if (this.plugin.settings.remoteCalendars?.length > 0 && Date.now() - (this.plugin.lastRemoteSync || 0) > 2 * 60 * 1000) {
             this.plugin.syncAllRemoteCalendars(false);
         }
@@ -15106,6 +15319,36 @@ kanban-plugin: basic
         }
 
         this.render();
+
+        if (highlightCard) {
+            setTimeout(() => {
+                const targetId = String(highlightCard.id || highlightCard.lineIndex || '');
+                const targetTitle = (highlightCard.cleanTitle || highlightCard.title || '').trim().toLowerCase();
+                const cardEls = this.containerEl ? this.containerEl.querySelectorAll('.kt-tb-card') : [];
+                let foundEl = null;
+                for (const el of cardEls) {
+                    if (targetId && el.dataset.cardId === targetId) {
+                        foundEl = el;
+                        break;
+                    }
+                    if (targetTitle && (el.dataset.cardTitle || '').toLowerCase() === targetTitle) {
+                        foundEl = el;
+                        break;
+                    }
+                    if (targetTitle && el.textContent.toLowerCase().includes(targetTitle)) {
+                        foundEl = el;
+                        break;
+                    }
+                }
+                if (foundEl) {
+                    foundEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    foundEl.classList.add('kt-tb-highlight-pulse');
+                    setTimeout(() => {
+                        foundEl.classList.remove('kt-tb-highlight-pulse');
+                    }, 2500);
+                }
+            }, 120);
+        }
     }
 
     // ----------------------------------------------------------
@@ -16346,13 +16589,32 @@ kanban-plugin: basic
                 const card = this.draggedCard;
                 this.draggedCard = null;
                 const targetDate = startOfDay(dayInfo.date);
-                await this.persistDateRange(card, targetDate, targetDate);
-                await this.refresh();
+
+                const existingRanges = (card.dateRanges && card.dateRanges.length > 0)
+                    ? card.dateRanges.map(r => ({ start: new Date(r.start), end: new Date(r.end || r.start) }))
+                    : (card.startDate ? [{ start: new Date(card.startDate), end: new Date(card.endDate || card.startDate) }] : []);
+
+                const alreadyCovered = existingRanges.some(r => {
+                    const rs = startOfDay(r.start);
+                    const re = endOfDay(r.end || r.start);
+                    return targetDate.getTime() >= rs.getTime() && targetDate.getTime() <= re.getTime();
+                });
+
+                if (!alreadyCovered) {
+                    existingRanges.push({ start: targetDate, end: targetDate });
+                    const merged = mergeDateRanges(existingRanges);
+                    await this.persistDateRange(card, merged);
+                    await this.refresh();
+                    new obsidian.Notice(`Adicionado período em ${formatDate(targetDate)} para ${card.title}`);
+                } else {
+                    new obsidian.Notice(`A tarefa ${card.title} já está agendada neste dia.`);
+                }
             }
         });
 
         // --- BACKLOG DRAWER (RESIZABLE & COLLAPSIBLE KANBAN LANES) ---
-        this.renderBacklogDrawer(container, unscheduled);
+        const allKanbanCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask);
+        this.renderBacklogDrawer(container, allKanbanCards);
     }
 
     renderGanttRow(parent, card, ws, daysDisplayed = 14) {
@@ -16431,10 +16693,10 @@ kanban-plugin: basic
                     cell.addClass('kt-span-timeblocked');
                     const ind = cell.createSpan('kt-span-tb-indicator');
                     ind.setText(`${dayTime.timeStart}–${dayTime.timeEnd}`);
-                    cell.title = `${card.title} (${formatDate(matchingRange.start)} – ${formatDate(matchingRange.end || matchingRange.start)})\nHorário em ${this.dayLabel(d)}: ${dayTime.timeStart} – ${dayTime.timeEnd}`;
+                    cell.title = `${card.title} (${formatDate(matchingRange.start)} – ${formatDate(matchingRange.end || matchingRange.start)})\nHorário em ${this.dayLabel(d)}: ${dayTime.timeStart} – ${dayTime.timeEnd}\nBotão direito para opções`;
                 } else {
                     cell.addClass('kt-span-not-timeblocked');
-                    cell.title = `${card.title} (${formatDate(matchingRange.start)} – ${formatDate(matchingRange.end || matchingRange.start)})\nSem horário no Timeblocking para ${this.dayLabel(d)}`;
+                    cell.title = `${card.title} (${formatDate(matchingRange.start)} – ${formatDate(matchingRange.end || matchingRange.start)})\nSem horário no Timeblocking para ${this.dayLabel(d)}\nBotão direito para opções`;
                 }
 
                 const rStart = startOfDay(matchingRange.start);
@@ -16458,12 +16720,134 @@ kanban-plugin: basic
                     this.attachGanttResize(rightHandle, 'end', card, matchingRange, ws, cellDates, cellElements, row);
                 }
 
-                // Drag do bloco inteiro horizontalmente ou clique para editar datas
+                // Drag do bloco inteiro horizontalmente
                 this.attachGanttSpanMove(cell, card, matchingRange, ws, cellDates, cellElements, row, i);
+
+                // Menu de contexto com botão direito
+                cell.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = new obsidian.Menu();
+
+                    const rangeStartStr = formatDate(matchingRange.start);
+                    const rangeEndStr   = formatDate(matchingRange.end || matchingRange.start);
+                    const rangeLabel    = sameDay(matchingRange.start, matchingRange.end || matchingRange.start)
+                        ? rangeStartStr
+                        : `${rangeStartStr} – ${rangeEndStr}`;
+
+                    menu.addItem(item => {
+                        item.setTitle(`🗑️ Remover este bloco (${rangeLabel})`)
+                            .setIcon('trash')
+                            .onClick(async () => {
+                                const remaining = (card.dateRanges || []).filter(r => {
+                                    return !(sameDay(r.start, matchingRange.start) && sameDay(r.end || r.start, matchingRange.end || matchingRange.start));
+                                });
+                                if (remaining.length === 0) {
+                                    await this.removeCardFromSchedule(card);
+                                } else {
+                                    await this.persistDateRange(card, remaining);
+                                    await this.refresh();
+                                }
+                                new obsidian.Notice(`Bloco removido do cronograma: ${card.title}`);
+                            });
+                    });
+
+                    if (!sameDay(matchingRange.start, matchingRange.end || matchingRange.start)) {
+                        menu.addItem(item => {
+                            item.setTitle(`✂️ Remover apenas este dia (${formatDate(d)})`)
+                                .setIcon('scissors')
+                                .onClick(async () => {
+                                    const updatedRanges = removeDayFromDateRanges(card.dateRanges, d);
+                                    if (updatedRanges.length === 0) {
+                                        await this.removeCardFromSchedule(card);
+                                    } else {
+                                        await this.persistDateRange(card, updatedRanges);
+                                        await this.refresh();
+                                    }
+                                    new obsidian.Notice(`Dia ${formatDate(d)} removido de ${card.title}`);
+                                });
+                        });
+                    }
+
+                    menu.addItem(item => {
+                        item.setTitle(`🚫 Remover toda a tarefa do cronograma`)
+                            .setIcon('calendar-x')
+                            .onClick(async () => {
+                                await this.removeCardFromSchedule(card);
+                            });
+                    });
+
+                    menu.addSeparator();
+
+                    menu.addItem(item => {
+                        item.setTitle(`⏰ Abrir ${this.dayLabel(d)} no Timeblocking`)
+                            .setIcon('clock')
+                            .onClick(() => {
+                                this.openDayInTimeblocking(d);
+                            });
+                    });
+
+                    menu.addItem(item => {
+                        item.setTitle(`📅 Configurar períodos de agendamento...`)
+                            .setIcon('calendar')
+                            .onClick(() => {
+                                this.openDateRangeModal(card);
+                            });
+                    });
+
+                    menu.addItem(item => {
+                        item.setTitle(`✎ Opções do card...`)
+                            .setIcon('pencil')
+                            .onClick(() => {
+                                this.openCardOptionsModal(card);
+                            });
+                    });
+
+                    menu.showAtMouseEvent(e);
+                });
             } else {
-                cell.title = `Clique duas vezes para abrir ${this.dayLabel(d)} no Timeblocking`;
-                cell.ondblclick = () => {
-                    this.openDayInTimeblocking(d);
+                cell.title = `Clique duas vezes para agendar "${card.title}" neste dia (${formatDate(d)})\nBotão direito para opções`;
+                cell.ondblclick = async (e) => {
+                    e.stopPropagation();
+                    const existingRanges = (card.dateRanges && card.dateRanges.length > 0)
+                        ? card.dateRanges.map(r => ({ start: new Date(r.start), end: new Date(r.end || r.start) }))
+                        : (card.startDate ? [{ start: new Date(card.startDate), end: new Date(card.endDate || card.startDate) }] : []);
+
+                    const targetD = startOfDay(d);
+                    existingRanges.push({ start: targetD, end: targetD });
+                    const merged = mergeDateRanges(existingRanges);
+                    await this.persistDateRange(card, merged);
+                    await this.refresh();
+                    new obsidian.Notice(`Adicionado período em ${formatDate(d)} para ${card.title}`);
+                };
+                cell.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = new obsidian.Menu();
+                    menu.addItem(item => {
+                        item.setTitle(`➕ Agendar "${card.title}" neste dia (${formatDate(d)})`)
+                            .setIcon('calendar-plus')
+                            .onClick(async () => {
+                                const existingRanges = (card.dateRanges && card.dateRanges.length > 0)
+                                    ? card.dateRanges.map(r => ({ start: new Date(r.start), end: new Date(r.end || r.start) }))
+                                    : (card.startDate ? [{ start: new Date(card.startDate), end: new Date(card.endDate || card.startDate) }] : []);
+
+                                const targetD = startOfDay(d);
+                                existingRanges.push({ start: targetD, end: targetD });
+                                const merged = mergeDateRanges(existingRanges);
+                                await this.persistDateRange(card, merged);
+                                await this.refresh();
+                                new obsidian.Notice(`Adicionado período em ${formatDate(d)} para ${card.title}`);
+                            });
+                    });
+                    menu.addItem(item => {
+                        item.setTitle(`⏰ Abrir ${this.dayLabel(d)} no Timeblocking`)
+                            .setIcon('clock')
+                            .onClick(() => {
+                                this.openDayInTimeblocking(d);
+                            });
+                    });
+                    menu.showAtMouseEvent(e);
                 };
             }
         }
@@ -16621,7 +17005,7 @@ kanban-plugin: basic
                         await this.refresh();
                     }
                 } else {
-                    this.openDateRangeModal(card);
+                    // Left-click without movement: do not pop up modal
                 }
             };
 
@@ -28026,7 +28410,7 @@ kanban-plugin: basic
     // RESIZABLE & COLLAPSIBLE BACKLOG (MINI-KANBAN LANES)
     // ----------------------------------------------------------
 
-    renderBacklogDrawer(container, unscheduled) {
+    renderBacklogDrawer(container, cardsToRender = null) {
         const drawer = container.createDiv('kt-backlog-drawer');
 
         if (!this.backlogCollapsed) {
@@ -28048,8 +28432,9 @@ kanban-plugin: basic
         titleBox.createSpan({ cls: 'kt-backlog-title-text', text: 'QUADRO KANBAN' });
         
         const countBadge = titleBox.createSpan('kt-badge-count');
-        const activeCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !c.isSubtask);
-        countBadge.setText(`${unscheduled.length} sem data • ${activeCards.length} total`);
+        const candidateCards = cardsToRender || this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !c.isSubtask);
+        const unscheduledCount = candidateCards.filter(c => !c.startDate && !c.isCompleted).length;
+        countBadge.setText(`${candidateCards.length} tarefas (${unscheduledCount} sem data)`);
 
         const toggleBtn = header.createEl('button', {
             cls: 'kt-backlog-toggle-btn',
@@ -28072,11 +28457,11 @@ kanban-plugin: basic
             const content = drawer.createDiv('kt-backlog-content');
             const lanesWrap = content.createDiv('kt-backlog-lanes');
 
-            // Group unscheduled cards by column
+            // Group cards by column
             const grouped = {};
             this.columns.forEach(col => { grouped[col] = []; });
             
-            unscheduled.forEach(c => {
+            candidateCards.forEach(c => {
                 if (!grouped[c.column]) grouped[c.column] = [];
                 grouped[c.column].push(c);
             });
@@ -29301,8 +29686,46 @@ kanban-plugin: basic
                         });
                     }
 
-                    // Section 2: BACKLOG GERAL SEM DATA
-                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask);
+                    // Section 2: EM DESENVOLVIMENTO
+                    const inDevCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isCompleted && !c.isSubtask && isDevColumn(c.column));
+
+                    inDevCards.sort((a, b) => {
+                        const tA = a.startDate ? new Date(a.startDate).getTime() : Infinity;
+                        const tB = b.startDate ? new Date(b.startDate).getTime() : Infinity;
+                        if (tA !== tB) return tA - tB;
+                        return (a.title || '').localeCompare(b.title || '');
+                    });
+
+                    const inDevHeader = contentContainer.createDiv('kt-section-label kt-section-indev-label kt-section-collapsible');
+                    const inDevArrow = inDevHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.weekInDevCollapsed ? '▶' : '▼' });
+                    inDevHeader.createSpan({ text: ` ⚡ EM DESENVOLVIMENTO (${inDevCards.length})` });
+
+                    const inDevContainer = contentContainer.createDiv('kt-tb-backlog-items kt-indev-list');
+                    if (this.weekInDevCollapsed) {
+                        inDevContainer.style.display = 'none';
+                    }
+                    inDevHeader.onclick = () => {
+                        this.weekInDevCollapsed = !this.weekInDevCollapsed;
+                        inDevArrow.setText(this.weekInDevCollapsed ? '▶' : '▼');
+                        inDevContainer.style.display = this.weekInDevCollapsed ? 'none' : 'flex';
+                    };
+
+                    if (inDevCards.length === 0) {
+                        const empty = inDevContainer.createDiv('kt-empty');
+                        empty.setText('Nenhuma tarefa em desenvolvimento.');
+                    } else {
+                        inDevCards.forEach(card => {
+                            this.renderTbSidebarCardItem(inDevContainer, card, {
+                                contextDay: card.startDate ? startOfDay(card.startDate) : null,
+                                showDateBadge: true,
+                                showTimeSlot: true,
+                                isWeekView: true
+                            });
+                        });
+                    }
+
+                    // Section 3: BACKLOG GERAL SEM DATA
+                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask && !isDevColumn(c.column));
                     const backlogHeader = contentContainer.createDiv('kt-section-label kt-section-collapsible');
                     const backlogArrow = backlogHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.backlogCollapsed ? '▶' : '▼' });
                     backlogHeader.createSpan({ text: ` 📋 BACKLOG GERAL (${unscheduled.length})` });
@@ -29367,8 +29790,46 @@ kanban-plugin: basic
                         });
                     }
 
-                    // Section 2: BACKLOG GERAL SEM DATA
-                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask);
+                    // Section 2: EM DESENVOLVIMENTO
+                    const inDevCards = this.cards.filter(c => !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isCompleted && !c.isSubtask && isDevColumn(c.column));
+
+                    inDevCards.sort((a, b) => {
+                        const tA = a.startDate ? new Date(a.startDate).getTime() : Infinity;
+                        const tB = b.startDate ? new Date(b.startDate).getTime() : Infinity;
+                        if (tA !== tB) return tA - tB;
+                        return (a.title || '').localeCompare(b.title || '');
+                    });
+
+                    const inDevHeader = contentContainer.createDiv('kt-section-label kt-section-indev-label kt-section-collapsible');
+                    const inDevArrow = inDevHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.dayInDevCollapsed ? '▶' : '▼' });
+                    inDevHeader.createSpan({ text: ` ⚡ EM DESENVOLVIMENTO (${inDevCards.length})` });
+
+                    const inDevContainer = contentContainer.createDiv('kt-tb-backlog-items kt-indev-list');
+                    if (this.dayInDevCollapsed) {
+                        inDevContainer.style.display = 'none';
+                    }
+                    inDevHeader.onclick = () => {
+                        this.dayInDevCollapsed = !this.dayInDevCollapsed;
+                        inDevArrow.setText(this.dayInDevCollapsed ? '▶' : '▼');
+                        inDevContainer.style.display = this.dayInDevCollapsed ? 'none' : 'flex';
+                    };
+
+                    if (inDevCards.length === 0) {
+                        const empty = inDevContainer.createDiv('kt-empty');
+                        empty.setText('Nenhuma tarefa em desenvolvimento.');
+                    } else {
+                        inDevCards.forEach(card => {
+                            this.renderTbSidebarCardItem(inDevContainer, card, {
+                                contextDay: card.startDate ? startOfDay(card.startDate) : day,
+                                showDateBadge: true,
+                                showTimeSlot: true,
+                                isWeekView: false
+                            });
+                        });
+                    }
+
+                    // Section 3: BACKLOG GERAL SEM DATA
+                    const unscheduled = this.cards.filter(c => !c.startDate && !c.isCompleted && !c.isEvent && c.column !== 'Rotina' && !isIgnoredColumn(c.column) && !c.isSubtask && !isDevColumn(c.column));
                     const backlogHeader = contentContainer.createDiv('kt-section-label kt-section-collapsible');
                     const backlogArrow = backlogHeader.createSpan({ cls: 'kt-collapse-arrow', text: this.backlogCollapsed ? '▶' : '▼' });
                     backlogHeader.createSpan({ text: ` 📋 BACKLOG GERAL (${unscheduled.length})` });
@@ -31600,23 +32061,28 @@ class KanbanTimelinePlugin extends obsidian.Plugin {
     }
 
     async activateView() {
-        const { workspace } = this.app;
-        let leaf = null;
-        const leaves = workspace.getLeavesOfType(VIEW_TYPE);
+        try {
+            const { workspace } = this.app;
+            let leaf = null;
+            const leaves = workspace.getLeavesOfType(VIEW_TYPE);
 
-        if (leaves.length > 0) {
-            leaf = leaves[0];
-        } else {
-            leaf = workspace.getLeaf('tab');
-            await leaf.setViewState({ type: VIEW_TYPE, active: true });
-        }
-
-        if (leaf) {
-            workspace.revealLeaf(leaf);
-            workspace.setActiveLeaf(leaf, { focus: true });
-            if (leaf.view && typeof leaf.view.refresh === 'function') {
-                await leaf.view.refresh();
+            if (leaves.length > 0) {
+                leaf = leaves[0];
+            } else {
+                leaf = workspace.getLeaf('tab');
+                await leaf.setViewState({ type: VIEW_TYPE, active: true });
             }
+
+            if (leaf) {
+                workspace.revealLeaf(leaf);
+                workspace.setActiveLeaf(leaf, { focus: true });
+                if (leaf.view && typeof leaf.view.refresh === 'function') {
+                    await leaf.view.refresh();
+                }
+            }
+        } catch (err) {
+            console.error('[Kanban Timeline] Erro ao ativar visualização:', err);
+            new obsidian.Notice('Erro ao abrir Kanban Timeline: ' + (err?.message || err));
         }
     }
 

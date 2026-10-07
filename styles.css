@@ -339,6 +339,10 @@
 
 .kt-gantt-cell.kt-is-weekend { background: rgba(255,255,255,0.012); }
 .kt-gantt-cell.kt-is-today   { background: rgba(var(--color-accent-1, 99,102,241), 0.06); }
+.kt-gantt-cell:not(.kt-span):hover {
+    background: rgba(255, 255, 255, 0.045);
+    cursor: pointer;
+}
 
 /* Span bar */
 .kt-gantt-cell.kt-span {
@@ -1789,6 +1793,11 @@ body.kt-is-card-dragging .kt-gantt-section {
 
 .kt-section-today-label {
     color: var(--interactive-accent) !important;
+    font-weight: 800 !important;
+}
+
+.kt-section-indev-label {
+    color: #ec4899 !important;
     font-weight: 800 !important;
 }
 
@@ -14998,3 +15007,25 @@ svg.leaflet-image-layer.leaflet-interactive path {
     background: var(--background-modifier-hover);
     border-style: solid;
 }
+
+/* Timeblock Card Highlight Pulse (Double-click from Report) */
+.kt-tb-card.kt-tb-highlight-pulse {
+    outline: 3px solid #6366f1 !important;
+    box-shadow: 0 0 18px rgba(99, 102, 241, 0.85) !important;
+    transform: scale(1.02);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, outline 0.2s ease;
+    z-index: 100 !important;
+}
+
+/* Report Modal Double Clickable Rows */
+.kt-report-item-row,
+.kt-report-task-block {
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.kt-report-item-row:hover,
+.kt-report-task-block:hover {
+    background-color: rgba(99, 102, 241, 0.08) !important;
+}
+
