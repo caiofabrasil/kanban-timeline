@@ -3852,6 +3852,55 @@ body.kt-is-tb-resizing * {
     background: var(--background-modifier-hover);
 }
 
+.kt-report-item-toggle-btn {
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 4px;
+    border-radius: 3px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.1s;
+    margin-left: 6px;
+}
+
+.kt-report-item-toggle-btn.is-included {
+    color: var(--text-accent, #a78bfa);
+    font-weight: bold;
+}
+
+.kt-report-item-toggle-btn.is-included:hover {
+    color: #ef4444;
+    transform: scale(1.25);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.kt-report-item-toggle-btn.is-excluded {
+    color: var(--text-faint);
+    opacity: 0.4;
+}
+
+.kt-report-item-toggle-btn.is-excluded:hover {
+    color: var(--text-normal);
+    opacity: 1;
+    transform: scale(1.25);
+    background: var(--background-modifier-hover);
+}
+
+.kt-report-item-row.not-counted,
+.kt-report-task-block.not-counted {
+    opacity: 0.55;
+}
+
+.kt-report-item-row.not-counted .kt-report-item-dur,
+.kt-report-task-block.not-counted .kt-report-item-dur {
+    text-decoration: line-through;
+    color: var(--text-faint);
+}
+
+
 .kt-proj-task-item.is-excluded {
     opacity: 0.48;
 }

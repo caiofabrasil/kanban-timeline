@@ -1238,12 +1238,16 @@ class KanbanParser {
             const seriesMatch = rawComment.match(/series:([^\s]+)/i);
             const seriesId = seriesMatch ? seriesMatch[1] : null;
 
+            const ktidMatch = rawComment.match(/ktid:([a-z0-9]{4,})/i);
+            const ktid = ktidMatch ? ktidMatch[1] : null;
+
             const tagColor = isEvent ? (habitColor || null) : getCardTagColor(tags, customProjects);
             const colColor = isEvent ? null : getColumnColor(currentColumn, { ...customColors, ...colColors }, customProjects);
             const projColor = isEvent ? (habitColor || null) : getProjectColor(tags, currentColumn, { ...customColors, ...colColors }, customProjects);
 
             const card = {
                 id:              `${i}-${title}`,
+                ktid,
                 title,
                 column:          currentColumn,
                 isCompleted,
@@ -1291,6 +1295,67 @@ class KanbanParser {
         }
 
         return { cards, columns, columnColors: colColors };
+    }
+
+    generateKtid() {
+        const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        let out = '';
+        for (let n = 0; n < 8; n++) {
+            out += alphabet[Math.floor(Math.random() * alphabet.length)];
+        }
+        return out;
+    }
+
+    injectKtidOnLine(line, ktid) {
+        const commentMatch = line.match(/<!--\s*(?:tb:?|⏰)\s*([\s\S]*?)-->/);
+        if (commentMatch) {
+            if (/ktid:[a-z0-9]{4,}/i.test(commentMatch[0])) return line;
+            const newComment = commentMatch[0].replace(/\s*-->$/, ` ktid:${ktid} -->`);
+            return line.replace(commentMatch[0], newComment);
+        }
+        return `${line.replace(/\s+$/, '')} <!-- tb: ktid:${ktid} -->`;
+    }
+
+    backfillKtids(content, customProjects = []) {
+        const projects = Array.isArray(customProjects) ? customProjects : [];
+        if (projects.length === 0) return { content, modified: false, assigned: 0 };
+
+        const parsed = this.parse(content, {}, projects);
+        const lines = content.split('\n');
+        const usedIds = new Set();
+        for (const c of parsed.cards) {
+            if (c.ktid) usedIds.add(c.ktid.toLowerCase());
+        }
+
+        const belongsToProject = (c) => {
+            for (const proj of projects) {
+                const projTag = (proj.tag || '').trim().toLowerCase().replace(/^#/, '');
+                const projCols = (proj.columns || []).map(x => x.toLowerCase());
+                const hasTag = projTag && c.tags && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
+                const inCol = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
+                const hasTitleTag = projTag && c.title && c.title.toLowerCase().includes('#' + projTag);
+                if (hasTag || inCol || hasTitleTag) return true;
+            }
+            return false;
+        };
+
+        let assigned = 0;
+        for (const c of parsed.cards) {
+            if (c.ktid) continue;
+            if (c.isSubtask || c.isEvent || c.column === 'Rotina' || c.eventType === 'habit') continue;
+            if (typeof c.lineIndex !== 'number' || c.lineIndex < 0 || c.lineIndex >= lines.length) continue;
+            if (!belongsToProject(c)) continue;
+
+            let id = this.generateKtid();
+            while (usedIds.has(id)) id = this.generateKtid();
+            usedIds.add(id);
+
+            lines[c.lineIndex] = this.injectKtidOnLine(lines[c.lineIndex], id);
+            assigned++;
+        }
+
+        if (assigned === 0) return { content, modified: false, assigned: 0 };
+        return { content: lines.join('\n'), modified: true, assigned };
     }
 
     /** Update column color in Kanban file */
@@ -3707,8 +3772,7 @@ class ProjectReportModal extends obsidian.Modal {
 
         matchingCards.forEach(c => {
             const isDone = c.isCompleted || c.column === 'Done' || isIgnoredColumn(c.column);
-            const isExcluded = excludedSet.has(c.title.trim());
-            if (isExcluded) return; // Skip excluded tasks
+            const isExcluded = excludedSet.has((c.title || '').trim());
 
             if (this.statusFilter === 'done' && !isDone) return;
             if (this.statusFilter === 'pending' && isDone) return;
@@ -3740,6 +3804,7 @@ class ProjectReportModal extends obsidian.Modal {
                                     durationMinutes: dur,
                                     isDone,
                                     isDeleted: !!c.isDeleted,
+                                    isExcluded,
                                     column: c.column
                                 });
                             }
@@ -3767,6 +3832,7 @@ class ProjectReportModal extends obsidian.Modal {
                         durationMinutes: dur,
                         isDone,
                         isDeleted: !!c.isDeleted,
+                        isExcluded,
                         column: c.column
                     });
                 }
@@ -3791,6 +3857,7 @@ class ProjectReportModal extends obsidian.Modal {
                     durationMinutes: c.estimateMinutes,
                     isDone,
                     isDeleted: !!c.isDeleted,
+                    isExcluded,
                     column: c.column
                 });
             } else {
@@ -3806,6 +3873,7 @@ class ProjectReportModal extends obsidian.Modal {
                         durationMinutes: 0,
                         isDone,
                         isDeleted: !!c.isDeleted,
+                        isExcluded,
                         column: c.column
                     });
                 }
@@ -3830,12 +3898,13 @@ class ProjectReportModal extends obsidian.Modal {
         contentEl.addClass('kt-report-modal');
 
         const entries = this.getReportEntries();
-        const totalMinutes = entries.reduce((acc, e) => acc + (e.durationMinutes || 0), 0);
+        const countsToward = (e) => !e.isExcluded && !e.isDeleted;
+        const totalMinutes = entries.reduce((acc, e) => acc + (countsToward(e) ? (e.durationMinutes || 0) : 0), 0);
         const curr = this.selectedCurrency || project.currency || 'R$';
         const hourlyRate = (this.hourlyRateOverride !== undefined) ? this.hourlyRateOverride : (project.hourlyRate || 0);
         const totalEarnings = (totalMinutes / 60) * hourlyRate;
-        const doneCount = entries.filter(e => e.isDone).length;
-        const totalTasks = entries.length;
+        const doneCount = entries.filter(e => countsToward(e) && e.isDone).length;
+        const totalTasks = entries.filter(e => countsToward(e)).length;
 
         // 1. Top Header Banner
         const topHdr = contentEl.createDiv('kt-report-header');
@@ -4048,7 +4117,7 @@ class ProjectReportModal extends obsidian.Modal {
 
             sortedDates.forEach(dKey => {
                 const list = byDate[dKey];
-                const dayMinutes = list.reduce((acc, x) => acc + (x.durationMinutes || 0), 0);
+                const dayMinutes = list.reduce((acc, x) => acc + (countsToward(x) ? (x.durationMinutes || 0) : 0), 0);
                 const dayEarnings = (dayMinutes / 60) * hourlyRate;
 
                 let headerDate = dKey;
@@ -4073,7 +4142,8 @@ class ProjectReportModal extends obsidian.Modal {
 
                 const dayItems = dayBlock.createDiv('kt-report-day-items');
                 list.forEach(item => {
-                    const rowEl = dayItems.createDiv(`kt-report-item-row ${item.isDone ? 'is-done' : ''}`);
+                    const notCounted = item.isExcluded || item.isDeleted;
+                    const rowEl = dayItems.createDiv(`kt-report-item-row ${item.isDone ? 'is-done' : ''} ${notCounted ? 'not-counted' : ''} ${item.isExcluded ? 'is-excluded' : ''}`);
                     rowEl.title = 'Duplo clique: ir direto para esta tarefa no Timeblocking';
                     rowEl.ondblclick = (e) => {
                         e.stopPropagation();
@@ -4093,18 +4163,21 @@ class ProjectReportModal extends obsidian.Modal {
                     left.createSpan({ cls: 'kt-report-item-title', text: item.title });
                     if (item.isDeleted) {
                         left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Removida)' });
+                    } else if (item.isExcluded) {
+                        left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Fora da contagem)' });
                     }
 
                     const right = rowEl.createDiv('kt-report-item-right');
                     right.createSpan({ cls: 'kt-report-item-col', text: item.column });
                     if (item.durationMinutes > 0) {
                         right.createSpan({ cls: 'kt-report-item-dur', text: formatMinutesToHours(item.durationMinutes) });
-                        if (hourlyRate > 0) {
+                        if (hourlyRate > 0 && countsToward(item)) {
                             const itemEarned = (item.durationMinutes / 60) * hourlyRate;
                             right.createSpan({ cls: 'kt-report-item-earned', text: formatCurrency(itemEarned, curr) });
                         }
                     }
                     right.createSpan({ cls: `kt-report-item-status ${item.isDone ? 'is-done' : 'is-pending'}`, text: item.isDone ? 'Concluído' : 'Pendente' });
+                    this.buildReportExcludeToggle(right, item);
                 });
             });
         } else {
@@ -4117,13 +4190,14 @@ class ProjectReportModal extends obsidian.Modal {
                         title: e.title,
                         isDone: e.isDone,
                         isDeleted: !!e.isDeleted,
+                        isExcluded: !!e.isExcluded,
                         column: e.column,
                         dates: new Set(),
                         totalMinutes: 0,
                         sessions: []
                     };
                 }
-                byTask[e.title].totalMinutes += (e.durationMinutes || 0);
+                byTask[e.title].totalMinutes += (countsToward(e) ? (e.durationMinutes || 0) : 0);
                 if (e.dateStr && e.dateStr !== 'Geral' && e.dateStr !== 'Sem data') {
                     byTask[e.title].dates.add(e.dateStr);
                 }
@@ -4133,7 +4207,8 @@ class ProjectReportModal extends obsidian.Modal {
             const sortedTasks = Object.values(byTask).sort((a, b) => b.totalMinutes - a.totalMinutes);
 
             sortedTasks.forEach(t => {
-                const taskBlock = breakdownList.createDiv(`kt-report-task-block ${t.isDone ? 'is-done' : ''}`);
+                const notCounted = t.isExcluded || t.isDeleted;
+                const taskBlock = breakdownList.createDiv(`kt-report-task-block ${t.isDone ? 'is-done' : ''} ${notCounted ? 'not-counted' : ''} ${t.isExcluded ? 'is-excluded' : ''}`);
                 taskBlock.title = 'Duplo clique: ir direto para esta tarefa no Timeblocking';
                 taskBlock.ondblclick = (e) => {
                     e.stopPropagation();
@@ -4159,6 +4234,8 @@ class ProjectReportModal extends obsidian.Modal {
                 left.createSpan({ cls: 'kt-report-task-title', text: t.title });
                 if (t.isDeleted) {
                     left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Removida)' });
+                } else if (t.isExcluded) {
+                    left.createSpan({ cls: 'kt-report-item-deleted-tag', text: '(Fora da contagem)' });
                 }
 
                 const datesArr = Array.from(t.dates).sort((a, b) => {
@@ -4182,8 +4259,36 @@ class ProjectReportModal extends obsidian.Modal {
                     right.createSpan({ cls: 'kt-report-item-earned', text: formatCurrency(taskEarned, curr) });
                 }
                 right.createSpan({ cls: `kt-report-item-status ${t.isDone ? 'is-done' : 'is-pending'}`, text: t.isDone ? 'Concluído' : 'Pendente' });
+                this.buildReportExcludeToggle(right, t);
             });
         }
+    }
+
+    buildReportExcludeToggle(container, item) {
+        if (item.isDeleted) return;
+        const project = this.project;
+        const titleKey = (item.title || '').trim();
+        if (!titleKey) return;
+        const isExcluded = (project.excludedTaskTitles || []).includes(titleKey);
+        const toggleBtn = container.createSpan({
+            cls: `kt-report-item-toggle-btn ${!isExcluded ? 'is-included' : 'is-excluded'}`,
+            text: !isExcluded ? '✓' : '○'
+        });
+        toggleBtn.title = isExcluded
+            ? 'Fora da contagem de horas (clique para incluir)'
+            : 'Incluída na contagem de horas (clique para desconsiderar)';
+        toggleBtn.onclick = async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!project.excludedTaskTitles) project.excludedTaskTitles = [];
+            if (isExcluded) {
+                project.excludedTaskTitles = project.excludedTaskTitles.filter(x => x !== titleKey);
+            } else if (!project.excludedTaskTitles.includes(titleKey)) {
+                project.excludedTaskTitles.push(titleKey);
+            }
+            await this.plugin.saveSettings();
+            this.renderModal();
+        };
     }
 
     generateSummaryText(entries) {
@@ -13865,6 +13970,16 @@ kanban-plugin: basic
             }
         }
 
+        const projectsReady = Array.isArray(this.plugin.settings.projects)
+            && this.plugin.settings.projects.some(p => Array.isArray(p.persistentTasks) && p.persistentTasks.length > 0);
+        if (projectsReady) {
+            const ktidRes = this.parser.backfillKtids(content, this.plugin.settings.projects);
+            if (ktidRes.modified) {
+                content = ktidRes.content;
+                await this.app.vault.modify(file, content);
+            }
+        }
+
         const parsed     = this.parser.parse(content, this.plugin.settings.columnColors, this.plugin.settings.projects);
         this.cards       = parsed.cards;
         this.columns     = parsed.columns;
@@ -13890,66 +14005,57 @@ kanban-plugin: basic
                 return hasTag || inCol || hasTitleTag;
             });
 
+            const seenKtids = new Set();
             const seenTitles = new Set();
 
             for (const c of matching) {
+                if (c.isSubtask) continue;
                 const titleKey = (c.cleanTitle || c.title || '').trim();
-                if (!titleKey) continue;
-                seenTitles.add(titleKey.toLowerCase());
+                const cKtid = c.ktid ? c.ktid.toLowerCase() : null;
+                if (!cKtid && !titleKey) continue;
+                if (cKtid) seenKtids.add(cKtid);
+                if (titleKey) seenTitles.add(titleKey.toLowerCase());
 
                 const isDone = c.isCompleted || c.column === 'Done' || isIgnoredColumn(c.column);
-                const existing = proj.persistentTasks.find(pt => (pt.title || '').trim().toLowerCase() === titleKey.toLowerCase());
+
+                let existing = null;
+                if (cKtid) existing = proj.persistentTasks.find(pt => pt.ktid && pt.ktid.toLowerCase() === cKtid);
+                if (!existing && titleKey) existing = proj.persistentTasks.find(pt => !pt.ktid && (pt.title || '').trim().toLowerCase() === titleKey.toLowerCase());
+
+                const mirrored = c.dailyTimes ? JSON.parse(JSON.stringify(c.dailyTimes)) : {};
 
                 if (existing) {
-                    if (existing.isDeleted) {
-                        existing.isDeleted = false;
-                        delete existing.deletedAt;
+                    if (cKtid && (existing.ktid || '').toLowerCase() !== cKtid) { existing.ktid = c.ktid; modified = true; }
+                    if (existing.isDeleted) { existing.isDeleted = false; delete existing.deletedAt; modified = true; }
+                    if (existing.title !== c.title) { existing.title = c.title; modified = true; }
+                    if ((existing.cleanTitle || '') !== (c.cleanTitle || c.title)) { existing.cleanTitle = c.cleanTitle || c.title; modified = true; }
+                    if (existing.column !== c.column) { existing.column = c.column; modified = true; }
+                    if (existing.isCompleted !== isDone) { existing.isCompleted = isDone; modified = true; }
+
+                    if (JSON.stringify(existing.dailyTimes || {}) !== JSON.stringify(mirrored)) {
+                        existing.dailyTimes = mirrored;
                         modified = true;
                     }
-                    if (existing.column !== c.column) {
-                        existing.column = c.column;
+                    if ((existing.timeStart || null) !== (c.timeStart || null) || (existing.timeEnd || null) !== (c.timeEnd || null)) {
+                        existing.timeStart = c.timeStart || null;
+                        existing.timeEnd = c.timeEnd || null;
                         modified = true;
                     }
-                    if (existing.isCompleted !== isDone) {
-                        existing.isCompleted = isDone;
-                        modified = true;
-                    }
-                    if (c.dailyTimes && Object.keys(c.dailyTimes).length > 0) {
-                        if (!existing.dailyTimes) existing.dailyTimes = {};
-                        for (const dk of Object.keys(c.dailyTimes)) {
-                            const cSlots = Array.isArray(c.dailyTimes[dk]) ? c.dailyTimes[dk] : [c.dailyTimes[dk]];
-                            if (!existing.dailyTimes[dk]) {
-                                existing.dailyTimes[dk] = [...cSlots];
-                                modified = true;
-                            } else {
-                                for (const cs of cSlots) {
-                                    if (!existing.dailyTimes[dk].some(es => es.timeStart === cs.timeStart && es.timeEnd === cs.timeEnd)) {
-                                        existing.dailyTimes[dk].push(cs);
-                                        modified = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (c.timeStart && c.timeEnd && (!existing.timeStart || !existing.timeEnd)) {
-                        existing.timeStart = c.timeStart;
-                        existing.timeEnd = c.timeEnd;
-                        modified = true;
-                    }
-                    if (c.estimateMinutes && existing.estimateMinutes !== c.estimateMinutes) {
-                        existing.estimateMinutes = c.estimateMinutes;
-                        existing.estimateText = c.estimateText;
+                    if ((existing.estimateMinutes || 0) !== (c.estimateMinutes || 0)) {
+                        existing.estimateMinutes = c.estimateMinutes || 0;
+                        existing.estimateText = c.estimateText || '';
                         modified = true;
                     }
                     existing.lastSeen = new Date().toISOString();
                 } else {
                     proj.persistentTasks.push({
                         id: c.id || c.uid || `pt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                        ktid: c.ktid || null,
                         title: c.title,
                         cleanTitle: c.cleanTitle || c.title,
                         column: c.column,
                         isCompleted: isDone,
-                        dailyTimes: c.dailyTimes ? JSON.parse(JSON.stringify(c.dailyTimes)) : {},
+                        dailyTimes: mirrored,
                         timeStart: c.timeStart || null,
                         timeEnd: c.timeEnd || null,
                         startDate: c.startDate ? formatDate(c.startDate) : null,
@@ -13965,20 +14071,22 @@ kanban-plugin: basic
                 }
             }
 
-            // Any persistent task not in current active cards is marked isDeleted
+            // A persistent task is marked removed ONLY when its card is gone from the board.
+            // ktid-anchored entries survive rename and reschedule; title match is the legacy fallback.
             for (const pt of proj.persistentTasks) {
-                const tKey = (pt.title || '').trim().toLowerCase();
-                if (!seenTitles.has(tKey)) {
-                    if (!pt.isDeleted) {
-                        pt.isDeleted = true;
-                        pt.deletedAt = new Date().toISOString();
-                        modified = true;
-                    }
+                const present = pt.ktid
+                    ? seenKtids.has(pt.ktid.toLowerCase())
+                    : seenTitles.has((pt.title || '').trim().toLowerCase());
+                if (!present && !pt.isDeleted) {
+                    pt.isDeleted = true;
+                    pt.deletedAt = new Date().toISOString();
+                    modified = true;
                 }
             }
         }
 
-        if (modified) {
+        const projectsReady = this.plugin.settings.projects.some(p => Array.isArray(p.persistentTasks) && p.persistentTasks.length > 0);
+        if (modified && projectsReady) {
             await this.plugin.saveSettings();
         }
     }
