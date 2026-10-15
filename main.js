@@ -29112,6 +29112,40 @@ kanban-plugin: basic
             dateChip.title = `Agendado: ${formatDate(card.startDate)}${isSame ? '' : ' – ' + formatDate(card.endDate)}`;
         }
 
+        // $ toggle: include/exclude this task from its project's hours/earnings (same list as the Projects panel)
+        const dollarProject = !card.isEvent && !card.isRemoteCalendarEvent && card.column !== 'Rotina'
+            ? getProjectForCard(card, this.plugin.settings.projects)
+            : null;
+        if (dollarProject) {
+            const dollarKey = (card.title || '').trim();
+            const isCounted = () => !(dollarProject.excludedTaskTitles || []).includes(dollarKey);
+            cardEl.addClass('kt-has-dollar');
+            const dollarBtn = cardEl.createSpan({ cls: 'kt-card-dollar-btn', text: '$' });
+            const paintDollar = () => {
+                const counted = isCounted();
+                dollarBtn.toggleClass('is-counted', counted);
+                dollarBtn.toggleClass('is-not-counted', !counted);
+                dollarBtn.title = counted
+                    ? `Contabilizado em "${dollarProject.name}" (clique para desconsiderar)`
+                    : `Fora da contagem de "${dollarProject.name}" (clique para contabilizar)`;
+            };
+            paintDollar();
+            dollarBtn.onclick = async (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (!dollarProject.excludedTaskTitles) dollarProject.excludedTaskTitles = [];
+                if (isCounted()) {
+                    dollarProject.excludedTaskTitles.push(dollarKey);
+                } else {
+                    dollarProject.excludedTaskTitles = dollarProject.excludedTaskTitles.filter(t => t !== dollarKey);
+                }
+                paintDollar();
+                await this.plugin.saveSettings();
+            };
+            dollarBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+            dollarBtn.setAttribute('draggable', 'false');
+        }
+
         // 3-Dots Options Menu Button (•••)
         const menuBtn = cardEl.createSpan({ cls: 'kt-card-menu-btn', text: '···' });
         menuBtn.title = 'Opções do card';

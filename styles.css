@@ -15078,3 +15078,47 @@ svg.leaflet-image-layer.leaflet-interactive path {
     background-color: rgba(99, 102, 241, 0.08) !important;
 }
 
+
+/* $ toggle on Kanban cards: counts the task toward its project's hours/earnings */
+.kt-card-dollar-btn {
+    position: absolute;
+    top: 4px;
+    right: 5px;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    border-radius: 50%;
+    cursor: pointer;
+    user-select: none;
+    z-index: 2;
+    transition: color 0.12s, background 0.12s, opacity 0.12s, transform 0.1s;
+}
+
+.kt-card-dollar-btn.is-counted {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.15);
+}
+
+.kt-card-dollar-btn.is-not-counted {
+    color: var(--text-faint);
+    background: transparent;
+    opacity: 0.45;
+}
+
+.kt-card-dollar-btn:hover {
+    opacity: 1;
+    transform: scale(1.15);
+}
+
+.kt-lane-card.kt-has-dollar .kt-card-menu-btn {
+    right: 24px;
+}
+
+.kt-lane-card.kt-has-dollar > .kt-card-body > .kt-c-title {
+    padding-right: 22px;
+}
