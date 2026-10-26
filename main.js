@@ -420,6 +420,15 @@ function parseTimeEstimate(str) {
     };
 }
 
+// A parent's estimateMinutes already includes its subtasks' minutes; when the subtasks are
+// counted on their own (project stats / report), use only the parent's own share.
+function ownEstimateMinutes(c) {
+    if (!c) return 0;
+    if (c.subtasksEstimateMinutes) return c.ownEstimateMinutes || 0;
+    return c.estimateMinutes || 0;
+}
+
+
 function formatMinutesToHours(min) {
     if (!min || min <= 0) return '';
     const h = Math.floor(min / 60);
@@ -3714,16 +3723,27 @@ class ProjectReportModal extends obsidian.Modal {
         const projCols = (project.columns || []).map(c => c.toLowerCase());
         const excludedSet = new Set(project.excludedTaskTitles || []);
 
-        const matchingCards = (this.cards || []).filter(c => {
+        // Subtasks snapshot the parent's tags at parse time, so tags written below the
+        // subtask list (e.g. "#AirBrawl" on the card's last line) never reach them.
+        // Resolve project membership through the parent card instead.
+        const cardsById = new Map((this.cards || []).filter(c => !c.isSubtask).map(c => [c.id, c]));
+        const matchesProject = (c) => {
             const hasTag = projTag && c.tags && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
             const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
             const hasTitleTag = projTag && (c.title || '').toLowerCase().includes('#' + projTag);
             const hasProjName = project.name && (c.title || '').toLowerCase().includes(project.name.toLowerCase());
-            
-            if (!hasTag && !inCol && !hasTitleTag && !hasProjName) return false;
+            return hasTag || inCol || hasTitleTag || hasProjName;
+        };
+        const entryTitle = (c) => (c.isSubtask && c.parentTitle) ? `${c.parentTitle} › ${c.title}` : c.title;
+
+        const matchingCards = (this.cards || []).filter(c => {
+            const parent = c.isSubtask ? cardsById.get(c.parentId) : null;
+
+            if (!matchesProject(c) && !(parent && matchesProject(parent))) return false;
 
             // Exclude personal breaks and habits
             if (c.eventType === 'break' || c.eventType === 'habit') return false;
+            if (parent && (parent.eventType === 'break' || parent.eventType === 'habit')) return false;
 
             return true;
         });
@@ -3796,7 +3816,7 @@ class ProjectReportModal extends obsidian.Modal {
                             if (dur > 0) {
                                 entries.push({
                                     card: c,
-                                    title: c.title,
+                                    title: entryTitle(c),
                                     dateStr: dKey,
                                     dateObj: slotDate || now,
                                     timeStart: dt.timeStart,
@@ -3824,7 +3844,7 @@ class ProjectReportModal extends obsidian.Modal {
 
                     entries.push({
                         card: c,
-                        title: c.title,
+                        title: entryTitle(c),
                         dateStr: slotDate ? formatDate(slotDate) : 'Geral',
                         dateObj: slotDate || now,
                         timeStart: c.timeStart,
@@ -3836,7 +3856,7 @@ class ProjectReportModal extends obsidian.Modal {
                         column: c.column
                     });
                 }
-            } else if (c.estimateMinutes && c.estimateMinutes > 0) {
+            } else if (ownEstimateMinutes(c) > 0) {
                 const slotDate = c.startDate ? startOfDay(c.startDate) : null;
                 if (slotDate) {
                     if (this.periodFilter === 'today' && !sameDay(slotDate, now)) return;
@@ -3849,12 +3869,12 @@ class ProjectReportModal extends obsidian.Modal {
 
                 entries.push({
                     card: c,
-                    title: c.title,
+                    title: entryTitle(c),
                     dateStr: slotDate ? formatDate(slotDate) : 'Sem data',
                     dateObj: slotDate || new Date(0),
                     timeStart: null,
                     timeEnd: null,
-                    durationMinutes: c.estimateMinutes,
+                    durationMinutes: ownEstimateMinutes(c),
                     isDone,
                     isDeleted: !!c.isDeleted,
                     isExcluded,
@@ -3865,7 +3885,7 @@ class ProjectReportModal extends obsidian.Modal {
                     const slotDate = c.startDate ? startOfDay(c.startDate) : null;
                     entries.push({
                         card: c,
-                        title: c.title,
+                        title: entryTitle(c),
                         dateStr: slotDate ? formatDate(slotDate) : 'Sem data',
                         dateObj: slotDate || new Date(0),
                         timeStart: null,
@@ -17606,12 +17626,20 @@ kanban-plugin: basic
         const projCols = (project.columns || []).map(c => c.toLowerCase());
         const excludedSet = new Set(project.excludedTaskTitles || []);
 
+        // Subtasks snapshot the parent's tags at parse time; resolve membership through the parent.
+        const cardsById = new Map((cards || []).filter(c => !c.isSubtask).map(c => [c.id, c]));
+        const matchesProject = (c) => {
+            const hasTag = projTag && (c.tags || []).some(t => t.toLowerCase().replace(/^#/, '') === projTag);
+            const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
+            const hasTitleTag = projTag && (c.title || '').toLowerCase().includes('#' + projTag);
+            return hasTag || inCol || hasTitleTag;
+        };
+
         const matchingCards = (cards || []).filter(c => {
             if (c.isEvent || c.column === 'Rotina') return false;
-            const hasTag = projTag && c.tags.some(t => t.toLowerCase().replace(/^#/, '') === projTag);
-            const inCol  = projCols.length > 0 && projCols.includes((c.column || '').toLowerCase());
-            const hasTitleTag = projTag && c.title.toLowerCase().includes('#' + projTag);
-            return hasTag || inCol || hasTitleTag;
+            if (matchesProject(c)) return true;
+            const parent = c.isSubtask ? cardsById.get(c.parentId) : null;
+            return !!parent && !parent.isEvent && parent.column !== 'Rotina' && matchesProject(parent);
         });
 
         // Merge persistent tasks that are no longer in active cards (e.g. deleted from Kanban)
@@ -17746,17 +17774,18 @@ kanban-plugin: basic
                         isDeleted: !!c.isDeleted
                     });
                 }
-            } else if (c.estimateMinutes && c.estimateMinutes > 0) {
+            } else if (ownEstimateMinutes(c) > 0) {
                 if (periodFilter === 'all') {
+                    const est = ownEstimateMinutes(c);
                     const cardDate = c.startDate ? startOfDay(c.startDate) : null;
                     const isFutureSlot = cardDate ? cardDate.getTime() > today.getTime() : false;
                     if (isFutureSlot && !isDone) {
-                        futureMinutes += c.estimateMinutes;
+                        futureMinutes += est;
                     } else {
-                        pastMinutes += c.estimateMinutes;
-                        if (isDone) doneMinutes += c.estimateMinutes;
-                        else if (isInDev) inDevMinutes += c.estimateMinutes;
-                        else backlogMinutes += c.estimateMinutes;
+                        pastMinutes += est;
+                        if (isDone) doneMinutes += est;
+                        else if (isInDev) inDevMinutes += est;
+                        else backlogMinutes += est;
                     }
                 }
             }
@@ -30135,7 +30164,7 @@ kanban-plugin: basic
             card.subtasks.forEach(st => {
                 const stItem = subtasksList.createDiv(`kt-sb-subtask-item${st.completed ? ' is-completed' : ''}`);
                 stItem.setAttribute('draggable', 'true');
-                stItem.title = 'Arraste esta subtarefa para agendá-la no Timeblocking ou clique para abrir detalhes';
+                stItem.title = st.estimateText ? `${st.title} (⏱ ${st.estimateText})` : st.title;
 
                 const stChk = stItem.createSpan('kt-sb-subtask-chk');
                 stChk.setText(st.completed ? '✓' : '○');
@@ -30161,7 +30190,8 @@ kanban-plugin: basic
                     }
                 } else {
                     const pendBadge = stBadges.createSpan('kt-sb-subtask-unalloc-badge');
-                    pendBadge.setText('⚡ Sem data');
+                    pendBadge.setText('⚡');
+                    pendBadge.title = 'Sem data';
                 }
 
                 if (st.estimateText) {
@@ -30812,11 +30842,20 @@ kanban-plugin: basic
 
         const startMin = timeToMinutes(startStr);
         const endMin   = timeToMinutes(endStr);
+        // Blocos que começam antes/terminam depois da grade são recortados só no visual;
+        // os totais de horas continuam vindo dos slots reais.
+        const gridStartMin = dayStart * 60;
+        const gridEndMin = (dayEnd + 1) * 60;
+        const visStartMin = Math.min(Math.max(startMin, gridStartMin), gridEndMin);
+        const visEndMin = Math.max(Math.min(endMin, gridEndMin), visStartMin);
         const duration = Math.max(15, endMin - startMin);
+        const visDuration = Math.max(15, visEndMin - visStartMin);
+        if (startMin < gridStartMin) el.addClass('kt-tb-card-clipped-top');
+        if (endMin > gridEndMin) el.addClass('kt-tb-card-clipped-bottom');
 
         // Posicionamento Vertical
-        const topPx    = Math.max(0, (startMin - dayStart * 60) * pxPerMin);
-        const heightPx = Math.max(26, duration * pxPerMin - 2);
+        const topPx    = (visStartMin - gridStartMin) * pxPerMin;
+        const heightPx = Math.max(26, visDuration * pxPerMin - 2);
         el.style.top    = `${topPx}px`;
         el.style.height = `${heightPx}px`;
 

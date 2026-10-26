@@ -2092,9 +2092,12 @@ body.kt-is-card-dragging .kt-gantt-section {
     line-height: 1.25;
     flex: 1;
     min-width: 0;
-    white-space: nowrap;
+    white-space: normal;
     overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
 }
 
 .kt-sb-subtask-badges {
@@ -15121,4 +15124,17 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
 .kt-lane-card.kt-has-dollar > .kt-card-body > .kt-c-title {
     padding-right: 22px;
+}
+
+/* Blocos recortados pelos limites da grade (horas reais continuam contando) */
+.kt-tb-card.kt-tb-card-clipped-top {
+    border-top: 2px dashed var(--proj-color, var(--text-faint));
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.kt-tb-card.kt-tb-card-clipped-bottom {
+    border-bottom: 2px dashed var(--proj-color, var(--text-faint));
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
 }
