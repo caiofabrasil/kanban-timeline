@@ -30050,12 +30050,26 @@ kanban-plugin: basic
         updateSidebarContent();
     }
 
+    // Subtarefas usam as cores do card pai já parseado: o snapshot feito no parser
+    // perde as tags que ficam abaixo da lista de subtarefas.
+    getCardDisplayColors(card) {
+        const parent = card.isSubtask && card.parentId
+            ? (this.cards || []).find(c => !c.isSubtask && c.id === card.parentId)
+            : null;
+        const src = parent || card;
+        return {
+            proj: src.tagColor || src.projectColor || card.parentTagColor || card.parentProjectColor || null,
+            prio: src.priorityColor || null,
+        };
+    }
+
     renderTbSidebarCardItem(parent, card, opts = {}) {
         const isDone = card.isCompleted || isIgnoredColumn(card.column);
         const hasDate = !!card.startDate;
         const c = parent.createDiv(`kt-sb-card${hasDate ? ' kt-sb-card-scheduled' : ''}${isDone ? ' is-completed' : ''}`);
-        c.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
-        if (card.priorityColor) c.style.setProperty('--prio-color', card.priorityColor);
+        const colors = this.getCardDisplayColors(card);
+        c.style.setProperty('--proj-color', colors.proj || 'transparent');
+        if (colors.prio) c.style.setProperty('--prio-color', colors.prio);
 
         const refDay = opts.contextDay || (card.startDate ? startOfDay(card.startDate) : null);
         const daySlots = refDay ? getTimesForDay(card, refDay) : [];
@@ -30098,9 +30112,11 @@ kanban-plugin: basic
         if (card.isSubtask && card.parentTitle) {
             const pBadge = titleDiv.createSpan('kt-tb-parent-badge');
             pBadge.setText(`↳ ${card.parentTitle}`);
-            if (card.parentProjectColor) {
-                pBadge.style.color = card.parentProjectColor;
-                pBadge.style.borderColor = card.parentProjectColor + '55';
+            const badgeColor = this.getCardDisplayColors(card).proj;
+            if (badgeColor) {
+                pBadge.style.color = badgeColor;
+                pBadge.style.background = badgeColor + '22';
+                pBadge.style.borderColor = badgeColor + '55';
             }
         }
         titleDiv.createSpan().setText(isDone ? `✓ ${card.title}` : card.title);
@@ -30836,8 +30852,9 @@ kanban-plugin: basic
                 el.style.borderLeftColor = hColor;
             }
         } else {
-            el.style.setProperty('--proj-color', card.tagColor || card.projectColor || 'transparent');
-            if (card.priorityColor) el.style.setProperty('--prio-color', card.priorityColor);
+            const colors = this.getCardDisplayColors(card);
+            el.style.setProperty('--proj-color', colors.proj || 'transparent');
+            if (colors.prio) el.style.setProperty('--prio-color', colors.prio);
         }
 
         const startMin = timeToMinutes(startStr);
@@ -30957,9 +30974,11 @@ kanban-plugin: basic
             const pBadge = el.createDiv('kt-tb-parent-badge');
             pBadge.setText(`↳ ${card.parentTitle}`);
             pBadge.title = `Subtarefa de: ${card.parentTitle}`;
-            if (card.parentProjectColor) {
-                pBadge.style.color = card.parentProjectColor;
-                pBadge.style.borderColor = card.parentProjectColor + '55';
+            const badgeColor = this.getCardDisplayColors(card).proj;
+            if (badgeColor) {
+                pBadge.style.color = badgeColor;
+                pBadge.style.background = badgeColor + '22';
+                pBadge.style.borderColor = badgeColor + '55';
             }
         }
 
